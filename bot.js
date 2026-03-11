@@ -75,7 +75,7 @@ console.log("Mensagem:", text)
 if(text === "!ping"){
 
 await sock.sendMessage(from,{
-text:"Não quero!"
+text:"🏓 Pong!"
 })
 
 }
