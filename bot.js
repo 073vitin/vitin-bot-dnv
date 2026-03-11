@@ -2,7 +2,6 @@ const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion,
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 
-// Log
 const logger = pino({ level: 'info' });
 
 async function start() {
@@ -26,7 +25,6 @@ async function start() {
         sock.ev.on('connection.update', (update) => {
             const { connection, qr, lastDisconnect } = update;
             
-            // ✅ Exibe QR no terminal
             if (qr) {
                 console.log('');
                 console.log('═══════════════════════════════════════');
@@ -63,13 +61,11 @@ async function start() {
             const isGroup = from.endsWith('@g.us');
 
             try {
-                // Comando: !ola
                 if (text === '!ola') {
                     await sock.sendMessage(from, { text: 'Não posso responder agora, estou ocupado comendo o Kronos' });
                     return;
                 }
 
-                // Comando: !s ou !sticker
                 if ((text === '!s' || text === '!sticker') && (msg.message.imageMessage || msg.message.videoMessage)) {
                     await sock.sendMessage(from, { text: 'Estou terminando de comer o Kronos, aguarde um momento' });
                     const media = await sock.downloadMediaMessage(msg.message);
@@ -77,7 +73,6 @@ async function start() {
                     return;
                 }
 
-                // Comando: !ban @nome
                 if (text?.startsWith('!ban ') && isGroup) {
                     const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid;
                     if (mentioned && mentioned.length > 0) {
@@ -98,4 +93,8 @@ async function start() {
 
     } catch (e) {
         console.log('❌ Erro ao iniciar:', e.message);
-        setTimeout(start, 5
+        setTimeout(start, 5000);
+    }
+}
+
+start();
