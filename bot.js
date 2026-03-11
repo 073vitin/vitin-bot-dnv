@@ -1,6 +1,6 @@
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
-const qrcode = require('qrcode');
+const qrcode = require('qrcode-terminal');
 
 const logger = pino({ level: 'fatal' });
 
@@ -22,12 +22,11 @@ async function start() {
         sock.ev.on('connection.update', (update) => {
             const { connection, qr, lastDisconnect } = update;
             if (qr) {
-                qrcode.toFile('qr.png', qr, { width: 300 }, () => {
-                    console.log('✅ QR gerado. Escaneie em 10 segundos...');
-                    setTimeout(() => {
-                        console.log('⏳ QR ainda disponível...');
-                    }, 5000);
-                });
+                console.log('═══════════════════════════════════════');
+                console.log('📱 ESCANEIE O QR ABAIXO:');
+                console.log('═══════════════════════════════════════');
+                qrcode.generate(qr, { small: true });
+                console.log('═══════════════════════════════════════');
             }
             if (connection === 'open') {
                 console.log('✅ BOT ONLINE!');
@@ -69,7 +68,6 @@ async function start() {
     }
 }
 
-// Delay para dar tempo de escanear
 setTimeout(() => {
     console.log('⏳ Bot iniciando em 5 segundos...');
     start();
