@@ -183,7 +183,7 @@ text:"Usuário desmutado"
 
 if(text === "!xingamento"){
 await sock.sendMessage(from,{
-text:"Kronos Kornos Cabeça de Filtro de Barro"
+text:"Você é um mulato preto do cu roxo"
 })
 }
 
