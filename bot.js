@@ -1,5 +1,6 @@
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
+const qrcode = require('qrcode-terminal');
 
 // Log
 const logger = pino({ level: 'info' });
@@ -16,7 +17,6 @@ async function start() {
         const sock = makeWASocket({
             version,
             logger,
-            printQRInTerminal: true, // ✅ QR aparece no terminal!
             auth: state,
             browser: ['Ubuntu', 'Chrome', '120']
         });
@@ -24,7 +24,18 @@ async function start() {
         sock.ev.on('creds.update', saveCreds);
 
         sock.ev.on('connection.update', (update) => {
-            const { connection, lastDisconnect } = update;
+            const { connection, qr, lastDisconnect } = update;
+            
+            // ✅ Exibe QR no terminal
+            if (qr) {
+                console.log('');
+                console.log('═══════════════════════════════════════');
+                console.log('📱 ESCANEIE O QR CODE ABAIXO:');
+                console.log('═══════════════════════════════════════');
+                qrcode.generate(qr, { small: true });
+                console.log('═══════════════════════════════════════');
+                console.log('');
+            }
             
             if (connection === 'open') {
                 console.log('');
@@ -82,13 +93,3 @@ async function start() {
 
             } catch (e) {
                 console.log('❌ Erro ao processar mensagem:', e.message);
-            }
-        });
-
-    } catch (e) {
-        console.log('❌ Erro ao iniciar:', e.message);
-        setTimeout(start, 5000);
-    }
-}
-
-start();
