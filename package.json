@@ -1,9 +1,7 @@
 {
-  "name": "bot-whatsapp-kronos",
+  "name": "bot-whatsapp",
   "version": "1.0.0",
-  "description": "Bot de WhatsApp com comandos, figurinhas e brincadeiras",
   "main": "bot.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node bot.js"
   },
