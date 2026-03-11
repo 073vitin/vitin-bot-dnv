@@ -22,16 +22,21 @@ async function start() {
 
         sock.ev.on('connection.update', (update) => {
             const { connection, qr, lastDisconnect } = update;
-            if (qr) {
+            
+            // ✅ Só gera QR se não estiver conectado
+            if (qr && !sock.user) {
                 console.log('═══════════════════════════════════════');
                 console.log('📱 ESCANEIE O QR ABAIXO:');
                 console.log('═══════════════════════════════════════');
                 qrcode.generate(qr, { small: true });
                 console.log('═══════════════════════════════════════');
             }
+            
             if (connection === 'open') {
                 console.log('✅ BOT ONLINE!');
+                console.log('👤 Conectado como:', sock.user?.id);
             }
+            
             if (connection === 'close') {
                 if ((lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut) {
                     setTimeout(start, 3000);
@@ -69,7 +74,7 @@ async function start() {
     }
 }
 
-// Servidor HTTP para o Render detectar a porta
+// Servidor HTTP para o Render
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Bot rodando!');
