@@ -93,3 +93,9 @@ async function start() {
 
             } catch (e) {
                 console.log('❌ Erro ao processar mensagem:', e.message);
+            }
+        });
+
+    } catch (e) {
+        console.log('❌ Erro ao iniciar:', e.message);
+        setTimeout(start, 5
