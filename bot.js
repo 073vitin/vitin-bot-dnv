@@ -1,304 +1,301 @@
-const {
-  default: makeWASocket,
-  useMultiFileAuthState,
-  fetchLatestBaileysVersion,
-  DisconnectReason
-} = require("@whiskeysockets/baileys")
-
-const pino = require("pino")
-const qrcode = require("qrcode-terminal")
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require("@whiskeysockets/baileys")
 const express = require("express")
+const pino = require("pino")
 
 const app = express()
 const logger = pino({ level: "silent" })
 
-// ======= MEMÓRIA SIMPLES (mutes) =======
-const muted = {} // { groupJid: Set(jid) }
+let qrCode = null
+let muted = {}
 
-// ======= IMAGENS/GIFS PARA BRINCADEIRAS =======
-const gifs = {
-  beijo: "https://media.giphy.com/media/G3va31oEEnIkM/giphy.gif",
-  tapa: "https://media.giphy.com/media/jLeyZWgtwgr2U/giphy.gif",
-  abraco: "https://media.giphy.com/media/l2QDM9Jnim1YVILXa/giphy.gif",
-  chute: "https://media.giphy.com/media/3o6ZtaO9BZHcOjmErm/giphy.gif",
-  casal: "https://media.giphy.com/media/3oriO0OEd9QIDdllqo/giphy.gif"
+app.get("/", (req,res)=>{
+
+if(!qrCode){
+return res.send("<h2>Bot conectado ou aguardando QR...</h2>")
 }
 
-// ======= SERVIDOR HTTP (PORTA 3000) =======
-app.get("/", (req, res) => {
-  res.send("BotZap rodando 24h")
+res.send(`
+<h2>Escaneie o QR</h2>
+<img src="https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=${qrCode}">
+<p>Atualize se o QR mudar</p>
+`)
+
 })
 
-app.listen(3000, () => {
-  console.log("🌐 Servidor rodando na porta 3000")
+app.listen(3000, ()=> console.log("🌐 Site QR rodando"))
+
+async function startBot(){
+
+const { state, saveCreds } = await useMultiFileAuthState("./auth_info")
+const { version } = await fetchLatestBaileysVersion()
+
+const sock = makeWASocket({
+version,
+auth: state,
+logger,
+browser:["BotZap","Chrome","1.0"],
+keepAliveIntervalMs:30000
 })
 
-// ======= FUNÇÃO PRINCIPAL =======
-async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState("./auth_info")
-  const { version } = await fetchLatestBaileysVersion()
+sock.ev.on("creds.update", saveCreds)
 
-  const sock = makeWASocket({
-    version,
-    auth: state,
-    logger,
-    browser: ["BotZap", "Chrome", "1.0"],
-    keepAliveIntervalMs: 30000
-  })
+sock.ev.on("connection.update", (update)=>{
 
-  sock.ev.on("creds.update", saveCreds)
+const { connection, qr, lastDisconnect } = update
 
-  sock.ev.on("connection.update", (update) => {
-    const { connection, qr, lastDisconnect } = update
+if(qr){
+qrCode = qr
+console.log("QR gerado, abra o site")
+}
 
-    if (qr) {
-      console.log("📱 Escaneie o QR abaixo:")
-      qrcode.generate(qr, { small: true })
-    }
+if(connection === "open"){
+console.log("BOT ONLINE")
+qrCode = null
+}
 
-    if (connection === "open") {
-      console.log("✅ BOT ONLINE!")
-    }
+if(connection === "close"){
+if((lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut){
+startBot()
+}
+}
 
-    if (connection === "close") {
-      const reason = lastDisconnect?.error?.output?.statusCode
-      if (reason !== DisconnectReason.loggedOut) {
-        console.log("🔄 Reconectando...")
-        startBot()
-      } else {
-        console.log("❌ Sessão encerrada. Apague auth_info e conecte novamente.")
-      }
-    }
-  })
+})
 
-  sock.ev.on("messages.upsert", async ({ messages }) => {
-    try {
-      const msg = messages[0]
-      if (!msg.message) return
-      if (msg.key.fromMe) return
+sock.ev.on("messages.upsert", async ({messages})=>{
 
-      const from = msg.key.remoteJid
-      const isGroup = from.endsWith("@g.us")
+const msg = messages[0]
+if(!msg.message) return
+if(msg.key.fromMe) return
 
-      const text =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        ""
+const from = msg.key.remoteJid
+const sender = msg.key.participant || msg.key.remoteJid
+const isGroup = from.endsWith("@g.us")
 
-      const sender = msg.key.participant || msg.key.remoteJid
-      const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
-      const replyMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+const text =
+msg.message.conversation ||
+msg.message.extendedTextMessage?.text ||
+""
 
-      // ======= APAGAR MENSAGENS DE MUTADOS =======
-      if (isGroup && muted[from] && muted[from].has(sender)) {
-        await sock.sendMessage(from, { delete: msg.key })
-        return
-      }
+const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
 
-      // ======= COMANDOS =======
-      const cmd = text.trim().toLowerCase()
+// apagar mensagens mutadas
+if(isGroup && muted[from] && muted[from].includes(sender)){
+await sock.sendMessage(from,{ delete: msg.key })
+return
+}
 
-      // MENU BONITO
-      if (cmd === "!menu") {
-        await sock.sendMessage(from, {
-          text:
-`╔═══『 🤖 BOTZAP MENU 』═══╗
-║ !ping
-║ !ola
-║ !fig / !sticker
-║ !figtexto
-║ !xingamento
-║ !mute
-║ !unmute
-║ !casar
-║ !beijo
-║ !tapa
-║ !abraco
-║ !chute
-║ rank corno
-║ rank gay
-╚═══════════════════╝`
-        })
-      }
+const cmd = text.toLowerCase()
 
-      // OLA
-      if (cmd === "!ola") {
-        await sock.sendMessage(from, {
-          text: "Não posso responder agora, estou ocupado comendo o Kronos"
-        })
-      }
+// MENU
+if(cmd === "!menu"){
 
-      // XINGAMENTO
-      if (cmd === "!xingamento") {
-        await sock.sendMessage(from, {
-          text: "Kronos Kornos Cabeça de Filtro de Barro"
-        })
-      }
+await sock.sendMessage(from,{
+text:
+`╔══ BOTZAP MENU ══╗
+!ping
+!ola
+!fig
+!figtexto
+!xingamento
+!mute
+!unmute
+!casar
+!beijo
+!tapa
+!abraco
+!chute
+rank corno
+rank gay
+╚═══════════════╝`
+})
 
-      // PING (marca alguém aleatório)
-      if (cmd === "!ping" && isGroup) {
-        const meta = await sock.groupMetadata(from)
-        const members = meta.participants.map(p => p.id)
-        const rand = members[Math.floor(Math.random() * members.length)]
+}
 
-        await sock.sendMessage(from, {
-          text: `🏓 Pong! @${rand.split("@")[0]}`,
-          mentions: [rand]
-        })
-      }
+// OLA
+if(cmd === "!ola"){
+await sock.sendMessage(from,{ text:"Não posso responder agora, estou ocupado comendo o Kronos" })
+}
 
-      // FIGURINHA (imagem/video/gif)
-      if (cmd === "!fig" || cmd === "!sticker") {
-        let mediaMsg = msg.message.imageMessage || msg.message.videoMessage
+// XINGAMENTO
+if(cmd === "!xingamento"){
+await sock.sendMessage(from,{ text:"Kronos Kornos Cabeça de Filtro de Barro" })
+}
 
-        if (!mediaMsg && replyMsg) {
-          mediaMsg = replyMsg.imageMessage || replyMsg.videoMessage
-        }
+// PING
+if(cmd === "!ping" && isGroup){
 
-        if (!mediaMsg) {
-          return sock.sendMessage(from, { text: "Envie ou responda uma imagem/video/gif com !fig" })
-        }
+const meta = await sock.groupMetadata(from)
+const users = meta.participants.map(p=>p.id)
+const rand = users[Math.floor(Math.random()*users.length)]
 
-        const buffer = await sock.downloadMediaMessage(msg)
+await sock.sendMessage(from,{
+text:`🏓 Pong @${rand.split("@")[0]}`,
+mentions:[rand]
+})
 
-        await sock.sendMessage(from, {
-          sticker: buffer
-        })
-      }
+}
 
-      // FIGURINHA COM TEXTO
-      if (cmd.startsWith("!figtexto")) {
-        const texto = text.replace("!figtexto", "").trim()
+// FIGURINHA
+if(cmd === "!fig" || cmd === "!sticker"){
 
-        if (!texto) {
-          return sock.sendMessage(from, { text: "Use: !figtexto seu texto aqui" })
-        }
+if(msg.message.imageMessage || msg.message.videoMessage){
 
-        await sock.sendMessage(from, {
-          sticker: { url: `https://api.memegen.link/images/custom/${encodeURIComponent(texto)}/.png` }
-        })
-      }
+const buffer = await sock.downloadMediaMessage(msg)
 
-      // MUTE
-      if (cmd.startsWith("!mute") && isGroup) {
-        if (mentioned.length === 0) return
+await sock.sendMessage(from,{
+sticker: buffer
+})
 
-        const alvo = mentioned[0]
+}
 
-        if (!muted[from]) muted[from] = new Set()
-        muted[from].add(alvo)
+}
 
-        await sock.sendMessage(from, {
-          text: "minha gala seca silenciou sua boca piranha >:D"
-        })
-      }
+// FIG TEXTO
+if(cmd.startsWith("!figtexto")){
 
-      // UNMUTE
-      if (cmd.startsWith("!unmute") && isGroup) {
-        if (mentioned.length === 0) return
+let texto = text.replace("!figtexto","").trim()
 
-        const alvo = mentioned[0]
+await sock.sendMessage(from,{
+sticker:{ url:`https://api.memegen.link/images/custom/${encodeURIComponent(texto)}/.png` }
+})
 
-        if (muted[from]) muted[from].delete(alvo)
+}
 
-        await sock.sendMessage(from, {
-          text: "Você foi desmutado."
-        })
-      }
+// MUTE
+if(cmd.startsWith("!mute") && mentioned.length){
 
-      // CASAR
-      if (cmd.startsWith("!casar") && mentioned.length) {
-        const alvo = mentioned[0]
+let alvo = mentioned[0]
 
-        await sock.sendMessage(from, {
-          image: { url: gifs.casal },
-          caption: `💍 Parabéns, vocês estão casados!\n@${sender.split("@")[0]} ❤️ @${alvo.split("@")[0]}`,
-          mentions: [sender, alvo]
-        })
-      }
+if(!muted[from]) muted[from] = []
 
-      // BEIJO
-      if (cmd.startsWith("!beijo") && mentioned.length) {
-        const alvo = mentioned[0]
+muted[from].push(alvo)
 
-        await sock.sendMessage(from, {
-          image: { url: gifs.beijo },
-          caption: `@${sender.split("@")[0]} deu um beijo gostoso em @${alvo.split("@")[0]}!`,
-          mentions: [sender, alvo]
-        })
-      }
+await sock.sendMessage(from,{
+text:"minha gala seca silenciou sua boca piranha >:D"
+})
 
-      // TAPA
-      if (cmd.startsWith("!tapa") && mentioned.length) {
-        const alvo = mentioned[0]
+}
 
-        await sock.sendMessage(from, {
-          image: { url: gifs.tapa },
-          caption: `@${sender.split("@")[0]} deu um tapa em @${alvo.split("@")[0]}!`,
-          mentions: [sender, alvo]
-        })
-      }
+// UNMUTE
+if(cmd.startsWith("!unmute") && mentioned.length){
 
-      // ABRAÇO
-      if (cmd.startsWith("!abraco") && mentioned.length) {
-        const alvo = mentioned[0]
+let alvo = mentioned[0]
 
-        await sock.sendMessage(from, {
-          image: { url: gifs.abraco },
-          caption: `@${sender.split("@")[0]} abraçou @${alvo.split("@")[0]}!`,
-          mentions: [sender, alvo]
-        })
-      }
+if(muted[from]){
+muted[from] = muted[from].filter(u=>u!==alvo)
+}
 
-      // CHUTE
-      if (cmd.startsWith("!chute") && mentioned.length) {
-        const alvo = mentioned[0]
+await sock.sendMessage(from,{
+text:"Usuário desmutado"
+})
 
-        await sock.sendMessage(from, {
-          image: { url: gifs.chute },
-          caption: `@${sender.split("@")[0]} chutou @${alvo.split("@")[0]}!`,
-          mentions: [sender, alvo]
-        })
-      }
+}
 
-      // RANK CORNO
-      if (cmd === "rank corno" && isGroup) {
-        const meta = await sock.groupMetadata(from)
-        const members = meta.participants.slice(0,5).map(p => "@"+p.id.split("@")[0])
+// CASAR
+if(cmd.startsWith("!casar") && mentioned.length){
 
-        await sock.sendMessage(from, {
-          text:
+let alvo = mentioned[0]
+
+await sock.sendMessage(from,{
+image:{url:"https://i.imgur.com/5Z4QZ9F.jpeg"},
+caption:`Parabéns, vocês estão casados!\n@${sender.split("@")[0]} ❤️ @${alvo.split("@")[0]}`,
+mentions:[sender,alvo]
+})
+
+}
+
+// BEIJO
+if(cmd.startsWith("!beijo") && mentioned.length){
+
+let alvo = mentioned[0]
+
+await sock.sendMessage(from,{
+image:{url:"https://i.imgur.com/7D7I6dI.gif"},
+caption:`@${sender.split("@")[0]} deu um beijo gostoso em @${alvo.split("@")[0]}!`,
+mentions:[sender,alvo]
+})
+
+}
+
+// TAPA
+if(cmd.startsWith("!tapa") && mentioned.length){
+
+let alvo = mentioned[0]
+
+await sock.sendMessage(from,{
+image:{url:"https://i.imgur.com/w3duR07.gif"},
+caption:`@${sender.split("@")[0]} deu um tapa em @${alvo.split("@")[0]}!`,
+mentions:[sender,alvo]
+})
+
+}
+
+// ABRACO
+if(cmd.startsWith("!abraco") && mentioned.length){
+
+let alvo = mentioned[0]
+
+await sock.sendMessage(from,{
+image:{url:"https://i.imgur.com/Fj3J8.gif"},
+caption:`@${sender.split("@")[0]} abraçou @${alvo.split("@")[0]}!`,
+mentions:[sender,alvo]
+})
+
+}
+
+// CHUTE
+if(cmd.startsWith("!chute") && mentioned.length){
+
+let alvo = mentioned[0]
+
+await sock.sendMessage(from,{
+image:{url:"https://i.imgur.com/Z2MYNbj.gif"},
+caption:`@${sender.split("@")[0]} chutou @${alvo.split("@")[0]}!`,
+mentions:[sender,alvo]
+})
+
+}
+
+// RANK CORNO
+if(cmd === "rank corno" && isGroup){
+
+const meta = await sock.groupMetadata(from)
+const m = meta.participants.slice(0,5)
+
+await sock.sendMessage(from,{
+text:
 `🐂 RANK CORNO 🐂
-1️⃣ ${members[0]}
-2️⃣ ${members[1]}
-3️⃣ ${members[2]}
-4️⃣ ${members[3]}
-5️⃣ ${members[4]}`,
-          mentions: meta.participants.slice(0,5).map(p=>p.id)
-        })
-      }
+1️⃣ @${m[0].id.split("@")[0]}
+2️⃣ @${m[1].id.split("@")[0]}
+3️⃣ @${m[2].id.split("@")[0]}
+4️⃣ @${m[3].id.split("@")[0]}
+5️⃣ @${m[4].id.split("@")[0]}`,
+mentions:m.map(x=>x.id)
+})
 
-      // RANK GAY
-      if (cmd === "rank gay" && isGroup) {
-        const meta = await sock.groupMetadata(from)
-        const members = meta.participants.slice(0,5).map(p => "@"+p.id.split("@")[0])
+}
 
-        await sock.sendMessage(from, {
-          text:
+// RANK GAY
+if(cmd === "rank gay" && isGroup){
+
+const meta = await sock.groupMetadata(from)
+const m = meta.participants.slice(0,5)
+
+await sock.sendMessage(from,{
+text:
 `🏳️‍🌈 RANK GAY 🏳️‍🌈
-1️⃣ ${members[0]}
-2️⃣ ${members[1]}
-3️⃣ ${members[2]}
-4️⃣ ${members[3]}
-5️⃣ ${members[4]}`,
-          mentions: meta.participants.slice(0,5).map(p=>p.id)
-        })
-      }
+1️⃣ @${m[0].id.split("@")[0]}
+2️⃣ @${m[1].id.split("@")[0]}
+3️⃣ @${m[2].id.split("@")[0]}
+4️⃣ @${m[3].id.split("@")[0]}
+5️⃣ @${m[4].id.split("@")[0]}`,
+mentions:m.map(x=>x.id)
+})
 
-    } catch (err) {
-      console.log("Erro:", err)
-    }
-  })
+}
+
+})
+
 }
 
 startBot()
