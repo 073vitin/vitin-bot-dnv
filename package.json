@@ -1,10 +1,9 @@
 {
   "name": "vitin-bot",
   "version": "1.0.0",
-  "main": "index.js",
-  "type": "commonjs",
+  "main": "bot.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node bot.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.5",
