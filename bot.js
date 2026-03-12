@@ -125,6 +125,9 @@ setTimeout(startBot,5000)
 }
 
 }
+
+})
+
 sock.ev.on("messages.upsert", async ({messages})=>{
 
 const msg = messages
@@ -264,7 +267,7 @@ if(!muted[from]) muted[from] = []
 muted[from].push(alvo)
 
 await sock.sendMessage(from,{
-text:"Minha gala seca silenciou sua boca piranha >:D"
+text:"Não grita 🤫"
 })
 
 }
@@ -293,7 +296,7 @@ text:"Fala baixo nengue"
 if(cmd.startsWith("!ban") && mentioned.length && isGroup){
 
 const metadata = await sock.groupMetadata(from)
-const admin = metadata.participants.find(p => p.id === sender)?.admin
+const admin = metadata.participants find(p => p.id === sender)?.admin
 
 if(!admin) return
 
@@ -321,4 +324,3 @@ text:"Receba a leitada divina"
 }
 
 startBot()
-})
