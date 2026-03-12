@@ -1,7 +1,7 @@
 {
   "name": "botzap",
   "version": "1.0.0",
-  "description": "bot whatsapp",
+  "description": "Bot WhatsApp com Baileys",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
