@@ -24,7 +24,6 @@ return res.send("<h2>Bot conectado ou aguardando reconexão...</h2>")
 res.send(`
 <h2>Escaneie o QR Code</h2>
 <img src="${qrImage}">
-<p>Atualize a página se mudar</p>
 `)
 
 })
@@ -70,11 +69,9 @@ const reason = lastDisconnect?.error?.output?.statusCode
 
 if(reason !== DisconnectReason.loggedOut){
 
-console.log("Reconectando em 5 segundos")
+console.log("Reconectando...")
 
-setTimeout(()=>{
-startBot()
-},5000)
+setTimeout(()=>startBot(),5000)
 
 }
 
@@ -118,7 +115,7 @@ if(cmd === "!menu"){
 
 await sock.sendMessage(from,{
 text:
-`🤖 MENU DO BOT
+`🤖 MENU
 
 🎨 FIGURINHAS
 !f
@@ -126,19 +123,17 @@ text:
 !s
 !sticker
 
-👮 MODERAÇÃO (ADM)
+👮 MODERAÇÃO
 !ban @membro
 !mute @membro
-!unmute @membro
-!promote @membro
-!demote @membro`
+!unmute @membro`
 })
 
 }
 
 // FIGURINHA
 
-if(["!f","!fig","!sticker","!s"].includes(cmd)){
+if(["!f","!fig","!s","!sticker"].includes(cmd)){
 
 let media =
 msg.message.imageMessage ||
@@ -163,7 +158,7 @@ for await(const chunk of stream){
 buffer = Buffer.concat([buffer,chunk])
 }
 
-let webpBuffer
+let sticker
 
 if(media.mimetype?.includes("video")){
 
@@ -174,7 +169,7 @@ await new Promise((resolve,reject)=>{
 ffmpeg("temp.mp4")
 .outputOptions([
 "-vcodec libwebp",
-"-vf scale=512:512:force_original_aspect_ratio=decrease,fps=15",
+"-vf scale=512:512:force_original_aspect_ratio=increase,fps=15,crop=512:512",
 "-loop 0",
 "-t 5",
 "-preset default",
@@ -187,20 +182,20 @@ ffmpeg("temp.mp4")
 
 })
 
-webpBuffer = fs.readFileSync("temp.webp")
+sticker = fs.readFileSync("temp.webp")
 
 }else{
 
-webpBuffer = await sharp(buffer)
-.resize(512,512,{fit:"contain"})
-.webp()
+sticker = await sharp(buffer)
+.resize(512,512,{
+fit:"cover"
+})
+.webp({quality:100})
 .toBuffer()
 
 }
 
-await sock.sendMessage(from,{
-sticker:webpBuffer
-})
+await sock.sendMessage(from,{sticker})
 
 }
 
@@ -211,10 +206,6 @@ if(cmd.startsWith("!ban") && mentioned.length && isGroup){
 if(!isAdmin) return
 
 await sock.groupParticipantsUpdate(from,[mentioned[0]],"remove")
-
-await sock.sendMessage(from,{
-text:"Receba a leitada divina"
-})
 
 }
 
@@ -230,10 +221,6 @@ if(!muted[from]) muted[from] = []
 
 muted[from].push(alvo)
 
-await sock.sendMessage(from,{
-text:"Não grita 🤫"
-})
-
 }
 
 // UNMUTE
@@ -247,38 +234,6 @@ let alvo = mentioned[0]
 if(muted[from]){
 muted[from] = muted[from].filter(u=>u!==alvo)
 }
-
-await sock.sendMessage(from,{
-text:"Pode falar nengue"
-})
-
-}
-
-// PROMOVER
-
-if(cmd.startsWith("!promover") && mentioned.length && isGroup){
-
-if(!isAdmin) return
-
-await sock.groupParticipantsUpdate(from,[mentioned[0]],"promover")
-
-await sock.sendMessage(from,{
-text:"Parabéns, foi promovido a pobre premium👑"
-})
-
-}
-
-// REBAIXAR
-
-if(cmd.startsWith("!rebaixar") && mentioned.length && isGroup){
-
-if(!isAdmin) return
-
-await sock.groupParticipantsUpdate(from,[mentioned[0]],"rebaixar")
-
-await sock.sendMessage(from,{
-text:"O otário virou membro comum KKKKKKKKKKKKKKKKKKK"
-})
 
 }
 
