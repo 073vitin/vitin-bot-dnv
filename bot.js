@@ -148,7 +148,7 @@ if(!muted[from]) muted[from] = []
 muted[from].push(alvo)
 
 await sock.sendMessage(from,{
-text:"minha gala seca silenciou sua boca piranha >:D"
+text:"Minha gala seca silenciou sua boca piranha >:D"
 })
 
 }
@@ -162,7 +162,7 @@ muted[from] = muted[from].filter(u => u !== alvo)
 }
 
 await sock.sendMessage(from,{
-text:"Usuário desmutado"
+text:"Fala baixo nengue"
 })
 
 }
@@ -176,7 +176,7 @@ let botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net"
 if(alvo === botNumber){
 
 await sock.sendMessage(from,{
-text:"Eu não sou burro de me banir sozinho."
+text:"Eu não sou burro de me banir sozinho seu otário"
 })
 
 return
