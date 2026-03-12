@@ -10,7 +10,7 @@ const sharp = require("sharp")
 const app = express()
 const logger = pino({ level: "silent" })
 
-const dono = "5573998579450@s.whatsapp.net"
+const dono = "557398579450@s.whatsapp.net"
 
 let qrImage = null
 let muted = {}
