@@ -1,3 +1,6 @@
+process.on("uncaughtException", console.error)
+process.on("unhandledRejection", console.error)
+
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require("@whiskeysockets/baileys")
 const express = require("express")
 const pino = require("pino")
