@@ -186,8 +186,8 @@ async function startBot(){
 ╭━━━〔 🎨 FIGURINHAS 〕━━━╮
 │ ${prefix}s / ${prefix}fig / ${prefix}sticker / ${prefix}f
 │ Envie a mídia e logo em seguida
-│  marque a imagem com o comando
-│    para criar sua figurinha
+│ marque a imagem com o comando
+│ para criar sua figurinha
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 👮 ADMIN 〕━━━╮
