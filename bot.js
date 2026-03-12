@@ -1,7 +1,7 @@
 process.on("uncaughtException", console.error)
 process.on("unhandledRejection", console.error)
 
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require("@whiskeysockets/baileys")
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, downloadContentFromMessage } = require("@whiskeysockets/baileys")
 const express = require("express")
 const pino = require("pino")
 const QRCode = require("qrcode")
@@ -39,7 +39,6 @@ const { state, saveCreds } = await useMultiFileAuthState("./auth_info")
 const { version } = await fetchLatestBaileysVersion()
 
 const sock = makeWASocket({
-
 version,
 auth: state,
 logger,
@@ -48,7 +47,6 @@ browser:["BotZap","Chrome","1.0"],
 keepAliveIntervalMs:30000,
 connectTimeoutMs:60000,
 defaultQueryTimeoutMs:0
-
 })
 
 sock.ev.on("creds.update", saveCreds)
@@ -71,10 +69,7 @@ if(connection === "close"){
 
 const reason = lastDisconnect?.error?.output?.statusCode
 
-console.log("Conexão fechada")
-
 if(reason !== DisconnectReason.loggedOut){
-
 console.log("Reconectando em 5 segundos")
 
 setTimeout(()=>{
@@ -111,37 +106,42 @@ return
 
 const cmd = text.toLowerCase()
 
+// ===== FIGURINHA =====
+
 let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
 
-let media =
+let image =
 msg.message.imageMessage ||
-msg.message.videoMessage ||
-quoted?.imageMessage ||
-quoted?.videoMessage
+quoted?.imageMessage
 
-if(cmd === "!fig" || cmd === "!sticker"){
+if(["!f","!fig","!sticker","!s"].includes(cmd)){
 
-if(media){
+if(!image) return
 
 await sock.sendMessage(from,{
-text:"Aguarde, estou terminando de comer o Kronos e já te envio a figurinha!"
+text:"Aguarde um momento, estou fazendo sua figurinha"
 })
 
-let mediaMsg = quoted ? { message: quoted } : msg
+const stream = await downloadContentFromMessage(image,"image")
 
-const buffer = await sock.downloadMediaMessage(mediaMsg)
+let buffer = Buffer.from([])
+
+for await(const chunk of stream){
+buffer = Buffer.concat([buffer,chunk])
+}
 
 const webpBuffer = await sharp(buffer)
+.resize(512,512,{ fit:"contain" })
 .webp()
 .toBuffer()
 
 await sock.sendMessage(from,{
-sticker: webpBuffer
+sticker:webpBuffer
 })
 
 }
 
-}
+// ===== MUTE =====
 
 if(cmd.startsWith("!mute") && mentioned.length){
 
@@ -157,6 +157,8 @@ text:"Não grita 🤫"
 
 }
 
+// ===== UNMUTE =====
+
 if(cmd.startsWith("!unmute") && mentioned.length){
 
 let alvo = mentioned[0]
@@ -170,6 +172,8 @@ text:"Pode falar nengue"
 })
 
 }
+
+// ===== BAN =====
 
 if(cmd.startsWith("!ban") && mentioned.length && isGroup){
 
