@@ -296,7 +296,7 @@ text:"Fala baixo nengue"
 if(cmd.startsWith("!ban") && mentioned.length && isGroup){
 
 const metadata = await sock.groupMetadata(from)
-const admin = metadata.participants find(p => p.id === sender)?.admin
+const admin = metadata.participants.find(p => p.id === sender)?.admin
 
 if(!admin) return
 
