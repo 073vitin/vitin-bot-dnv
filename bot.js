@@ -12,34 +12,43 @@ const logger = pino({ level: "silent" })
 let qrImage = null
 let muted = {}
 
-app.get("/", async (req,res)=>{
+app.get("/", (req,res)=>{
 
 if(!qrImage){
-return res.send("<h2>Bot conectado ou aguardando QR...</h2>")
+return res.send("<h2>Bot conectado ou aguardando reconexão...</h2>")
 }
 
 res.send(`
-<h2>Escaneie o QR</h2>
+<h2>Escaneie o QR Code</h2>
 <img src="${qrImage}">
-<p>Atualize se o QR mudar</p>
+<p>Atualize a página se mudar</p>
 `)
 
 })
 
 const PORT = process.env.PORT || 3000
-app.listen(PORT, ()=> console.log("Servidor rodando na porta " + PORT))
+
+app.listen(PORT,()=>{
+console.log("Servidor rodando na porta " + PORT)
+})
 
 async function startBot(){
 
 const { state, saveCreds } = await useMultiFileAuthState("./auth_info")
+
 const { version } = await fetchLatestBaileysVersion()
 
 const sock = makeWASocket({
+
 version,
 auth: state,
 logger,
+printQRInTerminal:false,
 browser:["BotZap","Chrome","1.0"],
-keepAliveIntervalMs:30000
+keepAliveIntervalMs:30000,
+connectTimeoutMs:60000,
+defaultQueryTimeoutMs:0
+
 })
 
 sock.ev.on("creds.update", saveCreds)
@@ -59,10 +68,21 @@ qrImage = null
 }
 
 if(connection === "close"){
-if((lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut){
-console.log("Reconectando...")
+
+const reason = lastDisconnect?.error?.output?.statusCode
+
+console.log("Conexão fechada")
+
+if(reason !== DisconnectReason.loggedOut){
+
+console.log("Reconectando em 5 segundos")
+
+setTimeout(()=>{
 startBot()
+},5000)
+
 }
+
 }
 
 })
@@ -84,7 +104,6 @@ msg.message.extendedTextMessage?.text ||
 
 const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
 
-// apagar mensagens de mutado
 if(isGroup && muted[from] && muted[from].includes(sender)){
 await sock.sendMessage(from,{ delete: msg.key })
 return
@@ -92,11 +111,9 @@ return
 
 const cmd = text.toLowerCase()
 
-// ===== FIGURINHA =====
-
 let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
 
-let mediaMessage =
+let media =
 msg.message.imageMessage ||
 msg.message.videoMessage ||
 quoted?.imageMessage ||
@@ -104,15 +121,15 @@ quoted?.videoMessage
 
 if(cmd === "!fig" || cmd === "!sticker"){
 
-if(mediaMessage){
+if(media){
 
 await sock.sendMessage(from,{
 text:"Aguarde, estou terminando de comer o Kronos e já te envio a figurinha!"
 })
 
-let media = quoted ? { message: quoted } : msg
+let mediaMsg = quoted ? { message: quoted } : msg
 
-const buffer = await sock.downloadMediaMessage(media)
+const buffer = await sock.downloadMediaMessage(mediaMsg)
 
 await sock.sendMessage(from,{
 sticker: buffer
@@ -121,8 +138,6 @@ sticker: buffer
 }
 
 }
-
-// ===== MUTE =====
 
 if(cmd.startsWith("!mute") && mentioned.length){
 
@@ -133,12 +148,10 @@ if(!muted[from]) muted[from] = []
 muted[from].push(alvo)
 
 await sock.sendMessage(from,{
-text:"Minha gala seca silenciou sua boca piranha >:D"
+text:"minha gala seca silenciou sua boca piranha >:D"
 })
 
 }
-
-// ===== UNMUTE =====
 
 if(cmd.startsWith("!unmute") && mentioned.length){
 
@@ -149,22 +162,23 @@ muted[from] = muted[from].filter(u => u !== alvo)
 }
 
 await sock.sendMessage(from,{
-text:"Sua sorte é que mandaram eu limpar meu leite da sua boca :("
+text:"Usuário desmutado"
 })
 
 }
 
-// ===== BAN =====
-
 if(cmd.startsWith("!ban") && mentioned.length && isGroup){
 
 let alvo = mentioned[0]
+
 let botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net"
 
 if(alvo === botNumber){
+
 await sock.sendMessage(from,{
-text:"Eu não sou burro de me banir sozinho seu otário"
+text:"Eu não sou burro de me banir sozinho."
 })
+
 return
 }
 
