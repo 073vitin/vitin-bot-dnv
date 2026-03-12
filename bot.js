@@ -277,17 +277,30 @@ async function startBot(){
         return
       }
 
-      // BAN
-      if(cmd.startsWith(prefix+"ban")){
-        if(alvo === dono){
-          return sock.sendMessage(from,{text:"Não pode banir o dono seu otário"})
-        }
+     // =========================
+// BAN CORRIGIDO
+// =========================
+if(isGroup && cmd.startsWith(prefix+"ban") && mentioned.length){
+  const metadata = await sock.groupMetadata(from)
+  const admin = metadata.participants.find(p => p.id === sender)?.admin
+  if(!admin) return sock.sendMessage(from, { text: "Somente admins podem banir." })
 
-        await sock.groupParticipantsUpdate(from,[alvo],"remove")
-        await sock.sendMessage(from,{text:"Receba a leitada divina "})
-        return
-      }
-    }
+  const alvo = mentioned[0]
+
+  if(alvo === dono){
+    return sock.sendMessage(from, { text: "Não pode banir o dono!" })
+  }
+
+  try {
+    // remove o participante do grupo
+    await sock.groupParticipantsUpdate(from, [alvo], "remove")
+    await sock.sendMessage(from, { text: "Usuário banido do grupo." })
+  } catch (e) {
+    console.log("Erro ao banir participante:", e)
+    await sock.sendMessage(from, { text: "Não foi possível banir o usuário." })
+  }
+  return
+}
 
   })
 }
