@@ -77,75 +77,99 @@ async function startBot(){
     browser:["VitinBot","Chrome","1.0"]
   })
 
+  sock.ev.on("creds.update", saveCreds)
+
+  sock.ev.on("connection.update", async(update)=>{
+    const { connection, qr, lastDisconnect } = update
+
+    if(qr){
+      qrImage = await QRCode.toDataURL(qr)
+      console.log("QR GERADO")
+    }
+
+    if(connection === "open"){
+      console.log("BOT ONLINE")
+      qrImage = null
+    }
+
+    if(connection === "close"){
+      const reason = lastDisconnect?.error?.output?.statusCode
+      if(reason !== DisconnectReason.loggedOut){
+        console.log("Reconectando...")
+        setTimeout(startBot,5000)
+      }
+    }
+  })
+
   sock.ev.on("messages.upsert", async ({ messages })=>{
-  const msg = messages[0]
-  if(!msg.message) return
-  if(msg.key.fromMe) return
+    const msg = messages[0]
+    if(!msg.message) return
+    if(msg.key.fromMe) return
 
-  const from = msg.key.remoteJid
-  const sender = msg.key.participant || msg.key.remoteJid
-  const isGroup = from.endsWith("@g.us")
+    const from = msg.key.remoteJid
+    const sender = msg.key.participant || msg.key.remoteJid
+    const isGroup = from.endsWith("@g.us")
 
-  const text =
-    msg.message.conversation ||
-    msg.message.extendedTextMessage?.text ||
-    ""
+    const text =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text ||
+      ""
 
-  const cmd = text.toLowerCase()
-  const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
-  let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+    const cmd = text.toLowerCase()
+    const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
+    let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
 
-  let media =
-    msg.message?.imageMessage ||
-    msg.message?.videoMessage ||
-    quoted?.imageMessage ||
-    quoted?.videoMessage
+    let media =
+      msg.message?.imageMessage ||
+      msg.message?.videoMessage ||
+      quoted?.imageMessage ||
+      quoted?.videoMessage
 
-  // =========================
-  // APAGAR MENSAGENS DOS MUTADOS
-  // =========================
-  if(isGroup && muted[from]?.includes(sender)){
-    try {
+    // =========================
+    // APAGAR MENSAGENS DOS MUTADOS
+    // =========================
+    if(isGroup && muted[from]?.includes(sender)){
+      try {
+        const metadata = await sock.groupMetadata(from)
+        const botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net"
+        const botAdmin = metadata.participants.find(p => p.id === botNumber)?.admin
+
+        if(botAdmin){
+          await sock.sendMessage(from, { delete: msg.key })
+        } else {
+          console.log("Não posso apagar mensagem, preciso ser admin")
+        }
+      } catch(err){
+        console.log("Erro ao apagar mensagem do mutado:", err)
+      }
+      return // ignora processamento da mensagem
+    }
+
+    // =========================
+    // COMANDOS DE MUTE / UNMUTE
+    // =========================
+    if(isGroup && (cmd === prefix+"mute" || cmd === prefix+"unmute") && mentioned.length){
       const metadata = await sock.groupMetadata(from)
-      const botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net"
-      const botAdmin = metadata.participants.find(p => p.id === botNumber)?.admin
+      const admin = metadata.participants.find(p => p.id === sender)?.admin
+      if(!admin) return // apenas admins podem usar
 
-      if(botAdmin){
-        await sock.sendMessage(from, { delete: msg.key })
-      } else {
-        console.log("Não posso apagar mensagem, preciso ser admin")
+      const alvo = mentioned[0]
+
+      if(cmd === prefix+"mute"){
+        if(!muted[from]) muted[from] = []
+        if(!muted[from].includes(alvo)){
+          muted[from].push(alvo)
+        }
+        await sock.sendMessage(from,{text:"Não grita 🤫"})
       }
-    } catch(err){
-      console.log("Erro ao apagar mensagem do mutado:", err)
-    }
-    return // ignora processamento da mensagem
-  }
 
-  // =========================
-  // COMANDOS DE MUTE / UNMUTE
-  // =========================
-  if(isGroup && (cmd === prefix+"mute" || cmd === prefix+"unmute") && mentioned.length){
-    const metadata = await sock.groupMetadata(from)
-    const admin = metadata.participants.find(p => p.id === sender)?.admin
-    if(!admin) return // apenas admins podem usar
-
-    const alvo = mentioned[0]
-
-    if(cmd === prefix+"mute"){
-      if(!muted[from]) muted[from] = []
-      if(!muted[from].includes(alvo)){
-        muted[from].push(alvo)
+      if(cmd === prefix+"unmute"){
+        if(muted[from]){
+          muted[from] = muted[from].filter(u => u !== alvo)
+        }
+        await sock.sendMessage(from,{text:"Fala baixo nengue"})
       }
-      await sock.sendMessage(from,{text:"Não grita 🤫"})
     }
-
-    if(cmd === prefix+"unmute"){
-      if(muted[from]){
-        muted[from] = muted[from].filter(u => u !== alvo)
-      }
-      await sock.sendMessage(from,{text:"Fala vaixo nengue"})
-    }
-  }
 
     // MENU
     if(cmd === prefix+"menu"){
@@ -213,32 +237,6 @@ async function startBot(){
       }
 
       await sock.sendMessage(from,{ sticker })
-    }
-
-    // =========================
-    // MUTE / UNMUTE
-    // =========================
-    if(isGroup && (cmd === prefix+"mute" || cmd === prefix+"unmute") && mentioned.length){
-      const metadata = await sock.groupMetadata(from)
-      const admin = metadata.participants.find(p => p.id === sender)?.admin
-      if(!admin) return // apenas admins podem usar
-
-      const alvo = mentioned[0]
-
-      if(cmd === prefix+"mute"){
-        if(!muted[from]) muted[from] = []
-        if(!muted[from].includes(alvo)){
-          muted[from].push(alvo)
-        }
-        await sock.sendMessage(from,{text:"Não grita 🤫"})
-      }
-
-      if(cmd === prefix+"unmute"){
-        if(muted[from]){
-          muted[from] = muted[from].filter(u => u !== alvo)
-        }
-        await sock.sendMessage(from,{text:"Fala baixo nengue"})
-      }
     }
 
     // BAN
