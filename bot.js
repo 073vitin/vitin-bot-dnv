@@ -1,16 +1,21 @@
 process.on("uncaughtException", console.error)
 process.on("unhandledRejection", console.error)
 
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, downloadContentFromMessage } = require("@whiskeysockets/baileys")
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require("@whiskeysockets/baileys")
 const express = require("express")
 const pino = require("pino")
 const QRCode = require("qrcode")
 const sharp = require("sharp")
 const fs = require("fs")
 const ffmpeg = require("fluent-ffmpeg")
+const ffmpegPath = require("ffmpeg-static")
+
+ffmpeg.setFfmpegPath(ffmpegPath)
 
 const app = express()
 const logger = pino({ level: "silent" })
+
+const dono = "5573998579450@s.whatsapp.net"
 
 let qrImage = null
 let muted = {}
@@ -34,17 +39,53 @@ app.listen(PORT,()=>{
 console.log("Servidor rodando na porta " + PORT)
 })
 
+async function videoToSticker(buffer){
+
+const input = "./input.mp4"
+const output = "./output.webp"
+
+fs.writeFileSync(input, buffer)
+
+await new Promise((resolve,reject)=>{
+ffmpeg(input)
+.outputOptions([
+"-vcodec libwebp",
+"-vf scale=512:512:force_original_aspect_ratio=increase,fps=15",
+"-loop 0",
+"-ss 00:00:00",
+"-t 10",
+"-preset default",
+"-an",
+"-vsync 0"
+])
+.toFormat("webp")
+.save(output)
+.on("end", resolve)
+.on("error", reject)
+})
+
+const sticker = fs.readFileSync(output)
+
+fs.unlinkSync(input)
+fs.unlinkSync(output)
+
+return sticker
+
+}
+
 async function startBot(){
 
 const { state, saveCreds } = await useMultiFileAuthState("./auth_info")
 const { version } = await fetchLatestBaileysVersion()
 
 const sock = makeWASocket({
+
 version,
 auth: state,
 logger,
 printQRInTerminal:false,
 browser:["BotZap","Chrome","1.0"]
+
 })
 
 sock.ev.on("creds.update", saveCreds)
@@ -68,11 +109,7 @@ if(connection === "close"){
 const reason = lastDisconnect?.error?.output?.statusCode
 
 if(reason !== DisconnectReason.loggedOut){
-
-console.log("Reconectando...")
-
-setTimeout(()=>startBot(),5000)
-
+setTimeout(startBot,5000)
 }
 
 }
@@ -98,48 +135,63 @@ const cmd = text.toLowerCase()
 
 const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
 
-const metadata = isGroup ? await sock.groupMetadata(from) : null
-const admins = isGroup ? metadata.participants.filter(p=>p.admin).map(p=>p.id) : []
-const isAdmin = admins.includes(sender)
+let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+
+let media =
+msg.message.imageMessage ||
+msg.message.videoMessage ||
+msg.message.stickerMessage ||
+quoted?.imageMessage ||
+quoted?.videoMessage ||
+quoted?.stickerMessage
+
+let isAdmin = false
+
+if(isGroup){
+
+const group = await sock.groupMetadata(from)
+
+const admins = group.participants.filter(p=>p.admin).map(p=>p.id)
+
+isAdmin = admins.includes(sender)
+
+}
 
 if(isGroup && muted[from] && muted[from].includes(sender)){
 await sock.sendMessage(from,{ delete: msg.key })
 return
 }
 
-let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
-
-// MENU
-
 if(cmd === "!menu"){
 
 await sock.sendMessage(from,{
-text:
-`🤖 MENU
+text:`🤖 MENU
 
-🎨 FIGURINHAS
-!f
 !fig
+!f
 !s
 !sticker
 
-👮 MODERAÇÃO
-!ban @membro
-!mute @membro
-!unmute @membro`
+!mute
+!unmute
+!ban
+
+!dono
+`
 })
 
 }
 
-// FIGURINHA
+if(cmd === "!dono"){
 
-if(["!f","!fig","!s","!sticker"].includes(cmd)){
+await sock.sendMessage(from,{
+text:"👑 Dono do bot",
+mentions:[dono]
+})
 
-let media =
-msg.message.imageMessage ||
-msg.message.videoMessage ||
-quoted?.imageMessage ||
-quoted?.videoMessage
+}
+
+if(["!fig","!f","!s","!sticker"].includes(cmd)){
 
 if(!media) return
 
@@ -147,69 +199,40 @@ await sock.sendMessage(from,{
 text:"Aguarde um momento, estou fazendo sua figurinha"
 })
 
-const stream = await downloadContentFromMessage(
-media,
-media.mimetype?.includes("video") ? "video" : "image"
-)
+let mediaMsg = quoted ? { message: quoted } : msg
 
-let buffer = Buffer.from([])
+const buffer = await sock.downloadMediaMessage(mediaMsg)
 
-for await(const chunk of stream){
-buffer = Buffer.concat([buffer,chunk])
+if(media?.seconds && media.seconds > 10){
+
+await sock.sendMessage(from,{
+text:"Vídeo muito longo (máx 10s)"
+})
+
+return
+
 }
 
 let sticker
 
-if(media.mimetype?.includes("video")){
+if(media.imageMessage){
 
-fs.writeFileSync("temp.mp4",buffer)
-
-await new Promise((resolve,reject)=>{
-
-ffmpeg("temp.mp4")
-.outputOptions([
-"-vcodec libwebp",
-"-vf scale=512:512:force_original_aspect_ratio=increase,fps=15,crop=512:512",
-"-loop 0",
-"-t 5",
-"-preset default",
-"-an",
-"-vsync 0"
-])
-.save("temp.webp")
-.on("end",resolve)
-.on("error",reject)
-
-})
-
-sticker = fs.readFileSync("temp.webp")
+sticker = await sharp(buffer)
+.resize(512,512,{fit:"cover"})
+.webp()
+.toBuffer()
 
 }else{
 
-sticker = await sharp(buffer)
-.resize(512,512,{
-fit:"cover"
+sticker = await videoToSticker(buffer)
+
+}
+
+await sock.sendMessage(from,{
+sticker
 })
-.webp({quality:100})
-.toBuffer()
 
 }
-
-await sock.sendMessage(from,{sticker})
-
-}
-
-// BAN
-
-if(cmd.startsWith("!ban") && mentioned.length && isGroup){
-
-if(!isAdmin) return
-
-await sock.groupParticipantsUpdate(from,[mentioned[0]],"remove")
-
-}
-
-// MUTE
 
 if(cmd.startsWith("!mute") && mentioned.length){
 
@@ -217,13 +240,17 @@ if(!isAdmin) return
 
 let alvo = mentioned[0]
 
+if(alvo === dono) return
+
 if(!muted[from]) muted[from] = []
 
 muted[from].push(alvo)
 
-}
+await sock.sendMessage(from,{
+text:"Usuário mutado 🤫"
+})
 
-// UNMUTE
+}
 
 if(cmd.startsWith("!unmute") && mentioned.length){
 
@@ -232,8 +259,34 @@ if(!isAdmin) return
 let alvo = mentioned[0]
 
 if(muted[from]){
-muted[from] = muted[from].filter(u=>u!==alvo)
+muted[from] = muted[from].filter(u => u !== alvo)
 }
+
+await sock.sendMessage(from,{
+text:"Usuário desmutado 🔊"
+})
+
+}
+
+if(cmd.startsWith("!ban") && mentioned.length && isGroup){
+
+if(!isAdmin) return
+
+let alvo = mentioned[0]
+
+const botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net"
+
+if(alvo === dono){
+await sock.sendMessage(from,{text:"Não posso banir meu dono"})
+return
+}
+
+if(alvo === botNumber){
+await sock.sendMessage(from,{text:"Não posso me banir"})
+return
+}
+
+await sock.groupParticipantsUpdate(from,[alvo],"remove")
 
 }
 
