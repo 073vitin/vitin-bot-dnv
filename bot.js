@@ -1,16 +1,11 @@
 process.on("uncaughtException", console.error)
 process.on("unhandledRejection", console.error)
 
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require("@whiskeysockets/baileys")
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, downloadMediaMessage } = require("@whiskeysockets/baileys")
 const express = require("express")
 const pino = require("pino")
 const QRCode = require("qrcode")
 const sharp = require("sharp")
-const fs = require("fs")
-const ffmpeg = require("fluent-ffmpeg")
-const ffmpegPath = require("ffmpeg-static")
-
-ffmpeg.setFfmpegPath(ffmpegPath)
 
 const app = express()
 const logger = pino({ level: "silent" })
@@ -23,12 +18,12 @@ let muted = {}
 app.get("/", (req,res)=>{
 
 if(!qrImage){
-return res.send("<h2>Bot conectado ou aguardando reconexão...</h2>")
+return res.send("<h2>🤖 Bot conectado</h2>")
 }
 
 res.send(`
 <h2>Escaneie o QR Code</h2>
-<img src="${qrImage}">
+<img src="${qrImage}" width="300">
 `)
 
 })
@@ -39,43 +34,10 @@ app.listen(PORT,()=>{
 console.log("Servidor rodando na porta " + PORT)
 })
 
-async function videoToSticker(buffer){
-
-const input = "./input.mp4"
-const output = "./output.webp"
-
-fs.writeFileSync(input, buffer)
-
-await new Promise((resolve,reject)=>{
-ffmpeg(input)
-.outputOptions([
-"-vcodec libwebp",
-"-vf scale=512:512:force_original_aspect_ratio=increase,fps=15",
-"-loop 0",
-"-ss 00:00:00",
-"-t 10",
-"-preset default",
-"-an",
-"-vsync 0"
-])
-.toFormat("webp")
-.save(output)
-.on("end", resolve)
-.on("error", reject)
-})
-
-const sticker = fs.readFileSync(output)
-
-fs.unlinkSync(input)
-fs.unlinkSync(output)
-
-return sticker
-
-}
-
 async function startBot(){
 
-const { state, saveCreds } = await useMultiFileAuthState("./auth_info")
+const { state, saveCreds } = await useMultiFileAuthState("./auth")
+
 const { version } = await fetchLatestBaileysVersion()
 
 const sock = makeWASocket({
@@ -95,21 +57,30 @@ sock.ev.on("connection.update", async (update)=>{
 const { connection, qr, lastDisconnect } = update
 
 if(qr){
+
 qrImage = await QRCode.toDataURL(qr)
 console.log("QR GERADO")
+
 }
 
 if(connection === "open"){
+
 console.log("BOT ONLINE")
 qrImage = null
+
 }
 
 if(connection === "close"){
 
 const reason = lastDisconnect?.error?.output?.statusCode
 
+console.log("Conexão fechada")
+
 if(reason !== DisconnectReason.loggedOut){
+
+console.log("Reconectando...")
 setTimeout(startBot,5000)
+
 }
 
 }
@@ -140,10 +111,8 @@ let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
 let media =
 msg.message.imageMessage ||
 msg.message.videoMessage ||
-msg.message.stickerMessage ||
 quoted?.imageMessage ||
-quoted?.videoMessage ||
-quoted?.stickerMessage
+quoted?.videoMessage
 
 let isAdmin = false
 
@@ -158,8 +127,10 @@ isAdmin = admins.includes(sender)
 }
 
 if(isGroup && muted[from] && muted[from].includes(sender)){
+
 await sock.sendMessage(from,{ delete: msg.key })
 return
+
 }
 
 if(cmd === "!menu"){
@@ -167,25 +138,21 @@ if(cmd === "!menu"){
 await sock.sendMessage(from,{
 text:`🤖 MENU
 
-!fig
-!f
-!s
-!sticker
-
+!fig / !f / !s / !sticker
 !mute
 !unmute
 !ban
-
-!dono
-`
+!dono`
 })
 
 }
 
 if(cmd === "!dono"){
 
+const numero = dono.split("@")[0]
+
 await sock.sendMessage(from,{
-text:"👑 Dono do bot",
+text:`👑 Dono: @${numero}`,
 mentions:[dono]
 })
 
@@ -193,7 +160,15 @@ mentions:[dono]
 
 if(["!fig","!f","!s","!sticker"].includes(cmd)){
 
-if(!media) return
+if(!media){
+
+await sock.sendMessage(from,{
+text:"Envie ou responda uma mídia"
+})
+
+return
+
+}
 
 await sock.sendMessage(from,{
 text:"Aguarde um momento, estou fazendo sua figurinha"
@@ -201,32 +176,17 @@ text:"Aguarde um momento, estou fazendo sua figurinha"
 
 let mediaMsg = quoted ? { message: quoted } : msg
 
-const buffer = await sock.downloadMediaMessage(mediaMsg)
+const buffer = await downloadMediaMessage(
+mediaMsg,
+"buffer",
+{},
+{ logger }
+)
 
-if(media?.seconds && media.seconds > 10){
-
-await sock.sendMessage(from,{
-text:"Vídeo muito longo (máx 10s)"
-})
-
-return
-
-}
-
-let sticker
-
-if(media.imageMessage){
-
-sticker = await sharp(buffer)
+const sticker = await sharp(buffer)
 .resize(512,512,{fit:"cover"})
 .webp()
 .toBuffer()
-
-}else{
-
-sticker = await videoToSticker(buffer)
-
-}
 
 await sock.sendMessage(from,{
 sticker
@@ -247,7 +207,7 @@ if(!muted[from]) muted[from] = []
 muted[from].push(alvo)
 
 await sock.sendMessage(from,{
-text:"Usuário mutado 🤫"
+text:"Não grita 🤫"
 })
 
 }
@@ -259,11 +219,13 @@ if(!isAdmin) return
 let alvo = mentioned[0]
 
 if(muted[from]){
+
 muted[from] = muted[from].filter(u => u !== alvo)
+
 }
 
 await sock.sendMessage(from,{
-text:"Usuário desmutado 🔊"
+text:"Pode falar nengue"
 })
 
 }
@@ -277,13 +239,17 @@ let alvo = mentioned[0]
 const botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net"
 
 if(alvo === dono){
+
 await sock.sendMessage(from,{text:"Não posso banir meu dono"})
 return
+
 }
 
 if(alvo === botNumber){
+
 await sock.sendMessage(from,{text:"Não posso me banir"})
 return
+
 }
 
 await sock.groupParticipantsUpdate(from,[alvo],"remove")
