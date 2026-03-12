@@ -6,11 +6,17 @@ const express = require("express")
 const pino = require("pino")
 const QRCode = require("qrcode")
 const sharp = require("sharp")
+const fs = require("fs")
+
+const ffmpeg = require("fluent-ffmpeg")
+const ffmpegPath = require("ffmpeg-static")
+
+ffmpeg.setFfmpegPath(ffmpegPath)
 
 const app = express()
 const logger = pino({ level: "silent" })
 
-const dono = "557398579450@s.whatsapp.net"
+const dono = "5573998579450@s.whatsapp.net"
 
 let qrImage = null
 let muted = {}
@@ -18,12 +24,13 @@ let muted = {}
 app.get("/", (req,res)=>{
 
 if(!qrImage){
-return res.send("<h2>🤖 Bot conectado</h2>")
+return res.send("<h2>Bot conectado ou aguardando reconexão...</h2>")
 }
 
 res.send(`
 <h2>Escaneie o QR Code</h2>
-<img src="${qrImage}" width="300">
+<img src="${qrImage}">
+<p>Atualize a página se mudar</p>
 `)
 
 })
@@ -33,6 +40,40 @@ const PORT = process.env.PORT || 3000
 app.listen(PORT,()=>{
 console.log("Servidor rodando na porta " + PORT)
 })
+
+async function videoToSticker(buffer){
+
+const input = "./input.mp4"
+const output = "./output.webp"
+
+fs.writeFileSync(input, buffer)
+
+await new Promise((resolve,reject)=>{
+
+ffmpeg(input)
+.outputOptions([
+"-vcodec libwebp",
+"-vf scale=512:512:force_original_aspect_ratio=decrease,fps=15",
+"-loop 0",
+"-preset default",
+"-an",
+"-vsync 0"
+])
+.toFormat("webp")
+.save(output)
+.on("end", resolve)
+.on("error", reject)
+
+})
+
+const sticker = fs.readFileSync(output)
+
+fs.unlinkSync(input)
+fs.unlinkSync(output)
+
+return sticker
+
+}
 
 async function startBot(){
 
@@ -78,7 +119,8 @@ console.log("Conexão fechada")
 
 if(reason !== DisconnectReason.loggedOut){
 
-console.log("Reconectando...")
+console.log("Reconectando em 5 segundos")
+
 setTimeout(startBot,5000)
 
 }
@@ -109,56 +151,23 @@ const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid ||
 let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
 
 let media =
-msg.message.imageMessage ||
-msg.message.videoMessage ||
+msg.message?.imageMessage ||
+msg.message?.videoMessage ||
 quoted?.imageMessage ||
 quoted?.videoMessage
-
-let isAdmin = false
-
-if(isGroup){
-
-const group = await sock.groupMetadata(from)
-
-const admins = group.participants.filter(p=>p.admin).map(p=>p.id)
-
-isAdmin = admins.includes(sender)
-
-}
-
-if(isGroup && muted[from] && muted[from].includes(sender)){
-
-await sock.sendMessage(from,{ delete: msg.key })
-return
-
-}
-
-if(cmd === "!menu"){
-
-await sock.sendMessage(from,{
-text:`🤖 MENU
-
-!fig / !f / !s / !sticker
-!mute
-!unmute
-!ban
-!dono`
-})
-
-}
 
 if(cmd === "!dono"){
 
 const numero = dono.split("@")[0]
 
 await sock.sendMessage(from,{
-text:`👑 Dono: @${numero}`,
+text:`👑 Dono do bot: @${numero}`,
 mentions:[dono]
 })
 
 }
 
-if(["!fig","!f","!s","!sticker"].includes(cmd)){
+if(["!f","!fig","!s","!sticker"].includes(cmd)){
 
 if(!media){
 
@@ -183,76 +192,28 @@ mediaMsg,
 { logger }
 )
 
-const sticker = await sharp(buffer)
-.resize(512,512,{fit:"cover"})
-.webp()
+let sticker
+
+if(media.imageMessage){
+
+sticker = await sharp(buffer)
+.resize(512,512,{
+fit:"inside"
+})
+.webp({
+quality:80
+})
 .toBuffer()
+
+}else{
+
+sticker = await videoToSticker(buffer)
+
+}
 
 await sock.sendMessage(from,{
 sticker
 })
-
-}
-
-if(cmd.startsWith("!mute") && mentioned.length){
-
-if(!isAdmin) return
-
-let alvo = mentioned[0]
-
-if(alvo === dono) return
-
-if(!muted[from]) muted[from] = []
-
-muted[from].push(alvo)
-
-await sock.sendMessage(from,{
-text:"Não grita 🤫"
-})
-
-}
-
-if(cmd.startsWith("!unmute") && mentioned.length){
-
-if(!isAdmin) return
-
-let alvo = mentioned[0]
-
-if(muted[from]){
-
-muted[from] = muted[from].filter(u => u !== alvo)
-
-}
-
-await sock.sendMessage(from,{
-text:"Pode falar nengue"
-})
-
-}
-
-if(cmd.startsWith("!ban") && mentioned.length && isGroup){
-
-if(!isAdmin) return
-
-let alvo = mentioned[0]
-
-const botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net"
-
-if(alvo === dono){
-
-await sock.sendMessage(from,{text:"Não posso banir meu dono"})
-return
-
-}
-
-if(alvo === botNumber){
-
-await sock.sendMessage(from,{text:"Não posso me banir"})
-return
-
-}
-
-await sock.groupParticipantsUpdate(from,[alvo],"remove")
 
 }
 
