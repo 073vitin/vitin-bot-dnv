@@ -182,7 +182,7 @@ async function startBot(){
     // Responder opções do Jarvis
     if(jarvisContext[from] && quoted?.conversation?.includes("O que deseja senhor?")){
       if(text === "1"){
-        await sock.sendMessage(from,{text:"Claro senhor, estarei enviando no seu privado uma foto gerada da sua vó pelada"})
+        await sock.sendMessage(from,{text:"Claro senhor, estarei enviando no seu privado uma foto da sua vó pelada"})
       } else if(text === "2"){
         await sock.sendMessage(from,{text:"Não precisa pedir 2 vezes"})
       } else if(text === "3"){
