@@ -5,6 +5,7 @@ const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion,
 const express = require("express")
 const pino = require("pino")
 const QRCode = require("qrcode")
+const sharp = require("sharp")
 
 const app = express()
 const logger = pino({ level: "silent" })
@@ -35,7 +36,6 @@ console.log("Servidor rodando na porta " + PORT)
 async function startBot(){
 
 const { state, saveCreds } = await useMultiFileAuthState("./auth_info")
-
 const { version } = await fetchLatestBaileysVersion()
 
 const sock = makeWASocket({
@@ -131,8 +131,12 @@ let mediaMsg = quoted ? { message: quoted } : msg
 
 const buffer = await sock.downloadMediaMessage(mediaMsg)
 
+const webpBuffer = await sharp(buffer)
+.webp()
+.toBuffer()
+
 await sock.sendMessage(from,{
-sticker: buffer
+sticker: webpBuffer
 })
 
 }
@@ -148,7 +152,7 @@ if(!muted[from]) muted[from] = []
 muted[from].push(alvo)
 
 await sock.sendMessage(from,{
-text:"Minha gala seca silenciou sua boca piranha >:D"
+text:"Não grita 🤫"
 })
 
 }
@@ -162,7 +166,7 @@ muted[from] = muted[from].filter(u => u !== alvo)
 }
 
 await sock.sendMessage(from,{
-text:"Fala baixo nengue"
+text:"Pode falar nengue"
 })
 
 }
