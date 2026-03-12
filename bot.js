@@ -24,7 +24,7 @@ res.send(`
 })
 
 const PORT = process.env.PORT || 3000
-app.listen(PORT, ()=> console.log("🌐 Servidor rodando"))
+app.listen(PORT, ()=> console.log("🌐 Servidor rodando na porta " + PORT))
 
 async function startBot(){
 
@@ -56,14 +56,10 @@ qrImage = null
 }
 
 if(connection === "close"){
-
 if((lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut){
-
 console.log("Reconectando...")
 startBot()
-
 }
-
 }
 
 })
@@ -85,7 +81,7 @@ msg.message.extendedTextMessage?.text ||
 
 const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
 
-// APAGAR MENSAGEM DE MUTADO
+// apagar mensagens de mutado
 if(isGroup && muted[from] && muted[from].includes(sender)){
 await sock.sendMessage(from,{ delete: msg.key })
 return
@@ -93,16 +89,27 @@ return
 
 const cmd = text.toLowerCase()
 
-// FIGURINHA
-if(cmd === "!fig" || msg.message.imageMessage || msg.message.videoMessage){
+// ===== FIGURINHA =====
 
-if(msg.message.imageMessage || msg.message.videoMessage){
+let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+
+let mediaMessage =
+msg.message.imageMessage ||
+msg.message.videoMessage ||
+quoted?.imageMessage ||
+quoted?.videoMessage
+
+if(cmd === "!fig" || cmd === "!sticker"){
+
+if(mediaMessage){
 
 await sock.sendMessage(from,{
 text:"Aguarde, estou terminando de comer o Kronos e já te envio a figurinha!"
 })
 
-const buffer = await sock.downloadMediaMessage(msg)
+let media = quoted ? { message: quoted } : msg
+
+const buffer = await sock.downloadMediaMessage(media)
 
 await sock.sendMessage(from,{
 sticker: buffer
@@ -112,7 +119,8 @@ sticker: buffer
 
 }
 
-// MUTE
+// ===== MUTE =====
+
 if(cmd.startsWith("!mute") && mentioned.length){
 
 let alvo = mentioned[0]
@@ -127,7 +135,24 @@ text:"minha gala seca silenciou sua boca piranha >:D"
 
 }
 
-// BAN
+// ===== UNMUTE =====
+
+if(cmd.startsWith("!unmute") && mentioned.length){
+
+let alvo = mentioned[0]
+
+if(muted[from]){
+muted[from] = muted[from].filter(u => u !== alvo)
+}
+
+await sock.sendMessage(from,{
+text:"Usuário desmutado"
+})
+
+}
+
+// ===== BAN =====
+
 if(cmd.startsWith("!ban") && mentioned.length && isGroup){
 
 let alvo = mentioned[0]
