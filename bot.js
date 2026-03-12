@@ -224,44 +224,58 @@ await sock.sendMessage(from,{ sticker })
 
 }
 
+// =========================
 // MUTE
+// =========================
+if(cmd === prefix+"mute" && mentioned.length && isGroup){
+  const metadata = await sock.groupMetadata(from)
+  const admin = metadata.participants.find(p => p.id === sender)?.admin
+  if(!admin) return
 
-if(cmd.startsWith(prefix+"mute") && mentioned.length && isGroup){
+  const alvo = mentioned[0]
 
-const metadata = await sock.groupMetadata(from)
-const admin = metadata.participants.find(p => p.id === sender)?.admin
+  if(!muted[from]) muted[from] = []
+  if(!muted[from].includes(alvo)){
+    muted[from].push(alvo)
+  }
 
-if(!admin) return
-
-const alvo = mentioned[0]
-
-if(!muted[from]) muted[from] = []
-
-muted[from].push(alvo)
-
-await sock.sendMessage(from,{text:"Não grita 🤫"})
-
+  await sock.sendMessage(from,{text:"Não grita 🤫"})
 }
 
 // UNMUTE
 
-if(cmd.startsWith(prefix+"unmute") && mentioned.length && isGroup){
+if(cmd === prefix+"unmute" && mentioned.length && isGroup){
+  const metadata = await sock.groupMetadata(from)
+  const admin = metadata.participants.find(p => p.id === sender)?.admin
+  if(!admin) return
 
-const metadata = await sock.groupMetadata(from)
-const admin = metadata.participants.find(p => p.id === sender)?.admin
+  const alvo = mentioned[0]
 
-if(!admin) return
+  if(muted[from]){
+    muted[from] = muted[from].filter(u => u !== alvo)
+  }
 
-const alvo = mentioned[0]
-
-if(muted[from]){
-muted[from] = muted[from].filter(u => u !== alvo)
+  await sock.sendMessage(from,{text:"Fala baixo nengue"})
 }
 
-await sock.sendMessage(from,{text:"Fala baixo nengue"})
+// BLOQUEIO DE MENSAGENS DOS MUTADOS
+  
+if(isGroup && muted[from]?.includes(sender)){
+  try {
+    // verifica se o bot é admin
+    const metadata = await sock.groupMetadata(from)
+    const botNumber = sock.user.id.split(":")[0] + "@s.whatsapp.net"
+    const botAdmin = metadata.participants.find(p => p.id === botNumber)?.admin
 
+    if(botAdmin){
+      // apaga a mensagem do usuário mutado
+      await sock.sendMessage(from, { delete: msg.key })
+    }
+  } catch (err) {
+    console.log("Erro ao apagar mensagem do mutado:", err)
+  }
+  return // ignora processamento da mensagem
 }
-
 // BAN
 
 if(cmd.startsWith(prefix+"ban") && mentioned.length && isGroup){
