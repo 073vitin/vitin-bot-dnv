@@ -10,12 +10,12 @@ const fs = require("fs")
 
 const ffmpeg = require("fluent-ffmpeg")
 const ffmpegPath = require("ffmpeg-static")
-
 ffmpeg.setFfmpegPath(ffmpegPath)
 
 const app = express()
 const logger = pino({ level: "silent" })
 
+// >>> SEU NÚMERO (DONO)
 const dono = "5573998579450@s.whatsapp.net"
 
 let qrImage = null
@@ -53,7 +53,7 @@ await new Promise((resolve,reject)=>{
 ffmpeg(input)
 .outputOptions([
 "-vcodec libwebp",
-"-vf scale=512:512:force_original_aspect_ratio=decrease,fps=15",
+"-vf scale=512:512:force_original_aspect_ratio=decrease:eval=frame,pad=512:512:-1:-1:color=0x00000000,fps=15",
 "-loop 0",
 "-preset default",
 "-an",
@@ -120,7 +120,6 @@ console.log("Conexão fechada")
 if(reason !== DisconnectReason.loggedOut){
 
 console.log("Reconectando em 5 segundos")
-
 setTimeout(startBot,5000)
 
 }
@@ -156,6 +155,42 @@ msg.message?.videoMessage ||
 quoted?.imageMessage ||
 quoted?.videoMessage
 
+// MENU BONITO
+if(cmd === "!menu"){
+
+await sock.sendMessage(from,{
+text:`
+╭━━━〔 🤖 VITIN BOT 〕━━━╮
+
+👑 *Status:* Online
+⚙️ *Sistema:* Baileys
+
+╰━━━〔 🎨 FIGURINHAS 〕━━━╯
+!f
+!fig
+!s
+!sticker
+
+╰━━━〔 👮 ADMIN 〕━━━╯
+!mute @usuario
+!unmute @usuario
+!ban @usuario
+
+╰━━━〔 👑 DONO 〕━━━╯
+!dono
+
+📌 *Como usar figurinha*
+
+Envie ou responda uma mídia
+com um comando de figurinha
+
+╰━━━━━━━━━━━━━━━━╯
+`
+})
+
+}
+
+// DONO
 if(cmd === "!dono"){
 
 const numero = dono.split("@")[0]
@@ -167,6 +202,7 @@ mentions:[dono]
 
 }
 
+// FIGURINHA
 if(["!f","!fig","!s","!sticker"].includes(cmd)){
 
 if(!media){
@@ -198,11 +234,10 @@ if(media.imageMessage){
 
 sticker = await sharp(buffer)
 .resize(512,512,{
-fit:"inside"
+fit:"contain",
+background:{ r:0, g:0, b:0, alpha:0 }
 })
-.webp({
-quality:80
-})
+.webp({ quality:80 })
 .toBuffer()
 
 }else{
@@ -211,8 +246,73 @@ sticker = await videoToSticker(buffer)
 
 }
 
+await sock.sendMessage(from,{ sticker })
+
+}
+
+// MUTE
+if(cmd.startsWith("!mute") && mentioned.length && isGroup){
+
+const metadata = await sock.groupMetadata(from)
+const admin = metadata.participants.find(p => p.id === sender)?.admin
+
+if(!admin) return
+
+let alvo = mentioned[0]
+
+if(!muted[from]) muted[from] = []
+
+muted[from].push(alvo)
+
 await sock.sendMessage(from,{
-sticker
+text:"Minha gala seca silenciou sua boca piranha >:D"
+})
+
+}
+
+// UNMUTE
+if(cmd.startsWith("!unmute") && mentioned.length && isGroup){
+
+const metadata = await sock.groupMetadata(from)
+const admin = metadata.participants.find(p => p.id === sender)?.admin
+
+if(!admin) return
+
+let alvo = mentioned[0]
+
+if(muted[from]){
+muted[from] = muted[from].filter(u => u !== alvo)
+}
+
+await sock.sendMessage(from,{
+text:"Fala baixo nengue"
+})
+
+}
+
+// BAN
+if(cmd.startsWith("!ban") && mentioned.length && isGroup){
+
+const metadata = await sock.groupMetadata(from)
+const admin = metadata.participants.find(p => p.id === sender)?.admin
+
+if(!admin) return
+
+let alvo = mentioned[0]
+
+if(alvo === dono){
+
+await sock.sendMessage(from,{
+text:"Você não pode banir o criador do bot 😎"
+})
+
+return
+}
+
+await sock.groupParticipantsUpdate(from,[alvo],"remove")
+
+await sock.sendMessage(from,{
+text:"Receba a leitada divina"
 })
 
 }
