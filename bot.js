@@ -110,6 +110,21 @@ async function startBot(){
     const sender = msg.key.participant || msg.key.remoteJid
     const isGroup = from.endsWith("@g.us")
 
+    const text =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text ||
+      ""
+
+    const cmd = text.toLowerCase()
+    const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
+    let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+
+    let media =
+      msg.message?.imageMessage ||
+      msg.message?.videoMessage ||
+      quoted?.imageMessage ||
+      quoted?.videoMessage
+
     // =========================
     // BLOQUEIO DE MENSAGENS DOS MUTADOS
     // =========================
@@ -130,25 +145,10 @@ async function startBot(){
       return // ignora processamento da mensagem
     }
 
-    const text =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      ""
-
-    const cmd = text.toLowerCase()
-    const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
-    let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
-
-    let media =
-      msg.message?.imageMessage ||
-      msg.message?.videoMessage ||
-      quoted?.imageMessage ||
-      quoted?.videoMessage
-
     // MENU
-if(cmd === prefix+"menu"){
-  await sock.sendMessage(from,{
-    text:`
+    if(cmd === prefix+"menu"){
+      await sock.sendMessage(from,{
+        text:`
 ╭━━━〔 🤖 VITIN BOT 〕━━━╮
 │ 👑 Status: Online
 │ ⚙️ Sistema: Baileys
@@ -157,8 +157,8 @@ if(cmd === prefix+"menu"){
 ╭━━━〔 🎨 FIGURINHAS 〕━━━╮
 │ ${prefix}s / ${prefix}fig / ${prefix}sticker / ${prefix}f
 │ Envie a mídia e logo em seguida
-│ use algum desses comandos
-│ para criar sua figurinha
+│ marque a imagem e use o comando
+│   para criar sua figurinha
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 👮 ADMIN 〕━━━╮
@@ -172,8 +172,8 @@ if(cmd === prefix+"menu"){
 │ ${prefix}dono
 ╰━━━━━━━━━━━━━━━━━━━━╯
 `
-  })
-}
+      })
+    }
 
     // DONO
     if(cmd === prefix+"dono"){
@@ -216,7 +216,7 @@ if(cmd === prefix+"menu"){
     // =========================
     // MUTE
     // =========================
-    if(cmd === prefix+"mute" && mentioned.length && isGroup){
+    if(isGroup && cmd === prefix+"mute" && mentioned.length){
       const metadata = await sock.groupMetadata(from)
       const admin = metadata.participants.find(p => p.id === sender)?.admin
       if(!admin) return
@@ -231,7 +231,7 @@ if(cmd === prefix+"menu"){
     }
 
     // UNMUTE
-    if(cmd === prefix+"unmute" && mentioned.length && isGroup){
+    if(isGroup && cmd === prefix+"unmute" && mentioned.length){
       const metadata = await sock.groupMetadata(from)
       const admin = metadata.participants.find(p => p.id === sender)?.admin
       if(!admin) return
@@ -241,7 +241,7 @@ if(cmd === prefix+"menu"){
         muted[from] = muted[from].filter(u => u !== alvo)
       }
 
-      await sock.sendMessage(from,{text:"Fala baixo nengue"})
+      await sock.sendMessage(from,{text:"Fala vaixo nengue"})
     }
 
     // BAN
