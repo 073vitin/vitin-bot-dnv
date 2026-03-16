@@ -116,6 +116,8 @@ async function startBot(){
     const text =
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text ||
+      msg.message.imageMessage?.caption ||
+      msg.message.videoMessage?.caption ||
       ""
 
     const cmd = text.toLowerCase()
@@ -185,8 +187,9 @@ async function startBot(){
 
 ╭━━━〔 🎨 FIGURINHAS 〕━━━╮
 │ ${prefix}s / ${prefix}fig / ${prefix}sticker / ${prefix}f
-│ Envie a mídia e logo em seguida
-│ marque a imagem com o comando
+│ Envie a mídia com o comando
+│ na legenda (ex: !s)
+│ ou responda a mídia com comando
 │ para criar sua figurinha
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
