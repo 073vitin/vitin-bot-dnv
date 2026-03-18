@@ -73,11 +73,12 @@ async function videoToSticker(buffer){
   const output = "./output.webp"
 
   fs.writeFileSync(input, buffer)
-  await new Promise((resolve,reject)=>{
+
+  await new Promise((resolve, reject) => {
     ffmpeg(input)
       .outputOptions([
         "-vcodec libwebp",
-        "-vf scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:-1:-1:color=0x00000000,fps=15",
+        "-vf scale=512:512:force_original_aspect_ratio=increase,crop=512:512,setsar=1,fps=15",
         "-loop 0",
         "-preset default",
         "-an",
@@ -212,12 +213,13 @@ async function startBot(){
         let sticker;
 
         if(msg.message?.imageMessage || quoted?.imageMessage){
-          // Imagem quadrada 512x512
+          // Imagem quadrada 512x512 (crop central)
           sticker = await sharp(buffer)
-            .resize({ width: 512, height: 512, fit: "contain", background: { r:0,g:0,b:0, alpha:0 } })
-            .webp()
+            .resize(512, 512, { fit: "cover", position: "centre" })
+            .webp({ quality: 100 })
             .toBuffer()
         } else if(msg.message?.videoMessage || quoted?.videoMessage){
+          // Vídeo quadrado 512x512
           sticker = await videoToSticker(buffer)
         }
 
