@@ -22,6 +22,39 @@ let jarvisContext = {}
 let mutedUsers = {}
 let mutedWarned = {}
 
+// =========================
+// DDD COMPLETO BRASIL
+// =========================
+const dddMap = {
+"11":"São Paulo","12":"São Paulo","13":"São Paulo","14":"São Paulo","15":"São Paulo","16":"São Paulo","17":"São Paulo","18":"São Paulo","19":"São Paulo",
+"21":"Rio de Janeiro","22":"Rio de Janeiro","24":"Rio de Janeiro",
+"27":"Espírito Santo","28":"Espírito Santo",
+"31":"Minas Gerais","32":"Minas Gerais","33":"Minas Gerais","34":"Minas Gerais","35":"Minas Gerais","37":"Minas Gerais","38":"Minas Gerais",
+"41":"Paraná","42":"Paraná","43":"Paraná","44":"Paraná","45":"Paraná","46":"Paraná",
+"47":"Santa Catarina","48":"Santa Catarina","49":"Santa Catarina",
+"51":"Rio Grande do Sul","53":"Rio Grande do Sul","54":"Rio Grande do Sul","55":"Rio Grande do Sul",
+"61":"Distrito Federal",
+"62":"Goiás","64":"Goiás",
+"63":"Tocantins",
+"65":"Mato Grosso","66":"Mato Grosso",
+"67":"Mato Grosso do Sul",
+"68":"Acre",
+"69":"Rondônia",
+"71":"Bahia","73":"Bahia","74":"Bahia","75":"Bahia","77":"Bahia",
+"79":"Sergipe",
+"81":"Pernambuco","87":"Pernambuco",
+"82":"Alagoas",
+"83":"Paraíba",
+"84":"Rio Grande do Norte",
+"85":"Ceará","88":"Ceará",
+"86":"Piauí","89":"Piauí",
+"91":"Pará","93":"Pará","94":"Pará",
+"92":"Amazonas","97":"Amazonas",
+"95":"Roraima",
+"96":"Amapá",
+"98":"Maranhão","99":"Maranhão"
+}
+
 app.get("/", (req,res)=>{
   if(!qrImage){
     return res.send("<h2>Bot conectado</h2>")
@@ -131,49 +164,6 @@ async function startBot(){
       quoted?.videoMessage
 
     // =========================
-    // MUTE (bloqueio)
-    // =========================
-    if(isGroup && mutedUsers[from] && mutedUsers[from].includes(sender)){
-      try {
-        if(!mutedWarned[from]) mutedWarned[from] = []
-        if(!mutedWarned[from].includes(sender)){
-          await sock.sendMessage(from, { text: "Cala boca quenga" })
-          mutedWarned[from].push(sender)
-        }
-        await sock.sendMessage(from, { delete: msg.key })
-      } catch(e){
-        console.log(e)
-      }
-      return
-    }
-
-    // =========================
-    // JARVIS
-    // =========================
-    if(cmd === prefix+"jarvis"){
-      await sock.sendMessage(from,{
-        text:"O que deseja senhor?\n1- Amoleça meu pinto\n2- Mate o Kronos\n3- Deixa pra lá"
-      })
-      jarvisContext[from] = true
-      return
-    }
-
-    if(jarvisContext[from]){
-      if(text === "1"){
-        await sock.sendMessage(from,{text:"Claro senhor..."})
-      } else if(text === "2"){
-        await sock.sendMessage(from,{text:"Não precisa pedir 2 vezes"})
-      } else if(text === "3"){
-        await sock.sendMessage(from,{text:"Vai tomar no cú então"})
-      } else {
-        await sock.sendMessage(from,{text:"Digite 1, 2 ou 3"})
-        return
-      }
-      delete jarvisContext[from]
-      return
-    }
-
-    // =========================
     // MENU
     // =========================
     if(cmd === prefix+"menu"){
@@ -187,16 +177,20 @@ async function startBot(){
 ╭━━━〔 🎨 FIGURINHAS 〕━━━╮
 │ ${prefix}s / ${prefix}fig / ${prefix}sticker / ${prefix}f
 │ Envie a mídia com o comando
-│ na legenda (ex: !s)
-│ ou responda a mídia com comando
-│ para criar sua figurinha
+╰━━━━━━━━━━━━━━━━━━━━╯
+
+╭━━━〔 🎮 DIVERSÃO 〕━━━╮
+│ ${prefix}roleta
+│ ${prefix}bombardeiro
+│ ${prefix}gay @user
+│ ${prefix}corno @user
+│ ${prefix}ship @a @b
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 👮 ADMIN 〕━━━╮
 │ ${prefix}ban @usuario
 │ ${prefix}mute @usuario
 │ ${prefix}unmute @usuario
-│ Apenas admins podem usar
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 👑 DONO 〕━━━╮
@@ -207,107 +201,151 @@ async function startBot(){
     }
 
     // =========================
-    // DONO
+    // NOVOS COMANDOS
     // =========================
-    if(cmd === prefix+"dono"){
-      const numero = dono.split("@")[0]
+
+    if(cmd === prefix+"roleta" && isGroup){
+      const metadata = await sock.groupMetadata(from)
+      const participantes = metadata.participants.map(p => p.id)
+      const alvo = participantes[Math.floor(Math.random()*participantes.length)]
+      const numero = alvo.split("@")[0]
+
+      const frases = [
+        `@${numero} foi agraciado a rebolar lentinho pra todos do grupo!`,
+        `@${numero} vai ter que pagar babão pro bonde`,
+        `@${numero} teve os dados puxados e tivemos uma revelação triste, é adotado...`,
+        `@${numero} por que no seu navegador tem pornô de femboy furry?`,
+        `@${numero} gabaritou a tabela de DST! Parabéns pela conquista.`
+      ]
+
+      const frase = frases[Math.floor(Math.random()*frases.length)]
+      await sock.sendMessage(from,{ text:frase, mentions:[alvo] })
+    }
+
+    if(cmd === prefix+"bombardeiro" && isGroup){
+      const metadata = await sock.groupMetadata(from)
+      const participantes = metadata.participants.map(p => p.id)
+      const alvo = participantes[Math.floor(Math.random()*participantes.length)]
+
+      const numero = alvo.split("@")[0]
+      const ddd = numero.substring(0,2)
+      const estado = dddMap[ddd] || "local desconhecido"
+
       await sock.sendMessage(from,{
-        text:`👑 Dono: @${numero}`,
-        mentions:[dono]
+        text:`💣 Positivo capitão...\n📍 ${estado}\n💥 Ataque em instantes`,
+        mentions:[alvo]
+      })
+    }
+
+    if(cmd.startsWith(prefix+"gay") && mentioned[0]){
+      const alvo = mentioned[0]
+      const numero = alvo.split("@")[0]
+      const p = Math.floor(Math.random()*101)
+
+      await sock.sendMessage(from,{
+        text:`@${numero} é ${p}% gay 🌈`,
+        mentions:[alvo]
+      })
+    }
+
+    if(cmd.startsWith(prefix+"corno") && mentioned[0]){
+      const alvo = mentioned[0]
+      const numero = alvo.split("@")[0]
+      const p = Math.floor(Math.random()*101)
+
+      await sock.sendMessage(from,{
+        text:`@${numero} é ${p}% corno 🐂`,
+        mentions:[alvo]
+      })
+    }
+
+    if(cmd.startsWith(prefix+"ship") && mentioned.length >= 2){
+      const p1 = mentioned[0]
+      const p2 = mentioned[1]
+
+      const n1 = p1.split("@")[0]
+      const n2 = p2.split("@")[0]
+      const chance = Math.floor(Math.random()*101)
+
+      await sock.sendMessage(from,{
+        text:`💘 @${n1} + @${n2} = ${chance}%`,
+        mentions:[p1,p2]
       })
     }
 
     // =========================
-    // STICKER
+    // TRETA
     // =========================
-    if(["!s","!fig","!sticker","!f"].includes(cmd)){
-      if(!media){
-        return sock.sendMessage(from,{text:"Envie ou responda uma mídia"})
-      }
-
-      await sock.sendMessage(from,{text:"Criando figurinha..."})
-
-      let mediaMsg = quoted ? { message: quoted } : msg
-
-      const buffer = await downloadMediaMessage(
-        mediaMsg,
-        "buffer",
-        {},
-        { logger, reuploadRequest: sock.updateMediaMessage }
-      )
-
-      let sticker
-      if(media.imageMessage){
-        sticker = await sharp(buffer)
-          .resize(512,512,{ fit:"fill" })
-          .webp({quality:90})
-          .toBuffer()
-      } else {
-        sticker = await videoToSticker(buffer)
-      }
-
-      await sock.sendMessage(from,{ sticker })
-    }
-
-    // =========================
-    // ADMIN COMMANDS (CORRIGIDO)
-    // =========================
-    if(isGroup && cmd.startsWith(prefix)){
-
+    if(cmd === prefix+"treta" && isGroup){
       const metadata = await sock.groupMetadata(from)
-      const isAdmin = metadata.participants.find(p => p.id === sender)?.admin
+      const participantes = metadata.participants.map(p => p.id)
 
-      // só bloqueia se for comando admin
-      if(
-        (cmd.startsWith(prefix+"mute") ||
-         cmd.startsWith(prefix+"unmute") ||
-         cmd.startsWith(prefix+"ban"))
-         && !isAdmin
-      ){
-        return sock.sendMessage(from,{ text:"Somente admins podem usar este comando." })
+      const p1 = participantes[Math.floor(Math.random()*participantes.length)]
+      let p2 = participantes[Math.floor(Math.random()*participantes.length)]
+
+      while(p1 === p2){
+        p2 = participantes[Math.floor(Math.random()*participantes.length)]
       }
 
-      const alvo = mentioned[0]
-      const donoID = dono.trim()
+      const n1 = p1.split("@")[0]
+      const n2 = p2.split("@")[0]
 
-      // ================= MUTE
-      if(cmd.startsWith(prefix+"mute") && alvo){
-        if(alvo === donoID) return sock.sendMessage(from,{text:"Não pode mutar o dono!"})
+      const motivos = [
+        "brigaram por causa de comida",
+        "discutiram por causa de mulher",
+        `treta começou pois @${n1} tentou ver a pasta trancada de @${n2}`,,
+        "um chamou o outro de feio kkkkkkkkkkkk",
+        "disputa de ego gigantesca, sensação de aura absurda",
+        "por causa de figurinha kkkkk",
+        "um deve dinheiro pro outro(só tem caloteiro aqui)",
+        "brigaram pra ver quem tem o maior pinto"
+      ]
 
-        if(!mutedUsers[from]) mutedUsers[from] = []
-        if(!mutedUsers[from].includes(alvo)) mutedUsers[from].push(alvo)
+      const motivo = motivos[Math.floor(Math.random()*motivos.length)]
 
-        await sock.sendMessage(from,{text:"Mutado 🤫"})
+      let resultado = ""
+
+      if(motivo === "brigaram pra ver quem tem o maior pinto"){
+        const vencedor = Math.random() < 0.5 ? p1 : p2
+        const perdedor = vencedor === p1 ? p2 : p1
+
+        const nv = vencedor.split("@")[0]
+        const np = perdedor.split("@")[0]
+
+        const finais = [
+          `@${np} tem o menor micro pênis já registrado da história!`,
+          `@${nv} ganhou com seus incríveis 5 centímetros!`
+        ]
+
+        resultado = finais[Math.floor(Math.random()*finais.length)]
+
+        await sock.sendMessage(from,{
+          text:`TRETA INICIADA \n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
+          mentions:[p1,p2]
+        })
+
         return
       }
 
-      // ================= UNMUTE
-      if(cmd.startsWith(prefix+"unmute") && alvo){
-        if(mutedUsers[from]){
-          mutedUsers[from] = mutedUsers[from].filter(u => u !== alvo)
-        }
-        if(mutedWarned[from]){
-          mutedWarned[from] = mutedWarned[from].filter(u => u !== alvo)
-        }
+      const resultados = [
+        `@${n1} saiu chorando feito uma criança`,
+        `@${n2} foi humilhado kkkkkkkkkk`,
+        "deu empate, briguem novamente por favor.",
+        `@${n1} ganhou a briga, parabéns!`,
+        `@${n2} pediu arrego kkkkkkkkkkkkkk`
+      ]
 
-        await sock.sendMessage(from,{text:"Desmutado 👍"})
-        return
-      }
+      resultado = resultados[Math.floor(Math.random()*resultados.length)]
 
-      // ================= BAN
-      if(cmd.startsWith(prefix+"ban") && alvo){
-        if(alvo === donoID) return sock.sendMessage(from,{text:"Não pode banir o dono!"})
-
-        try {
-          await sock.groupParticipantsUpdate(from,[alvo],"remove")
-          await sock.sendMessage(from,{text:"Banido 🚫"})
-        } catch(e){
-          console.log(e)
-          await sock.sendMessage(from,{text:"Erro ao banir"})
-        }
-        return
-      }
+      await sock.sendMessage(from,{
+        text:`⚔️ TRETA INICIADA ⚔️\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
+        mentions:[p1,p2]
+      })
     }
+
+    // =========================
+    // QUERO ME MATAR
+    // =========================
 
   })
 }
