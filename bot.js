@@ -160,7 +160,7 @@ async function startBot(){
       quoted?.imageMessage ||
       quoted?.videoMessage
 
-   // =========================
+// =========================
 // MENU
 // =========================
 if(cmd === prefix+"menu"){
@@ -193,7 +193,7 @@ if(cmd === prefix+"menu"){
   })
 }
 
-    // =========================
+// =========================
 // FIGURINHA
 // =========================
 if(
@@ -202,13 +202,11 @@ if(
   cmd === prefix+"sticker" ||
   cmd === prefix+"f"
 ){
-  // Verifica se tem mídia na mensagem ou na mensagem respondida
   if(!media){
     return sock.sendMessage(from,{ text:"Envie ou responda uma mídia!" })
   }
 
   try{
-    // Pega o buffer da mídia (imagem ou vídeo)
     let buffer;
     if(msg.message?.imageMessage || msg.message?.videoMessage){
       buffer = await downloadMediaMessage(msg, "buffer", {}, { logger })
@@ -232,170 +230,165 @@ if(
   }
 }
 
-    // =========================
-    // ROLETA
-    // =========================
-    if(cmd === prefix+"roleta" && isGroup){
-      const metadata = await sock.groupMetadata(from)
-      const participantes = metadata.participants.map(p => p.id)
-      const alvo = participantes[Math.floor(Math.random()*participantes.length)]
-      const numero = alvo.split("@")[0]
+// =========================
+// ROLETA
+// =========================
+if(cmd === prefix+"roleta" && isGroup){
+  const metadata = await sock.groupMetadata(from)
+  const participantes = metadata.participants.map(p => p.id)
+  const alvo = participantes[Math.floor(Math.random()*participantes.length)]
+  const numero = alvo.split("@")[0]
 
-      const frases = [
-        `@${numero} foi agraciado a rebolar lentinho pra todos do grupo!`,
-        `@${numero} vai ter que pagar babão pro bonde`,
-        `@${numero} teve os dados puxados e tivemos uma revelação triste, é adotado...`,
-        `@${numero} por que no seu navegador tem pornô de femboy furry?`,
-        `@${numero} gabaritou a tabela de DST! Parabéns pela conquista.`
-      ]
+  const frases = [
+    `@${numero} foi agraciado a rebolar lentinho pra todos do grupo!`,
+    `@${numero} vai ter que pagar babão pro bonde`,
+    `@${numero} teve os dados puxados e tivemos uma revelação triste, é adotado...`,
+    `@${numero} por que no seu navegador tem pornô de femboy furry?`,
+    `@${numero} gabaritou a tabela de DST! Parabéns pela conquista.`
+  ]
 
-      const frase = frases[Math.floor(Math.random()*frases.length)]
-      await sock.sendMessage(from,{ text:frase, mentions:[alvo] })
-    }
+  const frase = frases[Math.floor(Math.random()*frases.length)]
+  await sock.sendMessage(from,{ text:frase, mentions:[alvo] })
+}
 
-    // =========================
-    // BOMBARDEIO
-    // =========================
-    if(cmd.startsWith(prefix+"bombardeio") && mentioned.length>0 && isGroup){
-      const alvo = mentioned[0]
+// =========================
+// BOMBARDEIO
+// =========================
+if(cmd.startsWith(prefix+"bombardeio") && mentioned.length>0 && isGroup){
+  const alvo = mentioned[0]
 
-      // IP fake
-      const ip = `${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}`
+  const ip = `${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}`
 
-      // Provedor fake
-      const provedores = ["Claro","Vivo","Tim","Oi","Copel","NET"]
-      const provedor = provedores[Math.floor(Math.random()*provedores.length)]
+  const provedores = ["Claro","Vivo","Tim","Oi","Copel","NET"]
+  const provedor = provedores[Math.floor(Math.random()*provedores.length)]
 
-      // Dispositivo fake
-      const dispositivos = ["Android","iOS","Windows PC","Linux PC"]
-      const dispositivo = dispositivos[Math.floor(Math.random()*dispositivos.length)]
+  const dispositivos = ["Android","iOS","Windows PC","Linux PC"]
+  const dispositivo = dispositivos[Math.floor(Math.random()*dispositivos.length)]
 
-      // Região fake a partir do DDD
-      const numero = alvo.split("@")[0]
-      const ddd = numero.substring(0,2)
-      const regiao = dddMap[ddd] || "desconhecida"
+  const numero = alvo.split("@")[0]
+  const ddd = numero.substring(0,2)
+  const regiao = dddMap[ddd] || "desconhecida"
 
-      // Crime aleatório
-      const crimes = ["furto","roubo","estelionato","tráfico","lesão corporal","homicídio","contrabando","vandalismo","pirataria","crime cibernético","fraude","tráfico de animais","lavagem de dinheiro","crime ambiental","corrupção","sequestro","ameaça","falsificação","invasão de propriedade","crime eleitoral"]
-      const crime = crimes[Math.floor(Math.random()*crimes.length)]
+  const crimes = ["furto","roubo","estelionato","tráfico","lesão corporal","homicídio","contrabando","vandalismo","pirataria","crime cibernético","fraude","tráfico de animais","lavagem de dinheiro","crime ambiental","corrupção","sequestro","ameaça","falsificação","invasão de propriedade","crime eleitoral"]
+  const crime = crimes[Math.floor(Math.random()*crimes.length)]
 
-      await sock.sendMessage(from,{ text:`📡 Analisando ficha criminal... (1 crime encontrado: ${crime})`, mentions:[alvo] })
+  await sock.sendMessage(from,{ text:`📡 Analisando ficha criminal... (1 crime encontrado: ${crime})`, mentions:[alvo] })
 
-      setTimeout(async ()=>{
-        await sock.sendMessage(from,{ text:`💻 IP rastreado: ${ip}`, mentions:[alvo] })
-      },1500)
+  setTimeout(async ()=>{
+    await sock.sendMessage(from,{ text:`💻 IP rastreado: ${ip}`, mentions:[alvo] })
+  },1500)
 
-      setTimeout(async ()=>{
-        await sock.sendMessage(from,{
-          text:`🎯 Alvo identificado!\n📍 Região: ${regiao}\n💻 Provedor: ${provedor}\n📱 Dispositivo: ${dispositivo}\n⚠️ Vulnerabilidade encontrada!\n💣 Iniciando ataque em breve...`,
-          mentions:[alvo]
-        })
-      },3000)
-    }
+  setTimeout(async ()=>{
+    await sock.sendMessage(from,{
+      text:`🎯 Alvo identificado!\n📍 Região: ${regiao}\n💻 Provedor: ${provedor}\n📱 Dispositivo: ${dispositivo}\n⚠️ Vulnerabilidade encontrada!\n💣 Iniciando ataque em breve...`,
+      mentions:[alvo]
+    })
+  },3000)
+}
 
-    // =========================
-    // GAY / GADO / SHIP
-    // =========================
-    if(cmd.startsWith(prefix+"gay") && mentioned[0]){
-      const alvo = mentioned[0]
-      const numero = alvo.split("@")[0]
-      const p = Math.floor(Math.random()*101)
+// =========================
+// GAY / GADO / SHIP
+// =========================
+if(cmd.startsWith(prefix+"gay") && mentioned[0]){
+  const alvo = mentioned[0]
+  const numero = alvo.split("@")[0]
+  const p = Math.floor(Math.random()*101)
 
-      await sock.sendMessage(from,{ text:`@${numero} é ${p}% gay 🌈`, mentions:[alvo] })
-    }
+  await sock.sendMessage(from,{ text:`@${numero} é ${p}% gay 🌈`, mentions:[alvo] })
+}
 
-    if(cmd.startsWith(prefix+"gado") && mentioned[0]){
-      const alvo = mentioned[0]
-      const numero = alvo.split("@")[0]
-      const p = Math.floor(Math.random()*101)
+if(cmd.startsWith(prefix+"gado") && mentioned[0]){
+  const alvo = mentioned[0]
+  const numero = alvo.split("@")[0]
+  const p = Math.floor(Math.random()*101)
 
-      await sock.sendMessage(from,{ text:`@${numero} é ${p}% gado 🐂`, mentions:[alvo] })
-    }
+  await sock.sendMessage(from,{ text:`@${numero} é ${p}% gado 🐂`, mentions:[alvo] })
+}
 
-    if(cmd.startsWith(prefix+"ship") && mentioned.length >= 2){
-      const p1 = mentioned[0]
-      const p2 = mentioned[1]
-      const n1 = p1.split("@")[0]
-      const n2 = p2.split("@")[0]
-      const chance = Math.floor(Math.random()*101)
+if(cmd.startsWith(prefix+"ship") && mentioned.length >= 2){
+  const p1 = mentioned[0]
+  const p2 = mentioned[1]
+  const n1 = p1.split("@")[0]
+  const n2 = p2.split("@")[0]
+  const chance = Math.floor(Math.random()*101)
 
-      await sock.sendMessage(from,{
-        text:`💘 @${n1} + @${n2} = ${chance}%`,
-        mentions:[p1,p2]
-      })
-    }
+  await sock.sendMessage(from,{
+    text:`💘 @${n1} + @${n2} = ${chance}%`,
+    mentions:[p1,p2]
+  })
+}
 
-    // =========================
-    // TRETA
-    // =========================
-    if(cmd === prefix+"treta" && isGroup){
-      const metadata = await sock.groupMetadata(from)
-      const participantes = metadata.participants.map(p => p.id)
+// =========================
+// TRETA
+// =========================
+if(cmd === prefix+"treta" && isGroup){
+  const metadata = await sock.groupMetadata(from)
+  const participantes = metadata.participants.map(p => p.id)
 
-      const p1 = participantes[Math.floor(Math.random()*participantes.length)]
-      let p2 = participantes[Math.floor(Math.random()*participantes.length)]
+  const p1 = participantes[Math.floor(Math.random()*participantes.length)]
+  let p2 = participantes[Math.floor(Math.random()*participantes.length)]
 
-      while(p1 === p2){
-        p2 = participantes[Math.floor(Math.random()*participantes.length)]
-      }
+  while(p1 === p2){
+    p2 = participantes[Math.floor(Math.random()*participantes.length)]
+  }
 
-      const n1 = p1.split("@")[0]
-      const n2 = p2.split("@")[0]
+  const n1 = p1.split("@")[0]
+  const n2 = p2.split("@")[0]
 
-      const motivos = [
-        "brigaram por causa de comida",
-        "discutiram por causa de mulher",
-        `treta começou pois @${n1} tentou ver a pasta trancada de @${n2}`,
-        "um chamou o outro de feio kkkkkkkkkkkk",
-        "disputa de ego gigantesca",
-        `treta começou pois @${n1} falou que era mais forte que @${n2}`,
-        "um deve dinheiro pro outro(so tem caloteiro aqui)",
-        "brigaram pra ver quem tem o maior pinto"
-      ]
+  const motivos = [
+    "brigaram por causa de comida",
+    "discutiram por causa de mulher",
+    `treta começou pois @${n1} tentou ver a pasta trancada de @${n2}`,
+    "um chamou o outro de feio kkkkkkkkkkkk",
+    "disputa de ego gigantesca",
+    `treta começou pois @${n1} falou que era mais forte que @${n2}`,
+    "um deve dinheiro pro outro(so tem caloteiro aqui)",
+    "brigaram pra ver quem tem o maior pinto"
+  ]
 
-      const motivo = motivos[Math.floor(Math.random()*motivos.length)]
+  const motivo = motivos[Math.floor(Math.random()*motivos.length)]
 
-      // EVENTO ESPECIAL DO PINTO
-      if(motivo === "brigaram pra ver quem tem o maior pinto"){
-        const vencedor = Math.random() < 0.5 ? p1 : p2
-        const perdedor = vencedor === p1 ? p2 : p1
+  // EVENTO ESPECIAL DO PINTO
+  if(motivo === "brigaram pra ver quem tem o maior pinto"){
+    const vencedor = Math.random() < 0.5 ? p1 : p2
+    const perdedor = vencedor === p1 ? p2 : p1
 
-        const nv = vencedor.split("@")[0]
-        const np = perdedor.split("@")[0]
+    const nv = vencedor.split("@")[0]
+    const np = perdedor.split("@")[0]
 
-        const tamanhoVencedor = (Math.random() * 20 + 5).toFixed(1) // 5 a 25
-        const tamanhoPerdedor = (Math.random() * 23 - 20).toFixed(1) // -20 a 3 💀
+    const tamanhoVencedor = (Math.random() * 20 + 5).toFixed(1) // 5 a 25
+    const tamanhoPerdedor = (Math.random() * 23 - 20).toFixed(1) // -20 a 3 💀
 
-        const finais = [
-          `@${np} tem o menor micro pênis já registrado da história! (${tamanhoPerdedor}cm)`,
-          `@${nv} ganhou com seus incríveis ${tamanhoVencedor} centímetros!`
-        ]
+    const finais = [
+      `@${np} tem o menor micro pênis já registrado da história! (${tamanhoPerdedor}cm)`,
+      `@${nv} ganhou com seus incríveis ${tamanhoVencedor} centímetros!`
+    ]
 
-        const resultado = finais[Math.floor(Math.random()*finais.length)]
+    const resultado = finais[Math.floor(Math.random()*finais.length)]
 
-        await sock.sendMessage(from,{
-          text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
-          mentions:[p1,p2]
-        })
+    await sock.sendMessage(from,{
+      text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
+      mentions:[p1,p2]
+    })
 
-        return
-      }
+    return
+  }
 
-      const resultados = [
-        `@${n1} saiu chorando`,
-        `@${n2} ficou de xereca`,
-        "deu empate, briguem dnv fazendo favor",
-        `@${n1} ganhou`,
-        `@${n2} pediu arrego`
-      ]
+  const resultados = [
+    `@${n1} saiu chorando`,
+    `@${n2} ficou de xereca`,
+    "deu empate, briguem dnv fazendo favor",
+    `@${n1} ganhou`,
+    `@${n2} pediu arrego`
+  ]
 
-      const resultado = resultados[Math.floor(Math.random()*resultados.length)]
+  const resultado = resultados[Math.floor(Math.random()*resultados.length)]
 
-      await sock.sendMessage(from,{
-        text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
-        mentions:[p1,p2]
-      })
-    }
+  await sock.sendMessage(from,{
+    text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
+    mentions:[p1,p2]
+  })
+}
 
 // =========================
 // FUNÇÕES ADMIN
@@ -445,5 +438,12 @@ if (mutedUsers[sender] && isGroup) {
   }
   return
 })
-  }
-    startBot() 
+
+}) 
+
+// =========================
+// INICIA O BOT
+// =========================
+startBot()
+  .then(() => console.log("Bot iniciado com sucesso!"))
+  .catch(err => console.error("Erro ao iniciar o bot:", err))
