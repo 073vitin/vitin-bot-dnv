@@ -197,10 +197,13 @@ async function startBot(){
     // FIGURINHA
     // =========================
     if(cmd === prefix+"s" || cmd === prefix+"fig" || cmd === prefix+"sticker" || cmd === prefix+"f"){
+      // Verifica se tem mídia na mensagem ou na mensagem respondida
       if(!media){
         return sock.sendMessage(from,{ text:"Envie ou responda uma mídia!" })
       }
+
       try{
+        // Pega o buffer da mídia (imagem ou vídeo)
         let buffer;
         if(msg.message?.imageMessage || msg.message?.videoMessage){
           buffer = await downloadMediaMessage(msg, "buffer", {}, { logger })
@@ -209,10 +212,38 @@ async function startBot(){
         }
 
         let sticker;
+
         if(msg.message?.imageMessage || quoted?.imageMessage){
-          sticker = await sharp(buffer).resize(512,512).webp().toBuffer()
+          // Corrigido: redimensionamento para 512x512 mantendo proporção com fundo transparente
+          sticker = await sharp(buffer)
+            .resize({ width: 512, height: 512, fit: "contain", background: { r:0,g:0,b:0, alpha:0 } })
+            .webp()
+            .toBuffer()
         } else if(msg.message?.videoMessage || quoted?.videoMessage){
-          sticker = await videoToSticker(buffer)
+          // Corrigido: vídeo para 512x512 mantendo proporção com padding transparente
+          const input = "./input.mp4"
+          const output = "./output.webp"
+          fs.writeFileSync(input, buffer)
+
+          await new Promise((resolve,reject)=>{
+            ffmpeg(input)
+              .outputOptions([
+                "-vcodec libwebp",
+                "-vf scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:-1:-1:color=0x00000000,fps=15",
+                "-loop 0",
+                "-preset default",
+                "-an",
+                "-vsync 0"
+              ])
+              .toFormat("webp")
+              .save(output)
+              .on("end", resolve)
+              .on("error", reject)
+          })
+
+          sticker = fs.readFileSync(output)
+          fs.unlinkSync(input)
+          fs.unlinkSync(output)
         }
 
         await sock.sendMessage(from,{ sticker })
