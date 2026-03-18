@@ -223,9 +223,9 @@ async function startBot(){
     // =========================
     // BOMBARDEIO
     // =========================
-    if(cmd.startsWith(prefix+"bombardeio") && mentioned && isGroup){
-      const alvo = mentioned
-      const numero = alvo.split("@")
+    if(cmd.startsWith(prefix+"bombardeio") && mentioned.length > 0 && isGroup){
+      const alvo = mentioned[0]
+      const numero = alvo.split("@")[0]
 
       const ddd = numero.substring(0,2)
       const estado = dddMap[ddd] || "local desconhecido"
@@ -286,74 +286,79 @@ async function startBot(){
     }
 
     // =========================
-// TRETA
-// =========================
-if(cmd === prefix+"treta" && isGroup){
-  const metadata = await sock.groupMetadata(from)
-  const participantes = metadata.participants.map(p => p.id)
+    // TRETA
+    // =========================
+    if(cmd === prefix+"treta" && isGroup){
+      const metadata = await sock.groupMetadata(from)
+      const participantes = metadata.participants.map(p => p.id)
 
-  const p1 = participantes[Math.floor(Math.random()*participantes.length)]
-  let p2 = participantes[Math.floor(Math.random()*participantes.length)]
+      if(participantes.length < 2) return // precisa de pelo menos 2
 
-  while(p1 === p2){
-    p2 = participantes[Math.floor(Math.random()*participantes.length)]
-  }
+      const p1 = participantes[Math.floor(Math.random()*participantes.length)]
+      let p2 = participantes[Math.floor(Math.random()*participantes.length)]
 
-  const n1 = p1.split("@")[0]
-  const n2 = p2.split("@")[0]
+      while(p1 === p2){
+        p2 = participantes[Math.floor(Math.random()*participantes.length)]
+      }
 
-  const motivos = [
-    "brigaram por causa de comida",
-    "discutiram por causa de mulher",
-    `treta começou pois @${n1} tentou ver a pasta trancada de @${n2}`,
-    "um chamou o outro de feio kkkkkkkkkkkk",
-    "disputa de ego gigantesca",
-    `treta começou pois @${n1} falou que era mais forte que @${n2}`,
-    "um deve dinheiro pro outro(so tem caloteiro aqui)",
-    "brigaram pra ver quem tem o maior pinto"
-  ]
+      const n1 = p1.split("@")[0]
+      const n2 = p2.split("@")[0]
 
-  const motivo = motivos[Math.floor(Math.random()*motivos.length)]
+      const motivos = [
+        "brigaram por causa de comida",
+        "discutiram por causa de mulher",
+        `treta começou pois @${n1} tentou ver a pasta trancada de @${n2}`,
+        "um chamou o outro de feio kkkkkkkkkkkk",
+        "disputa de ego gigantesca",
+        `treta começou pois @${n1} falou que era mais forte que @${n2}`,
+        "um deve dinheiro pro outro(so tem caloteiro aqui)",
+        "brigaram pra ver quem tem o maior pinto"
+      ]
 
-  // EVENTO ESPECIAL DO PINTO
-  if(motivo === "brigaram pra ver quem tem o maior pinto"){
-    const vencedor = Math.random() < 0.5 ? p1 : p2
-    const perdedor = vencedor === p1 ? p2 : p1
+      const motivo = motivos[Math.floor(Math.random()*motivos.length)]
 
-    const nv = vencedor.split("@")[0]
-    const np = perdedor.split("@")[0]
+      // EVENTO ESPECIAL DO PINTO
+      if(motivo === "brigaram pra ver quem tem o maior pinto"){
+        const vencedor = Math.random() < 0.5 ? p1 : p2
+        const perdedor = vencedor === p1 ? p2 : p1
 
-    const tamanhoVencedor = (Math.random() * 20 + 5).toFixed(1) // 5 a 25
-    const tamanhoPerdedor = (Math.random() * 23 - 20).toFixed(1) // -20 a 3 💀
+        const nv = vencedor.split("@")[0]
+        const np = perdedor.split("@")[0]
 
-    const finais = [
-      `@${np} tem o menor micro pênis já registrado da história! (${tamanhoPerdedor}cm)`,
-      `@${nv} ganhou com seus incríveis ${tamanhoVencedor} centímetros!`
-    ]
+        const tamanhoVencedor = (Math.random() * 20 + 5).toFixed(1) // 5 a 25
+        const tamanhoPerdedor = (Math.random() * 23 - 20).toFixed(1) // -20 a 3 💀
 
-    const resultado = finais[Math.floor(Math.random()*finais.length)]
+        const finais = [
+          `@${np} tem o menor micro pênis já registrado da história! (${tamanhoPerdedor}cm)`,
+          `@${nv} ganhou com seus incríveis ${tamanhoVencedor} centímetros!`
+        ]
 
-    await sock.sendMessage(from,{
-      text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
-      mentions:[p1,p2]
-    })
+        const resultado = finais[Math.floor(Math.random()*finais.length)]
 
-    return
-  }
+        await sock.sendMessage(from,{
+          text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
+          mentions:[p1,p2]
+        })
 
-  const resultados = [
-    `@${n1} saiu chorando`,
-    `@${n2} ficou de xereca`,
-    "deu empate, briguem dnv fazendo favor",
-    `@${n1} ganhou`,
-    `@${n2} pediu arrego`
-  ]
+        return
+      }
 
-  const resultado = resultados[Math.floor(Math.random()*resultados.length)]
+      const resultados = [
+        `@${n1} saiu chorando`,
+        `@${n2} ficou de xereca`,
+        "deu empate, briguem dnv fazendo favor",
+        `@${n1} ganhou`,
+        `@${n2} pediu arrego`
+      ]
 
-  await sock.sendMessage(from,{
-    text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
-    mentions:[p1,p2]
+      const resultado = resultados[Math.floor(Math.random()*resultados.length)]
+
+      await sock.sendMessage(from,{
+        text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
+        mentions:[p1,p2]
+      })
+    }
+
   })
 }
 
