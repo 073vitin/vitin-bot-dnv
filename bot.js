@@ -59,10 +59,7 @@ app.get("/", (req,res)=>{
   if(!qrImage){
     return res.send("<h2>Bot conectado</h2>")
   }
-  res.send(`
-<h2>Escaneie o QR Code</h2>
-<img src="${qrImage}">
-`)
+  res.send(`<h2>Escaneie o QR Code</h2><img src="${qrImage}">`)
 })
 
 const PORT = process.env.PORT || 3000
@@ -176,7 +173,6 @@ async function startBot(){
 
 ╭━━━〔 🎨 FIGURINHAS 〕━━━╮
 │ ${prefix}s / ${prefix}fig / ${prefix}sticker / ${prefix}f
-│ Envie a mídia com o comando
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 🎮 DIVERSÃO 〕━━━╮
@@ -185,72 +181,73 @@ async function startBot(){
 │ ${prefix}gay @user
 │ ${prefix}gado @user
 │ ${prefix}ship @a @b
-╰━━━━━━━━━━━━━━━━━━━━╯
-
-╭━━━〔 👮 ADMIN 〕━━━╮
-│ ${prefix}ban @usuario
-│ ${prefix}mute @usuario
-│ ${prefix}unmute @usuario
-╰━━━━━━━━━━━━━━━━━━━━╯
-
-╭━━━〔 👑 DONO 〕━━━╮
-│ ${prefix}dono
+│ ${prefix}treta
 ╰━━━━━━━━━━━━━━━━━━━━╯
 `
       })
     }
 
     // =========================
-    // COMANDOS
+    // FIGURINHA
     // =========================
+    if(
+      (cmd === prefix+"s" ||
+       cmd === prefix+"fig" ||
+       cmd === prefix+"sticker" ||
+       cmd === prefix+"f")
+    ){
+      if(!media){
+        return sock.sendMessage(from,{ text:"Envie ou responda uma mídia!" })
+      }
 
-    if(cmd === prefix+"roleta" && isGroup){
-      const metadata = await sock.groupMetadata(from)
-      const participantes = metadata.participants.map(p => p.id)
-      const alvo = participantes[Math.floor(Math.random()*participantes.length)]
-      const numero = alvo.split("@")[0]
+      try{
+        const buffer = await downloadMediaMessage(msg, "buffer", {}, { logger })
 
-      const frases = [
-        `@${numero} foi agraciado a rebolar lentinho pra todos do grupo!`,
-        `@${numero} vai ter que pagar babão pro bonde`,
-        `@${numero} teve os dados puxados e tivemos uma revelação triste, é adotado...`,
-        `@${numero} por que no seu navegador tem pornô de femboy furry?`,
-        `@${numero} gabaritou a tabela de DST! Parabéns pela conquista.`
-      ]
+        let sticker
 
-      const frase = frases[Math.floor(Math.random()*frases.length)]
-      await sock.sendMessage(from,{ text:frase, mentions:[alvo] })
+        if(msg.message?.imageMessage || quoted?.imageMessage){
+          sticker = await sharp(buffer).resize(512,512).webp().toBuffer()
+        }
+        else if(msg.message?.videoMessage || quoted?.videoMessage){
+          sticker = await videoToSticker(buffer)
+        }
+
+        await sock.sendMessage(from,{ sticker })
+
+      }catch(err){
+        console.error(err)
+        await sock.sendMessage(from,{ text:"Erro ao criar figurinha!" })
+      }
     }
 
+    // =========================
+    // BOMBARDIO
+    // =========================
     if(cmd.startsWith(prefix+"bombardeio") && mentioned[0] && isGroup){
       const alvo = mentioned[0]
       const numero = alvo.split("@")[0]
-
       const ddd = numero.substring(0,2)
       const estado = dddMap[ddd] || "local desconhecido"
 
-      await sock.sendMessage(from,{
-        text:`📡 Localizando alvo...`,
-        mentions:[alvo]
-      })
+      await sock.sendMessage(from,{ text:"📡 Localizando alvo...", mentions:[alvo] })
 
-      setTimeout(async () => {
+      setTimeout(async ()=>{
         await sock.sendMessage(from,{
           text:`🎯 Alvo identificado!\n💣 O ataque em ${estado} irá acontecer em breve.`,
           mentions:[alvo]
         })
-      }, 2000)
+      },2000)
     }
 
+    // =========================
+    // GAY / GADO / SHIP
+    // =========================
     if(cmd.startsWith(prefix+"gay") && mentioned[0]){
       const alvo = mentioned[0]
       const numero = alvo.split("@")[0]
       const p = Math.floor(Math.random()*101)
 
-      await sock.sendMessage(from,{
-        text:`@${numero} é ${p}% gay 🌈`,
-        mentions:[alvo]
-      })
+      await sock.sendMessage(from,{ text:`@${numero} é ${p}% gay 🌈`, mentions:[alvo] })
     }
 
     if(cmd.startsWith(prefix+"gado") && mentioned[0]){
@@ -258,16 +255,12 @@ async function startBot(){
       const numero = alvo.split("@")[0]
       const p = Math.floor(Math.random()*101)
 
-      await sock.sendMessage(from,{
-        text:`@${numero} é ${p}% gado 🐂`,
-        mentions:[alvo]
-      })
+      await sock.sendMessage(from,{ text:`@${numero} é ${p}% gado 🐂`, mentions:[alvo] })
     }
 
     if(cmd.startsWith(prefix+"ship") && mentioned.length >= 2){
       const p1 = mentioned[0]
       const p2 = mentioned[1]
-
       const n1 = p1.split("@")[0]
       const n2 = p2.split("@")[0]
       const chance = Math.floor(Math.random()*101)
@@ -300,50 +293,26 @@ async function startBot(){
         "discutiram por causa de mulher",
         `treta começou pois @${n1} tentou ver a pasta trancada de @${n2}`,
         "um chamou o outro de feio kkkkkkkkkkkk",
-        "disputa de ego gigantesca, sensação de aura absurda",
-        "por causa de figurinha kkkkk",
-        "um deve dinheiro pro outro(só tem caloteiro aqui)",
+        "disputa de ego gigantesca",
+        "por causa de figurinha",
+        "um deve dinheiro pro outro",
         "brigaram pra ver quem tem o maior pinto"
       ]
 
       const motivo = motivos[Math.floor(Math.random()*motivos.length)]
 
-      let resultado = ""
-
-      if(motivo === "brigaram pra ver quem tem o maior pinto"){
-        const vencedor = Math.random() < 0.5 ? p1 : p2
-        const perdedor = vencedor === p1 ? p2 : p1
-
-        const nv = vencedor.split("@")[0]
-        const np = perdedor.split("@")[0]
-
-        const finais = [
-          `@${np} tem o menor micro pênis já registrado da história!`,
-          `@${nv} ganhou com seus incríveis 5 centímetros!`
-        ]
-
-        resultado = finais[Math.floor(Math.random()*finais.length)]
-
-        await sock.sendMessage(from,{
-          text:`TRETA INICIADA \n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
-          mentions:[p1,p2]
-        })
-
-        return
-      }
-
       const resultados = [
-        `@${n1} saiu chorando feito uma criança`,
-        `@${n2} foi humilhado kkkkkkkkkk`,
-        "deu empate, briguem novamente por favor.",
-        `@${n1} ganhou a briga, parabéns!`,
-        `@${n2} pediu arrego kkkkkkkkkkkkkk`
+        `@${n1} saiu chorando`,
+        `@${n2} foi humilhado`,
+        "deu empate",
+        `@${n1} ganhou`,
+        `@${n2} pediu arrego`
       ]
 
-      resultado = resultados[Math.floor(Math.random()*resultados.length)]
+      const resultado = resultados[Math.floor(Math.random()*resultados.length)]
 
       await sock.sendMessage(from,{
-        text:`⚔️ TRETA INICIADA ⚔️\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
+        text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
         mentions:[p1,p2]
       })
     }
