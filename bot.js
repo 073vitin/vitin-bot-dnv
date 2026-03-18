@@ -23,7 +23,7 @@ let mutedUsers = {}
 let mutedWarned = {}
 
 // =========================
-// DDD REGIÃO BRASIL
+// DDD REGIÕES
 // =========================
 const dddMap = {
 "11":"Sudeste","12":"Sudeste","13":"Sudeste","14":"Sudeste","15":"Sudeste","16":"Sudeste","17":"Sudeste","18":"Sudeste","19":"Sudeste",
@@ -183,16 +183,6 @@ async function startBot(){
 │ ${prefix}ship @a @b
 │ ${prefix}treta
 ╰━━━━━━━━━━━━━━━━━━━━╯
-
-╭━━━〔 👮 ADMIN 〕━━━╮
-│ ${prefix}ban @usuario
-│ ${prefix}mute @usuario
-│ ${prefix}unmute @usuario
-╰━━━━━━━━━━━━━━━━━━━━╯
-
-╭━━━〔 👑 DONO 〕━━━╮
-│ ${prefix}dono
-╰━━━━━━━━━━━━━━━━━━━━╯
 `
       })
     }
@@ -206,19 +196,22 @@ async function startBot(){
        cmd === prefix+"sticker" ||
        cmd === prefix+"f")
     ){
-      if(!media){
+      if(!media && !quoted){
         return sock.sendMessage(from,{ text:"Envie ou responda uma mídia!" })
       }
 
       try{
-        const buffer = await downloadMediaMessage(msg, "buffer", {}, { logger })
+        let buffer
+        if(media){
+          buffer = await downloadMediaMessage(msg, "buffer", {}, { logger })
+        } else if(quoted){
+          buffer = await downloadMediaMessage(quoted, "buffer", {}, { logger })
+        }
 
         let sticker
-
-        if(msg.message?.imageMessage || quoted?.imageMessage){
+        if((msg.message?.imageMessage || quoted?.imageMessage)){
           sticker = await sharp(buffer).resize(512,512).webp().toBuffer()
-        }
-        else if(msg.message?.videoMessage || quoted?.videoMessage){
+        } else if(msg.message?.videoMessage || quoted?.videoMessage){
           sticker = await videoToSticker(buffer)
         }
 
@@ -228,60 +221,6 @@ async function startBot(){
         console.error(err)
         await sock.sendMessage(from,{ text:"Erro ao criar figurinha!" })
       }
-    }
-
-    // =========================
-    // BOMBARDEIO 
-    // =========================
-    if(cmd.startsWith(prefix+"bombardeio") && mentioned && isGroup){
-      const alvo = mentioned[0]
-      const numero = alvo.split("@")[0]
-
-      const regioes = Object.values(dddMap)
-      const regiao = regioes[Math.floor(Math.random()*regioes.length)]
-
-      const ip = `${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}`
-      const provedores = ["Vivo","Tim","Claro","Oi","Nextel","Brisanet","GVT","Sky"]
-      const provedore = provedores[Math.floor(Math.random()*provedores.length)]
-
-      const dispositivos = ["Smartphone","Notebook","PC Desktop","Tablet","Smart TV"]
-      const dispositivo = dispositivos[Math.floor(Math.random()*dispositivos.length)]
-
-      const vulnerabilidades = ["porta aberta","falha de login","vazamento de dados","vírus detectado","root disponível"]
-      const vulnerabilidade = vulnerabilidades[Math.floor(Math.random()*vulnerabilidades.length)]
-
-      const crimes = [
-        "Roubo","Furto","Homicídio","Estelionato","Tráfico de drogas","Ameaça","Assalto","Fraude","Vandalismo","Corrupção",
-        "Contrabando","Furto de veículo","Invasão de propriedade","Sequestro","Lavagem de dinheiro","Extorsão","Injúria","Difamação","Perturbação da paz","Tráfico de armas"
-      ]
-
-      const crime = crimes[Math.floor(Math.random()*crimes.length)]
-
-      await sock.sendMessage(from,{
-        text:`📡 Localizando alvo...`,
-        mentions:[alvo]
-      })
-
-      setTimeout(async ()=>{
-        await sock.sendMessage(from,{
-          text:`💻 IP rastreado: ${ip}\n📡 Provedor: ${provedore}\n🖥 Dispositivo: ${dispositivo}\n🌎 Região aproximada: ${regiao}\n⚠️ Vulnerabilidade encontrada: ${vulnerabilidade}`,
-          mentions:[alvo]
-        })
-      },1500)
-
-      setTimeout(async ()=>{
-        await sock.sendMessage(from,{
-          text:`🎯 Analisando ficha criminal...\n📝 Crime detectado: ${crime}`,
-          mentions:[alvo]
-        })
-      },3000)
-
-      setTimeout(async ()=>{
-        await sock.sendMessage(from,{
-          text:`💣 Iniciando ataque! O ataque será realizado em breve`,
-          mentions:[alvo]
-        })
-      },4500)
     }
 
     // =========================
@@ -303,6 +242,46 @@ async function startBot(){
 
       const frase = frases[Math.floor(Math.random()*frases.length)]
       await sock.sendMessage(from,{ text:frase, mentions:[alvo] })
+    }
+
+    // =========================
+    // BOMBARDEIO - modo hacker supremo
+    // =========================
+    if(cmd.startsWith(prefix+"bombardeio") && mentioned.length>0 && isGroup){
+      const alvo = mentioned[0]
+
+      // IP fake
+      const ip = `${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}`
+
+      // Provedor fake
+      const provedores = ["Claro","Vivo","Tim","Oi","Copel","NET"]
+      const provedor = provedores[Math.floor(Math.random()*provedores.length)]
+
+      // Dispositivo fake
+      const dispositivos = ["Android","iOS","Windows PC","Linux PC"]
+      const dispositivo = dispositivos[Math.floor(Math.random()*dispositivos.length)]
+
+      // Região fake a partir do DDD
+      const numero = alvo.split("@")[0]
+      const ddd = numero.substring(0,2)
+      const regiao = dddMap[ddd] || "desconhecida"
+
+      // Crime aleatório
+      const crimes = ["furto","roubo","estelionato","tráfico","lesão corporal","homicídio","contrabando","vandalismo","pirataria","crime cibernético","fraude","tráfico de animais","lavagem de dinheiro","crime ambiental","corrupção","sequestro","ameaça","falsificação","invasão de propriedade","crime eleitoral"]
+      const crime = crimes[Math.floor(Math.random()*crimes.length)]
+
+      await sock.sendMessage(from,{ text:`📡 Analisando ficha criminal... (1 crime encontrado: ${crime})`, mentions:[alvo] })
+
+      setTimeout(async ()=>{
+        await sock.sendMessage(from,{ text:`💻 IP rastreado: ${ip}`, mentions:[alvo] })
+      },1500)
+
+      setTimeout(async ()=>{
+        await sock.sendMessage(from,{
+          text:`🎯 Alvo identificado!\n📍 Região: ${regiao}\n💻 Provedor: ${provedor}\n📱 Dispositivo: ${dispositivo}\n⚠️ Vulnerabilidade encontrada!\n💣 Iniciando ataque em breve...`,
+          mentions:[alvo]
+        })
+      },3000)
     }
 
     // =========================
@@ -367,7 +346,7 @@ async function startBot(){
 
       const motivo = motivos[Math.floor(Math.random()*motivos.length)]
 
-      // evento especial do pinto
+      // EVENTO ESPECIAL DO PINTO
       if(motivo === "brigaram pra ver quem tem o maior pinto"){
         const vencedor = Math.random() < 0.5 ? p1 : p2
         const perdedor = vencedor === p1 ? p2 : p1
@@ -375,8 +354,8 @@ async function startBot(){
         const nv = vencedor.split("@")[0]
         const np = perdedor.split("@")[0]
 
-        const tamanhoVencedor = (Math.random()*20+5).toFixed(1) // 5 a 25
-        const tamanhoPerdedor = (Math.random()*23-20).toFixed(1) // -20 a 3
+        const tamanhoVencedor = (Math.random() * 20 + 5).toFixed(1) // 5 a 25
+        const tamanhoPerdedor = (Math.random() * 23 - 20).toFixed(1) // -20 a 3 💀
 
         const finais = [
           `@${np} tem o menor micro pênis já registrado da história! (${tamanhoPerdedor}cm)`,
@@ -407,6 +386,61 @@ async function startBot(){
         text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
         mentions:[p1,p2]
       })
+    }
+
+    // =========================
+    // FUNÇÕES ADMIN
+    // =========================
+    const isAdmin = async(jid) => {
+      if(!isGroup) return false
+      const meta = await sock.groupMetadata(from)
+      const admins = meta.participants.filter(p => p.admin).map(p => p.id)
+      return admins.includes(jid)
+    }
+
+    // MUTE
+    if(cmd.startsWith(prefix+"mute") && isGroup && mentioned.length>0){
+      if(!(await isAdmin(sender))){
+        return sock.sendMessage(from,{ text:"Apenas admins podem mutar!" })
+      }
+
+      const alvo = mentioned[0]
+      mutedUsers[alvo] = true
+      await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi mutado! As mensagens dele serão apagadas.`, mentions:[alvo]})
+    }
+
+    // UNMUTE
+    if(cmd.startsWith(prefix+"unmute") && isGroup && mentioned.length>0){
+      if(!(await isAdmin(sender))){
+        return sock.sendMessage(from,{ text:"Apenas admins podem desmutar!" })
+      }
+
+      const alvo = mentioned[0]
+      delete mutedUsers[alvo]
+      await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi desmutado! Agora pode enviar mensagens normalmente.`, mentions:[alvo]})
+    }
+
+    // BAN (remove do grupo)
+    if(cmd.startsWith(prefix+"ban") && isGroup && mentioned.length>0){
+      if(!(await isAdmin(sender))){
+        return sock.sendMessage(from,{ text:"Apenas admins podem banir!" })
+      }
+
+      const alvo = mentioned[0]
+      try{
+        await sock.groupParticipantsUpdate(from, [alvo], "remove")
+        await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi banido do grupo!`, mentions:[alvo]})
+      }catch(err){
+        console.error(err)
+        await sock.sendMessage(from,{ text:"Não foi possível banir o usuário!"})
+      }
+    }
+
+    // APAGAR mensagens de usuários mutados
+    if(mutedUsers[sender]){
+      try{
+        await sock.sendMessage(from, { delete: { id: msg.key.id, remoteJid: from, fromMe: false } })
+      }catch(e){ /* ignora se não der */ }
     }
 
   })
