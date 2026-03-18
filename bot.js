@@ -49,8 +49,8 @@ const dddMap = {
 }
 
 app.get("/", (req,res)=>{
-  if(!qrImage) return res.send("<h2>Bot conectado</h2>")
-  res.send(`<h2>Escaneie o QR Code</h2><img src="${qrImage}">`)
+  if(qrImage) return res.send(`<h2>Escaneie o QR Code</h2><img src="${qrImage}">`)
+  res.send("<h2>Bot conectado</h2>")
 })
 
 const PORT = process.env.PORT || 3000
@@ -101,8 +101,6 @@ async function startBot(){
     printQRInTerminal:false,
     browser:["VitinBot","Chrome","1.0"]
   })
-
-  const botJid = sock.user.id + "@s.whatsapp.net"
 
   sock.ev.on("creds.update", saveCreds)
 
@@ -203,7 +201,6 @@ async function startBot(){
 
         let sticker;
         if(msg.message?.imageMessage || quoted?.imageMessage){
-          // FORÇA quadrado 512x512, DEFORMAÇÃO TOTAL
           sticker = await sharp(buffer)
             .resize({ width: 512, height: 512, fit: "fill" })
             .webp({ quality: 100 })
@@ -225,7 +222,7 @@ async function startBot(){
     // =========================
     if(cmd === prefix+"roleta" && isGroup){
       const metadata = await sock.groupMetadata(from)
-      const participantes = metadata.participants.map(p => p.id)
+      const participantes = (metadata?.participants || []).map(p => p.id)
       const alvo = participantes[Math.floor(Math.random()*participantes.length)]
       const numero = alvo.split("@")[0]
 
@@ -261,23 +258,19 @@ async function startBot(){
     if(cmd.startsWith(prefix+"bombardeio") && mentioned.length>0 && isGroup){
       const alvo = mentioned[0]
 
-      // IP fake
       const ip = `${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}`
 
-      // Provedor fake
       const provedores = ["Claro","Vivo","Tim","Oi","Copel","NET"]
       const provedor = provedores[Math.floor(Math.random()*provedores.length)]
 
-      // Dispositivo fake
       const dispositivos = ["Android","iOS","Windows PC","Linux PC"]
       const dispositivo = dispositivos[Math.floor(Math.random()*dispositivos.length)]
 
       // Região fake a partir do DDD
       const numero = alvo.split("@")[0]
       const ddd = numero.substring(0,2)
-      const regiao = dddMap[ddd] || "desconhecida" 
+      const regiao = dddMap[ddd] || "desconhecida"
 
-      // Crime aleatório
       const crimes = ["furto","roubo","estelionato","tráfico","lesão corporal","homicídio","contrabando","vandalismo","pirataria","crime cibernético","fraude","tráfico de animais","lavagem de dinheiro","crime ambiental","corrupção","sequestro","ameaça","falsificação","invasão de propriedade","crime eleitoral"]
       const crime = crimes[Math.floor(Math.random()*crimes.length)]
 
@@ -329,7 +322,7 @@ async function startBot(){
     // =========================
     if(cmd === prefix+"treta" && isGroup){
       const metadata = await sock.groupMetadata(from)
-      const participantes = metadata.participants.map(p => p.id)
+      const participantes = (metadata?.participants || []).map(p => p.id)
       const p1 = participantes[Math.floor(Math.random()*participantes.length)]
       let p2 = participantes[Math.floor(Math.random()*participantes.length)]
       while(p1 === p2) p2 = participantes[Math.floor(Math.random()*participantes.length)]
@@ -387,53 +380,53 @@ async function startBot(){
     // FUNÇÕES ADMIN
     // =========================
     const isAdmin = async (jid) => {
-      if (!isGroup) return false
+      if(!isGroup) return false
       const meta = await sock.groupMetadata(from)
-      const admins = meta.participants.filter(p => p.admin).map(p => p.id)
+      const admins = (meta?.participants || []).filter(p => p.admin).map(p => p.id)
       return admins.includes(jid)
     }
 
-// =========================
+    // =========================
     // MUTE / UNMUTE / BAN
-// =========================
-if(cmd.startsWith(prefix + "mute") && isGroup){
-  const alvo = mentioned[0]
-  if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para mutar!" })
-  if(alvo === botJid) return sock.sendMessage(from,{ text:"Não posso me mutar!" }) 
-  if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem mutar!" })
-  mutedUsers[alvo] = true
-  await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi mutado! Finalmente vai calar a boca.`, mentions:[alvo] })
-}
+    // =========================
+    if(cmd.startsWith(prefix + "mute") && isGroup){
+      const alvo = mentioned[0]
+      if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para mutar!" })
+      if(alvo === sock.user.id + "@s.whatsapp.net") return sock.sendMessage(from,{ text:"Não posso me mutar!" }) 
+      if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem mutar!" })
+      mutedUsers[alvo] = true
+      await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi mutado! Finalmente vai calar a boca.`, mentions:[alvo] })
+    }
 
-if(cmd.startsWith(prefix + "unmute") && isGroup){
-  const alvo = mentioned[0]
-  if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para desmutar!" })
-  if(alvo === botJid) return sock.sendMessage(from,{ text:"Não posso me desmutar!" }) 
-  if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem desmutar!" })
-  delete mutedUsers[alvo]
-  await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi desmutado! Infelizmente pode falar de novo.`, mentions:[alvo] })
-}
+    if(cmd.startsWith(prefix + "unmute") && isGroup){
+      const alvo = mentioned[0]
+      if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para desmutar!" })
+      if(alvo === sock.user.id + "@s.whatsapp.net") return sock.sendMessage(from,{ text:"Não posso me desmutar!" }) 
+      if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem desmutar!" })
+      delete mutedUsers[alvo]
+      await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi desmutado! Infelizmente pode falar de novo.`, mentions:[alvo] })
+    }
 
-if(cmd.startsWith(prefix + "ban") && isGroup){
-  const alvo = mentioned[0]
-  if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para banir!" })
-  if(alvo === botJid) return sock.sendMessage(from,{ text:"Não posso me banir!" }) 
-  if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem banir!" })
-  await sock.groupParticipantsUpdate(from,[alvo],"remove")
-  await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi banido do grupo.`, mentions:[alvo] })
-}
+    if(cmd.startsWith(prefix + "ban") && isGroup){
+      const alvo = mentioned[0]
+      if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para banir!" })
+      if(alvo === sock.user.id + "@s.whatsapp.net") return sock.sendMessage(from,{ text:"Não posso me banir!" }) 
+      if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem banir!" })
+      await sock.groupParticipantsUpdate(from,[alvo],"remove")
+      await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi banido do grupo.`, mentions:[alvo] })
+    }
 
-// =========================
-// BLOQUEIO DE MENSAGENS DE USUÁRIOS MUTADOS
-// =========================
-if(mutedUsers[sender] && isGroup && sender !== botJid){
-  try{
-    await sock.sendMessage(from,{ delete: msg.key })
-  }catch(e){
-    console.error("Erro ao apagar mensagem de usuário mutado", e)
-  }
-  return
-}
+    // =========================
+    // BLOQUEIO DE MENSAGENS DE USUÁRIOS MUTADOS
+    // =========================
+    if(mutedUsers[sender] && isGroup && sender !== sock.user.id){
+      try{
+        await sock.sendMessage(from,{ delete: msg.key })
+      }catch(e){
+        console.error("Erro ao apagar mensagem de usuário mutado", e)
+      }
+      return
+    }
 
   })
 } 
