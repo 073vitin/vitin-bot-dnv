@@ -194,40 +194,43 @@ if(cmd === prefix+"menu"){
 }
 
     // =========================
-    // FIGURINHA
-    // =========================
-    if(
-      (cmd === prefix+"s" ||
-       cmd === prefix+"fig" ||
-       cmd === prefix+"sticker" ||
-       cmd === prefix+"f")
-    ){
-      if(!media && !quoted){
-        return sock.sendMessage(from,{ text:"Envie ou responda uma mídia!" })
-      }
+// FIGURINHA
+// =========================
+if(
+  cmd === prefix+"s" ||
+  cmd === prefix+"fig" ||
+  cmd === prefix+"sticker" ||
+  cmd === prefix+"f"
+){
+  // Verifica se tem mídia na mensagem ou na mensagem respondida
+  if(!media){
+    return sock.sendMessage(from,{ text:"Envie ou responda uma mídia!" })
+  }
 
-      try{
-        let buffer
-        if(media){
-          buffer = await downloadMediaMessage(msg, "buffer", {}, { logger })
-        } else if(quoted){
-          buffer = await downloadMediaMessage(quoted, "buffer", {}, { logger })
-        }
-
-        let sticker
-        if((msg.message?.imageMessage || quoted?.imageMessage)){
-          sticker = await sharp(buffer).resize(512,512).webp().toBuffer()
-        } else if(msg.message?.videoMessage || quoted?.videoMessage){
-          sticker = await videoToSticker(buffer)
-        }
-
-        await sock.sendMessage(from,{ sticker })
-
-      }catch(err){
-        console.error(err)
-        await sock.sendMessage(from,{ text:"Erro ao criar figurinha!" })
-      }
+  try{
+    // Pega o buffer da mídia (imagem ou vídeo)
+    let buffer;
+    if(msg.message?.imageMessage || msg.message?.videoMessage){
+      buffer = await downloadMediaMessage(msg, "buffer", {}, { logger })
+    } else if(quoted?.imageMessage || quoted?.videoMessage){
+      buffer = await downloadMediaMessage({ message: quoted }, "buffer", {}, { logger })
     }
+
+    let sticker;
+
+    if(msg.message?.imageMessage || quoted?.imageMessage){
+      sticker = await sharp(buffer).resize(512,512).webp().toBuffer()
+    } else if(msg.message?.videoMessage || quoted?.videoMessage){
+      sticker = await videoToSticker(buffer)
+    }
+
+    await sock.sendMessage(from,{ sticker })
+
+  }catch(err){
+    console.error(err)
+    await sock.sendMessage(from,{ text:"Erro ao criar figurinha!" })
+  }
+}
 
     // =========================
     // ROLETA
