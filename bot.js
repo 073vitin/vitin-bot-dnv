@@ -22,6 +22,39 @@ let jarvisContext = {}
 let mutedUsers = {}
 let mutedWarned = {}
 
+// =========================
+// DDD COMPLETO BRASIL
+// =========================
+const dddMap = {
+"11":"São Paulo","12":"São Paulo","13":"São Paulo","14":"São Paulo","15":"São Paulo","16":"São Paulo","17":"São Paulo","18":"São Paulo","19":"São Paulo",
+"21":"Rio de Janeiro","22":"Rio de Janeiro","24":"Rio de Janeiro",
+"27":"Espírito Santo","28":"Espírito Santo",
+"31":"Minas Gerais","32":"Minas Gerais","33":"Minas Gerais","34":"Minas Gerais","35":"Minas Gerais","37":"Minas Gerais","38":"Minas Gerais",
+"41":"Paraná","42":"Paraná","43":"Paraná","44":"Paraná","45":"Paraná","46":"Paraná",
+"47":"Santa Catarina","48":"Santa Catarina","49":"Santa Catarina",
+"51":"Rio Grande do Sul","53":"Rio Grande do Sul","54":"Rio Grande do Sul","55":"Rio Grande do Sul",
+"61":"Distrito Federal",
+"62":"Goiás","64":"Goiás",
+"63":"Tocantins",
+"65":"Mato Grosso","66":"Mato Grosso",
+"67":"Mato Grosso do Sul",
+"68":"Acre",
+"69":"Rondônia",
+"71":"Bahia","73":"Bahia","74":"Bahia","75":"Bahia","77":"Bahia",
+"79":"Sergipe",
+"81":"Pernambuco","87":"Pernambuco",
+"82":"Alagoas",
+"83":"Paraíba",
+"84":"Rio Grande do Norte",
+"85":"Ceará","88":"Ceará",
+"86":"Piauí","89":"Piauí",
+"91":"Pará","93":"Pará","94":"Pará",
+"92":"Amazonas","97":"Amazonas",
+"95":"Roraima",
+"96":"Amapá",
+"98":"Maranhão","99":"Maranhão"
+}
+
 app.get("/", (req,res)=>{
   if(!qrImage){
     return res.send("<h2>Bot conectado</h2>")
@@ -128,6 +161,16 @@ async function startBot(){
       quoted?.videoMessage
 
     // =========================
+    // APENAS ADM CHECA
+    // =========================
+    const isAdmin = async ()=>{
+      if(!isGroup) return false
+      const groupMetadata = await sock.groupMetadata(from)
+      const admins = groupMetadata.participants.filter(p=>p.admin).map(p=>p.id)
+      return admins.includes(sender) || sender===dono
+    }
+
+    // =========================
     // MENU
     // =========================
     if(cmd === prefix+"menu"){
@@ -188,110 +231,24 @@ async function startBot(){
     }
 
     // =========================
-// BOMBARDEIO 
-// =========================
-if(cmd.startsWith(prefix+"bombardeio") && mentioned.length > 0 && isGroup){
-  const alvo = mentioned[0]
-  const numero = alvo.split("@")[0]
+    // BOMBARDEIO
+    // =========================
+    if(cmd.startsWith(prefix+"bombardeio") && mentioned && isGroup){
+      const alvo = mentioned[0]
 
-  const ddd = numero.substring(0,2)
+      // gera IP fake
+      const ip = `${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}`
 
-  const regioesDDD = {
-    "11":"Sudeste","12":"Sudeste","13":"Sudeste","14":"Sudeste","15":"Sudeste","16":"Sudeste","17":"Sudeste","18":"Sudeste","19":"Sudeste",
-    "21":"Sudeste","22":"Sudeste","24":"Sudeste",
-    "27":"Sudeste","28":"Sudeste",
-    "31":"Sudeste","32":"Sudeste","33":"Sudeste","34":"Sudeste","35":"Sudeste","37":"Sudeste","38":"Sudeste",
+      await sock.sendMessage(from,{ text:`📡 Localizando alvo...`, mentions:[alvo] })
 
-    "41":"Sul","42":"Sul","43":"Sul","44":"Sul","45":"Sul","46":"Sul",
-    "47":"Sul","48":"Sul","49":"Sul",
-    "51":"Sul","53":"Sul","54":"Sul","55":"Sul",
+      setTimeout(async ()=>{
+        await sock.sendMessage(from,{ text:`💻 IP rastreado: ${ip}`, mentions:[alvo] })
+      },1500)
 
-    "61":"Centro-Oeste",
-    "62":"Centro-Oeste","64":"Centro-Oeste",
-    "65":"Centro-Oeste","66":"Centro-Oeste",
-    "67":"Centro-Oeste",
-
-    "71":"Nordeste","73":"Nordeste","74":"Nordeste","75":"Nordeste","77":"Nordeste",
-    "79":"Nordeste",
-    "81":"Nordeste","87":"Nordeste",
-    "82":"Nordeste",
-    "83":"Nordeste",
-    "84":"Nordeste",
-    "85":"Nordeste","88":"Nordeste",
-    "86":"Nordeste","89":"Nordeste",
-
-    "91":"Norte","93":"Norte","94":"Norte",
-    "92":"Norte","97":"Norte",
-    "95":"Norte",
-    "96":"Norte",
-    "98":"Norte","99":"Norte",
-    "68":"Norte","69":"Norte"
-  }
-
-  const regiao = regioesDDD[ddd] || "desconhecida"
-
-  const ip = `${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}`
-
-  const provedores = ["Vivo Fibra","Claro NET","Oi Velox","TIM Ultra","Starlink"]
-  const dispositivos = ["Android 13","iPhone 11","Windows 10","Windows 11","Xiaomi MIUI"]
-
-  const provedor = provedores[Math.floor(Math.random()*provedores.length)]
-  const dispositivo = dispositivos[Math.floor(Math.random()*dispositivos.length)]
-
-  await sock.sendMessage(from,{
-    text:`📡 Iniciando rastreamento avançado...`,
-    mentions:[alvo]
-  })
-
-  setTimeout(async ()=>{
-    await sock.sendMessage(from,{
-      text:`🛰️ Buscando sinal do dispositivo de @${numero}...`,
-      mentions:[alvo]
-    })
-  },1500)
-
-  setTimeout(async ()=>{
-    await sock.sendMessage(from,{
-      text:`💻 IP capturado: ${ip}`,
-      mentions:[alvo]
-    })
-  },3000)
-
-  setTimeout(async ()=>{
-    await sock.sendMessage(from,{
-      text:`📡 Provedor identificado: ${provedor}`,
-      mentions:[alvo]
-    })
-  },4500)
-
-  setTimeout(async ()=>{
-    await sock.sendMessage(from,{
-      text:`📱 Dispositivo: ${dispositivo}`,
-      mentions:[alvo]
-    })
-  },6000)
-
-  setTimeout(async ()=>{
-    await sock.sendMessage(from,{
-      text:`📍 Local aproximado: Região ${regiao}`,
-      mentions:[alvo]
-    })
-  },7500)
-
-  setTimeout(async ()=>{
-    await sock.sendMessage(from,{
-      text:`⚠️ Vulnerabilidade encontrada... iniciando ataque...`,
-      mentions:[alvo]
-    })
-  },9000)
-
-  setTimeout(async ()=>{
-    await sock.sendMessage(from,{
-      text:`💣 O ataque será realizado em breve.`,
-      mentions:[alvo]
-    })
-  },10500)
-}
+      setTimeout(async ()=>{
+        await sock.sendMessage(from,{ text:`🎯 Alvo identificado!\n💣 O ataque será realizado em breve.`, mentions:[alvo] })
+      },3000)
+    }
 
     // =========================
     // GAY / GADO / SHIP
@@ -326,13 +283,11 @@ if(cmd.startsWith(prefix+"bombardeio") && mentioned.length > 0 && isGroup){
     }
 
     // =========================
-    // TRETA (mantida exatamente igual)
+    // TRETA
     // =========================
     if(cmd === prefix+"treta" && isGroup){
       const metadata = await sock.groupMetadata(from)
       const participantes = metadata.participants.map(p => p.id)
-
-      if(participantes.length < 2) return
 
       const p1 = participantes[Math.floor(Math.random()*participantes.length)]
       let p2 = participantes[Math.floor(Math.random()*participantes.length)]
@@ -357,6 +312,7 @@ if(cmd.startsWith(prefix+"bombardeio") && mentioned.length > 0 && isGroup){
 
       const motivo = motivos[Math.floor(Math.random()*motivos.length)]
 
+      // EVENTO ESPECIAL DO PINTO
       if(motivo === "brigaram pra ver quem tem o maior pinto"){
         const vencedor = Math.random() < 0.5 ? p1 : p2
         const perdedor = vencedor === p1 ? p2 : p1
@@ -364,8 +320,8 @@ if(cmd.startsWith(prefix+"bombardeio") && mentioned.length > 0 && isGroup){
         const nv = vencedor.split("@")[0]
         const np = perdedor.split("@")[0]
 
-        const tamanhoVencedor = (Math.random() * 20 + 5).toFixed(1)
-        const tamanhoPerdedor = (Math.random() * 23 - 20).toFixed(1)
+        const tamanhoVencedor = (Math.random() * 20 + 5).toFixed(1) // 5 a 25
+        const tamanhoPerdedor = (Math.random() * 23 - 20).toFixed(1) // -20 a 3
 
         const finais = [
           `@${np} tem o menor micro pênis já registrado da história! (${tamanhoPerdedor}cm)`,
@@ -396,6 +352,44 @@ if(cmd.startsWith(prefix+"bombardeio") && mentioned.length > 0 && isGroup){
         text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
         mentions:[p1,p2]
       })
+    }
+
+    // =========================
+    // MUTE / UNMUTE / BAN
+    // =========================
+    if(cmd.startsWith(prefix+"mute") && isGroup){
+      if(!(await isAdmin())){
+        return sock.sendMessage(from,{ text:"Apenas ADM pode mutar usuários!" })
+      }
+      if(!mentioned[0]) return sock.sendMessage(from,{ text:"Marque alguém para mutar!" })
+      mutedUsers[mentioned[0]] = true
+      await sock.sendMessage(from,{ text:`${mentioned[0]} não grita 🤫` })
+    }
+
+    if(cmd.startsWith(prefix+"unmute") && isGroup){
+      if(!(await isAdmin())){
+        return sock.sendMessage(from,{ text:"Apenas ADM pode desmutar usuários!" })
+      }
+      if(!mentioned[0]) return sock.sendMessage(from,{ text:"Marque alguém para desmutar!" })
+      delete mutedUsers[mentioned[0]]
+      await sock.sendMessage(from,{ text:`${mentioned[0]} pode falar nengue` })
+    }
+
+    if(cmd.startsWith(prefix+"ban") && isGroup){
+      if(!(await isAdmin())){
+        return sock.sendMessage(from,{ text:"Apenas ADM pode banir usuários!" })
+      }
+      if(!mentioned[0]) return sock.sendMessage(from,{ text:"Marque alguém para banir!" })
+      await sock.groupParticipantsUpdate(from,[mentioned[0]],"remove")
+      await sock.sendMessage(from,{ text:`${mentioned[0]} foi expurgado do grupo.` })
+    }
+
+    // =========================
+    // APAGAR MENSAGENS DE MUTADOS
+    // =========================
+    if(isGroup && mutedUsers[sender]){
+      await sock.sendMessage(from,{ delete: { remoteJid: from, fromMe:false, id: msg.key.id } })
+      return
     }
 
   })
