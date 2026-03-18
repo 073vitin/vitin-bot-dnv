@@ -116,6 +116,8 @@ async function startBot(){
     const text =
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text ||
+      msg.message.imageMessage?.caption ||
+      msg.message.videoMessage?.caption ||
       ""
 
     const cmd = text.toLowerCase()
@@ -175,7 +177,33 @@ async function startBot(){
     // MENU
     // =========================
     if(cmd === prefix+"menu"){
-      await sock.sendMessage(from,{ text:"Bot online 🤖" })
+      await sock.sendMessage(from,{
+        text:`
+╭━━━〔 🤖 VITIN BOT 〕━━━╮
+│ 👑 Status: Online
+│ ⚙️ Sistema: Baileys
+╰━━━━━━━━━━━━━━━━━━━━╯
+
+╭━━━〔 🎨 FIGURINHAS 〕━━━╮
+│ ${prefix}s / ${prefix}fig / ${prefix}sticker / ${prefix}f
+│ Envie a mídia com o comando
+│ na legenda (ex: !s)
+│ ou responda a mídia com comando
+│ para criar sua figurinha
+╰━━━━━━━━━━━━━━━━━━━━╯
+
+╭━━━〔 👮 ADMIN 〕━━━╮
+│ ${prefix}ban @usuario
+│ ${prefix}mute @usuario
+│ ${prefix}unmute @usuario
+│ Apenas admins podem usar
+╰━━━━━━━━━━━━━━━━━━━━╯
+
+╭━━━〔 👑 DONO 〕━━━╮
+│ ${prefix}dono
+╰━━━━━━━━━━━━━━━━━━━━╯
+`
+      })
     }
 
     // =========================
