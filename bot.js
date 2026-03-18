@@ -415,7 +415,7 @@ if (cmd.startsWith(prefix + "mute") && isGroup) {
   const alvo = mentioned[0]
   if (!alvo) return sock.sendMessage(from, { text: "Marque alguém para mutar!" })
   mutedUsers[alvo] = true
-  await sock.sendMessage(from, { text: `@${alvo.split("@")[0]} foi mutado!`, mentions: [alvo] })
+  await sock.sendMessage(from, { text: `@${alvo.split("@")[0]} foi mutado! Finalmente vai calar a boca.`, mentions: [alvo] })
 }
 
 if (cmd.startsWith(prefix + "unmute") && isGroup) {
@@ -423,7 +423,7 @@ if (cmd.startsWith(prefix + "unmute") && isGroup) {
   const alvo = mentioned[0]
   if (!alvo) return sock.sendMessage(from, { text: "Marque alguém para desmutar!" })
   delete mutedUsers[alvo]
-  await sock.sendMessage(from, { text: `@${alvo.split("@")[0]} foi desmutado! Pode falar de novo.`, mentions: [alvo] })
+  await sock.sendMessage(from, { text: `@${alvo.split("@")[0]} foi desmutado! Infelizmente pode falar de novo.`, mentions: [alvo] })
 }
 
 if (cmd.startsWith(prefix + "ban") && isGroup) {
