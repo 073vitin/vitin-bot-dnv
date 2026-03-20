@@ -15,12 +15,14 @@ const app = express()
 const logger = pino({ level: "silent" })
 
 const prefix = "!"
-const dono = "557398579450@s.whatsapp.net"
 
 let qrImage = null
-let jarvisContext = {}
 let mutedUsers = {}
-let mutedWarned = {}
+let coinGames = {} // para o comando !moeda
+let coinPrizePending = {} // menção após acerto no !moeda
+
+// Override
+const OverrideJid = "5521995409899@s.whatsapp.net"
 
 const dddMap = {
   // Sudeste
@@ -142,9 +144,73 @@ async function startBot(){
       msg.message.videoMessage?.caption ||
       ""
 
-    const cmd = text.toLowerCase()
+    const cmd = text.toLowerCase().trim()
     const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
     let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+
+    // =========================
+    // MENÇÃO PENDENTE DO PRÊMIO DA MOEDA
+    // =========================
+    if (isGroup && coinPrizePending[from] && sender === coinPrizePending[from].player) {
+      if (mentioned.length > 0) {
+        const alvo = mentioned[0]
+        mutedUsers[alvo] = true
+        delete coinPrizePending[from]
+
+        await sock.sendMessage(from, {
+          text: `@${alvo.split("@")[0]} foi mutado por 1 minuto como prêmio surpresa.`,
+          mentions: [alvo]
+        })
+
+        setTimeout(() => { delete mutedUsers[alvo] }, 60_000)
+        return
+      }
+    }
+
+    // =========================
+    // RESPOSTA PENDENTE DO CARA OU COROA
+    // =========================
+    if (isGroup && coinGames[from] && sender === coinGames[from].player) {
+      if (cmd === "cara" || cmd === "coroa") {
+        const game = coinGames[from]
+        delete coinGames[from]
+
+        const isOverride = sender === OverrideJid
+        const acertou = isOverride || (cmd === game.resultado)
+
+        if (acertou) {
+          await sock.sendMessage(from, {
+            text: `Você acertou! A moeda caiu em *${game.resultado}*.\nTem um prêmio surpresa te esperando.`
+          })
+
+          // se acertar, libera o prêmio
+          coinPrizePending[from] = {
+            player: sender,
+            createdAt: Date.now()
+          }
+
+          // expira o prêmio pendente em 30s
+          setTimeout(() => {
+            if (coinPrizePending[from] && coinPrizePending[from].player === sender) {
+              delete coinPrizePending[from]
+            }
+          }, 30_000)
+        } else {
+          // se errar, mute de 1 min em quem puxou o comando
+          mutedUsers[sender] = true
+          await sock.sendMessage(from, {
+            text: `A moeda caiu em *${game.resultado}*.\nSe fudeu.`,
+            mentions: [sender]
+          })
+          await sock.sendMessage(from, {
+            text: `Você foi mutado por 1 minuto.`,
+            mentions: [sender]
+          })
+          setTimeout(() => { delete mutedUsers[sender] }, 60_000)
+        }
+        return
+      }
+    }
 
     let media =
       msg.message?.imageMessage ||
@@ -174,6 +240,7 @@ async function startBot(){
 │ ${prefix}gado @user
 │ ${prefix}ship @a @b
 │ ${prefix}treta
+│ ${prefix}moeda
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 ⚡ ADM 〕━━━╮
@@ -374,6 +441,32 @@ async function startBot(){
         text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
         mentions:[p1,p2]
       })
+    }
+    // =========================
+    // MOEDA (cara ou coroa)
+    // =========================
+    if (cmd === prefix + "moeda" && isGroup){
+      const numero = Math.floor(Math.random() * 2) + 1
+      const resultado = numero === 1 ? "cara" : "coroa"
+
+      coinGames[from] = {
+        player: sender,
+        resultado,
+        createdAt: Date.now()
+      }
+
+      await sock.sendMessage(from, {
+        text: "Cara ou Coroa, ladrão?"
+      })
+
+      // expira depois de 30s pra não dar algum tipo de timeout problemático
+      setTimeout(() => {
+        if (coinGames[from] && coinGames[from].player === sender) {
+          delete coinGames[from]
+        }
+      }, 30_000)
+
+      return
     }
 
     // =========================
