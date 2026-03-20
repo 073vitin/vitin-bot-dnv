@@ -1,7 +1,14 @@
 process.on("uncaughtException", console.error)
 process.on("unhandledRejection", console.error)
 
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, downloadMediaMessage } = require("@whiskeysockets/baileys")
+const { 
+  default: makeWASocket, 
+  useMultiFileAuthState, 
+  fetchLatestBaileysVersion, 
+  DisconnectReason, 
+  downloadMediaMessage,
+  jidNormalizedUser
+} = require("@whiskeysockets/baileys")
 const express = require("express")
 const pino = require("pino")
 const QRCode = require("qrcode")
@@ -23,7 +30,7 @@ let coinPrizePending = {} // [groupJid]: { [playerJid]: { createdAt } }
 let resenhaAveriguada = {} // [groupJid]: boolean
 
 // Override
-const overrideJid = "5521995409899@s.whatsapp.net"
+const overrideJid = jidNormalizedUser("5521995409899@s.whatsapp.net")
 
 const dddMap = {
   // Sudeste
@@ -135,7 +142,8 @@ async function startBot(){
     if(msg.key.fromMe) return
 
     const from = msg.key.remoteJid
-    const sender = msg.key.participant || msg.key.remoteJid
+    const senderRaw = msg.key.participant || msg.key.remoteJid
+    const sender = jidNormalizedUser(senderRaw)
     const isGroup = from.endsWith("@g.us")
 
     const text =
@@ -145,8 +153,8 @@ async function startBot(){
       msg.message.videoMessage?.caption ||
       ""
 
-    const cmd = text.toLowerCase()
-    const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
+    const cmd = text.toLowerCase().trim()
+    const mentioned = (msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []).map(jidNormalizedUser)
     let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
 
     if (cmd === prefix + "resenha"){
@@ -229,11 +237,13 @@ async function startBot(){
           text: `A moeda caiu em *${game.resultado}*.\nSe fudeu.`,
           mentions: [sender]
         })
-        await sock.sendMessage(from, {
-          text: `Você foi mutado por 1 minuto.`,
-          mentions: [sender]
+        if (resenhaAveriguada){
+          await sock.sendMessage(from, {
+            text: `Você foi mutado por 1 minuto.`,
+            mentions: [sender]
         })
         setTimeout(() => { delete mutedUsers[sender] }, 60_000)
+        }
       }
       return
     }
