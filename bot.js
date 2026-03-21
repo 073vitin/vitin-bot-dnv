@@ -1,7 +1,14 @@
 process.on("uncaughtException", console.error)
 process.on("unhandledRejection", console.error)
 
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, downloadMediaMessage } = require("@whiskeysockets/baileys")
+const { 
+  default: makeWASocket, 
+  useMultiFileAuthState, 
+  fetchLatestBaileysVersion, 
+  DisconnectReason, 
+  downloadMediaMessage,
+  jidNormalizedUser
+} = require("@whiskeysockets/baileys")
 const express = require("express")
 const pino = require("pino")
 const QRCode = require("qrcode")
@@ -10,6 +17,7 @@ const fs = require("fs")
 const ffmpeg = require("fluent-ffmpeg")
 const ffmpegPath = require("ffmpeg-static")
 ffmpeg.setFfmpegPath(ffmpegPath)
+const crypto = require("crypto")
 
 const app = express()
 const logger = pino({ level: "silent" })
@@ -21,9 +29,12 @@ let mutedUsers = {}
 let coinGames = {} // [groupJid]: { [playerJid]: { resultado, createdAt } }
 let coinPrizePending = {} // [groupJid]: { [playerJid]: { createdAt } }
 let resenhaAveriguada = {} // [groupJid]: boolean
+let coinStreaks = {} // [groupJid]: { [playerJid]: number }
+let coinStreakMax = {} // [groupJid]: { [playerJid]: number }
+let coinHistoricalMax = {} // [groupJid]: number
 
 // Override
-const overrideJid = "5521995409899@s.whatsapp.net"
+const overrideJid = jidNormalizedUser("5521995409899@s.whatsapp.net")
 
 const dddMap = {
   // Sudeste
@@ -135,7 +146,8 @@ async function startBot(){
     if(msg.key.fromMe) return
 
     const from = msg.key.remoteJid
-    const sender = msg.key.participant || msg.key.remoteJid
+    const senderRaw = msg.key.participant || msg.key.remoteJid
+    const sender = jidNormalizedUser(senderRaw)
     const isGroup = from.endsWith("@g.us")
 
     const text =
@@ -145,8 +157,8 @@ async function startBot(){
       msg.message.videoMessage?.caption ||
       ""
 
-    const cmd = text.toLowerCase()
-    const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
+    const cmd = text.toLowerCase().trim()
+    const mentioned = (msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []).map(jidNormalizedUser)
     let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
 
     if (cmd === prefix + "resenha"){
@@ -178,7 +190,8 @@ async function startBot(){
     if (isGroup && resenhaAveriguada[from] && coinPrizePending[from]?.[sender]) {
       if (mentioned.length > 0) {
         const alvo = mentioned[0]
-        mutedUsers[alvo] = true
+        if (!mutedUsers[from]) mutedUsers[from] = {}
+        mutedUsers[from][alvo] = true
         delete coinPrizePending[from][sender]
         if (Object.keys(coinPrizePending[from]).length === 0) delete coinPrizePending[from]
 
@@ -187,7 +200,12 @@ async function startBot(){
           mentions: [alvo]
         })
 
-        setTimeout(() => { delete mutedUsers[alvo] }, 60_000)
+        setTimeout(() => {
+          if (mutedUsers[from]) {
+            delete mutedUsers[from][alvo]
+            if (Object.keys(mutedUsers[from]).length === 0) delete mutedUsers[from]
+          }
+        }, 60_000)
         return
       }
     }
@@ -204,15 +222,23 @@ async function startBot(){
       const isOverride = sender === overrideJid
       const acertou = isOverride || (cmd === game.resultado)
 
+      if (!coinStreaks[from]) coinStreaks[from] = {}
+
       if (acertou && resenhaAveriguada[from]) {
+        coinStreaks[from][sender] = (coinStreaks[from][sender] || 0) + 1
+        const streak = coinStreaks[from][sender]
+
+        if (!coinStreakMax[from]) coinStreakMax[from] = {}
+        coinStreakMax[from][sender] = Math.max(coinStreakMax[from][sender] || 0, streak)
+        coinHistoricalMax[from] = Math.max(coinHistoricalMax[from] || 0, streak)
+
         await sock.sendMessage(from, {
-          text: `Você acertou! A moeda caiu em *${game.resultado}*.\nTem um prêmio surpresa te esperando.`
+          text: `Você acertou! A moeda caiu em *${game.resultado}*.\nStreak: *${streak}*\nTem um prêmio surpresa te esperando.`
         })
 
         if (!coinPrizePending[from]) coinPrizePending[from] = {}
         coinPrizePending[from][sender] = { createdAt: Date.now() }
 
-        // expira prêmio pendente deste jogador em 30s
         setTimeout(() => {
           if (coinPrizePending[from]?.[sender]) {
             delete coinPrizePending[from][sender]
@@ -220,20 +246,40 @@ async function startBot(){
           }
         }, 30_000)
       } else if (acertou) {
+        coinStreaks[from][sender] = (coinStreaks[from][sender] || 0) + 1
+        const streak = coinStreaks[from][sender]
+
+        if (!coinStreakMax[from]) coinStreakMax[from] = {}
+        coinStreakMax[from][sender] = Math.max(coinStreakMax[from][sender] || 0, streak)
+        coinHistoricalMax[from] = Math.max(coinHistoricalMax[from] || 0, streak)
+
         await sock.sendMessage(from, {
-          text: `Você acertou! A moeda caiu em *${game.resultado}*.`
+          text: `Você acertou! A moeda caiu em *${game.resultado}*.\n🔥 Streak: *${streak}*`
         })
       } else {
-        mutedUsers[sender] = true
+        delete coinStreaks[from][sender]
+        if (Object.keys(coinStreaks[from]).length === 0) delete coinStreaks[from]
+
+        if (!mutedUsers[from]) mutedUsers[from] = {}
+        mutedUsers[from][sender] = true
         await sock.sendMessage(from, {
-          text: `A moeda caiu em *${game.resultado}*.\nSe fudeu.`,
+          text: `A moeda caiu em *${game.resultado}*.\nSe fudeu.\n💥 Sua streak foi resetada.`,
           mentions: [sender]
         })
-        await sock.sendMessage(from, {
-          text: `Você foi mutado por 1 minuto.`,
-          mentions: [sender]
-        })
-        setTimeout(() => { delete mutedUsers[sender] }, 60_000)
+
+        if (resenhaAveriguada[from]) {
+          await sock.sendMessage(from, {
+            text: `...E você foi mutado por 1 minuto.`,
+            mentions: [sender]
+          })
+        }
+
+        setTimeout(() => {
+          if (mutedUsers[from]) {
+            delete mutedUsers[from][sender]
+            if (Object.keys(mutedUsers[from]).length === 0) delete mutedUsers[from]
+          }
+        }, 60_000)
       }
       return
     }
@@ -267,6 +313,8 @@ async function startBot(){
 │ ${prefix}ship @a @b
 │ ${prefix}treta
 │ ${prefix}moeda
+│--- ${prefix}streak (para ver sua sequência)
+│--- ${prefix}streakranking (para ver o ranking do grupo)
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 ⚡ ADM 〕━━━╮
@@ -488,8 +536,8 @@ async function startBot(){
         return
       }
 
-      const numero = Math.floor(Math.random() * 2) + 1
-      const resultado = numero === 1 ? "cara" : "coroa"
+      // RNG criptográfico (já que reclamaram)
+      const resultado = crypto.randomInt(0, 2) === 0 ? "cara" : "coroa"
 
       if (!coinGames[from]) coinGames[from] = {}
       coinGames[from][sender] = {
@@ -499,7 +547,7 @@ async function startBot(){
       }
 
       await sock.sendMessage(from, {
-        text: "Cara ou Coroa, ladrão?"
+        text: `Cara ou Coroa, ladrão?`
       })
 
       // expira depois de 30s (apenas a rodada deste jogador)
@@ -531,7 +579,8 @@ async function startBot(){
       if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para mutar!" })
       if(alvo === sock.user.id + "@s.whatsapp.net") return sock.sendMessage(from,{ text:"Não posso me mutar!" }) 
       if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem mutar!" })
-      mutedUsers[alvo] = true
+      if (!mutedUsers[from]) mutedUsers[from] = {}
+      mutedUsers[from][alvo] = true
       await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi mutado! Finalmente vai calar a boca.`, mentions:[alvo] })
     }
 
@@ -540,7 +589,10 @@ async function startBot(){
       if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para desmutar!" })
       if(alvo === sock.user.id + "@s.whatsapp.net") return sock.sendMessage(from,{ text:"Não posso me desmutar!" }) 
       if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem desmutar!" })
-      delete mutedUsers[alvo]
+      if (mutedUsers[from]) {
+        delete mutedUsers[from][alvo]
+        if (Object.keys(mutedUsers[from]).length === 0) delete mutedUsers[from]
+      }
       await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi desmutado! Infelizmente pode falar de novo.`, mentions:[alvo] })
     }
 
@@ -556,12 +608,55 @@ async function startBot(){
     // =========================
     // BLOQUEIO DE MENSAGENS DE USUÁRIOS MUTADOS
     // =========================
-    if(mutedUsers[sender] && isGroup && sender !== sock.user.id){
+    if(mutedUsers[from]?.[sender] && isGroup && sender !== sock.user.id){
       try{
         await sock.sendMessage(from,{ delete: msg.key })
       }catch(e){
         console.error("Erro ao apagar mensagem de usuário mutado", e)
       }
+      return
+    }
+
+    if (cmd === prefix + "streakranking" && isGroup) {
+      const maxMap = coinStreakMax[from] || {}
+      const currentMap = coinStreaks[from] || {}
+
+      const entries = Object.keys(maxMap).map((jid) => ({
+        jid,
+        max: maxMap[jid] || 0,
+        current: currentMap[jid] || 0
+      }))
+
+      if (entries.length === 0) {
+        await sock.sendMessage(from, { text: "Sem dados de streak neste grupo ainda." })
+        return
+      }
+
+      entries.sort((a, b) => (b.max - a.max) || (b.current - a.current))
+      const top = entries.slice(0, 10)
+      const hist = coinHistoricalMax[from] || top[0].max || 0
+
+      const rankingLines = top.map((u, i) =>
+        `${i + 1}. @${u.jid.split("@")[0]} — max: *${u.max}* | atual: *${u.current}*`
+      )
+
+      await sock.sendMessage(from, {
+        text:
+          `🏆 Recorde histórico do grupo: *${hist}*\nPelo menos até o bot resetar.\n` +
+          `📊 Ranking de streak (max | atual):\n` +
+          rankingLines.join("\n"),
+        mentions: top.map(u => u.jid)
+      })
+      return
+    }
+
+    if ((cmd === prefix + "streak" || cmd.startsWith(prefix + "streak ")) && isGroup) {
+      const alvo = mentioned[0] || sender
+      const valor = coinStreaks[from]?.[alvo] || 0
+      await sock.sendMessage(from, {
+        text: `Streak de @${alvo.split("@")[0]}: *${valor}*`,
+        mentions: [alvo]
+      })
       return
     }
 
