@@ -41,7 +41,7 @@ async function handleAdminSubmenus(msg, sender, from, sock, prefix) {
     }
 
     const reply = `
-╭━━━〔 💰 SUBMENU: ECONOMIA 〕━━━╮
+╭━━━〔 💰 SUBMENU: ADM ECONOMIA 〕━━━╮
 │ Comandos de economia:
 │ - !setcoins *@user <quantidade>
 │ - !addcoins *@user <quantidade>
