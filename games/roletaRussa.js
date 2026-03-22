@@ -9,13 +9,18 @@ const gameManager = require("../gameManager")
 
 module.exports = {
   // Start Russian roulette
-  start: (groupId, players) => {
+  start: (groupId, players, options = {}) => {
+    const betMultiplierRaw = Number.parseInt(String(options?.betMultiplier || 1), 10)
+    const betMultiplier = Number.isFinite(betMultiplierRaw) && betMultiplierRaw > 0
+      ? betMultiplierRaw
+      : 1
     const state = {
       groupId,
       players: gameManager.shuffle(players), // Randomize turn order
       currentPlayerIndex: 0,
       shotsFired: 0,
       cylinders: Math.floor(Math.random() * 6), // Which chamber has the bullet (0-5)
+      betMultiplier,
       loser: null,
       createdAt: Date.now(),
     }

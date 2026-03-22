@@ -11,10 +11,6 @@ function setDobroState(groupId, state) {
   storage.setGameState(groupId, DOBRO_STATE_KEY, state)
 }
 
-function clearDobroState(groupId) {
-  storage.clearGameState(groupId, DOBRO_STATE_KEY)
-}
-
 function startDobroOuNada(groupId, playerId) {
   const state = {
     groupId,
@@ -152,6 +148,8 @@ async function handleCoinGuess({
   getPunishmentNameById,
   applyPunishment,
   clearPendingPunishment,
+  rewardWinner,
+  chargeLoser,
 }) {
   const coinGames = storage.getCoinGames()
   const coinStreaks = storage.getCoinStreaks()
@@ -174,6 +172,8 @@ async function handleCoinGuess({
 
   if (acertou && resenhaAveriguada[from]) {
     const dobroOutcome = registerDobroWin(from, sender, game.resultado)
+    const dobroState = getDobroState(from)
+    const rewardMultiplier = dobroState?.doubledEnabled ? 2 : 1
 
     coinStreaks[from][sender] = (coinStreaks[from][sender] || 0) + 1
     const streak = coinStreaks[from][sender]
@@ -186,6 +186,10 @@ async function handleCoinGuess({
     storage.setCoinStreaks(coinStreaks)
     storage.setCoinStreakMax(coinStreakMax)
     storage.setCoinHistoricalMax(coinHistoricalMax)
+
+    if (typeof rewardWinner === "function") {
+      await rewardWinner(sender, rewardMultiplier)
+    }
 
     let winText =
       `Voce acertou! A moeda caiu em *${game.resultado}*.\n` +
@@ -207,7 +211,8 @@ async function handleCoinGuess({
     coinPunishmentPending[from][sender] = {
       mode: "target",
       target: null,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      origin: "game",
     }
     storage.setCoinPunishmentPending(coinPunishmentPending)
 
@@ -223,6 +228,8 @@ async function handleCoinGuess({
 
   if (acertou) {
     const dobroOutcome = registerDobroWin(from, sender, game.resultado)
+    const dobroState = getDobroState(from)
+    const rewardMultiplier = dobroState?.doubledEnabled ? 2 : 1
 
     coinStreaks[from][sender] = (coinStreaks[from][sender] || 0) + 1
     const streak = coinStreaks[from][sender]
@@ -235,6 +242,10 @@ async function handleCoinGuess({
     storage.setCoinStreaks(coinStreaks)
     storage.setCoinStreakMax(coinStreakMax)
     storage.setCoinHistoricalMax(coinHistoricalMax)
+
+    if (typeof rewardWinner === "function") {
+      await rewardWinner(sender, rewardMultiplier)
+    }
 
     let winText = `Voce acertou! A moeda caiu em *${game.resultado}*.\n🔥 Streak: *${streak}*`
     if (dobroOutcome.active) {
@@ -256,6 +267,10 @@ async function handleCoinGuess({
   storage.setCoinStreaks(coinStreaks)
 
   const dobroTriggered = !!dobroOutcome.triggeredDoublePunishment
+  const lossMultiplier = dobroTriggered ? 2 : 1
+  if (typeof chargeLoser === "function") {
+    await chargeLoser(sender, lossMultiplier)
+  }
   const lossLabel = (dobroTriggered && resenhaAveriguada[from])
     ? "💥 Sua streak foi resetada.\n⚠️ DOBRO OU NADA DISPAROU."
     : "💥 Sua streak foi resetada."
@@ -271,7 +286,7 @@ async function handleCoinGuess({
       text: `${punishmentPrefix}Punicao sorteada: *${getPunishmentNameById(randomPunishment)}*`,
       mentions: [sender]
     })
-    await applyPunishment(sock, from, sender, randomPunishment)
+    await applyPunishment(sock, from, sender, randomPunishment, { origin: "game" })
 
     if (dobroTriggered) {
       const extended = extendTimedPunishment(from, sender, 2)
@@ -392,7 +407,6 @@ module.exports = {
   startDobroOuNada,
   formatDobroStatus,
   getDobroState,
-  clearDobroState,
   isCoinGuessCommand,
   handleCoinGuess,
   startCoinRound,

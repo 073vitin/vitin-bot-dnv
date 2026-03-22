@@ -54,13 +54,6 @@ const gameManager = {
     return false
   },
 
-  // Check if session has enough players
-  hasEnoughPlayers: (groupId, gameId) => {
-    const normalizedGameId = normalizeLobbyId(gameId)
-    const session = gameManager.optInSessions[groupId]?.[normalizedGameId]
-    return session && session.players.length >= session.minPlayers
-  },
-
   // Get session
   getOptInSession: (groupId, gameId) => {
     const normalizedGameId = normalizeLobbyId(gameId)

@@ -1,5 +1,6 @@
 const crypto = require("crypto")
 const storage = require("./storage")
+const economyService = require("./economyService")
 
 const LETTER_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 
@@ -90,6 +91,18 @@ function clearPunishment(groupId, userId) {
 }
 
 async function applyPunishment(sock, groupId, userId, punishmentId, options = {}) {
+  const origin = options?.origin || "admin"
+  if (origin !== "admin") {
+    const blocked = economyService.consumeShield(userId)
+    if (blocked) {
+      await sock.sendMessage(groupId, {
+        text: `🛡️ @${userId.split("@")[0]} bloqueou a punição com escudo!`,
+        mentions: [userId],
+      })
+      return { blockedByShield: true }
+    }
+  }
+
   const severityMultiplierRaw = Number(options?.severityMultiplier || 1)
   const severityMultiplier = Number.isFinite(severityMultiplierRaw) && severityMultiplierRaw > 1
     ? Math.floor(severityMultiplierRaw)
@@ -279,6 +292,7 @@ async function handlePendingPunishmentChoice({ sock, from, sender, text, mention
   const punishedUser = pending.mode === "self" ? sender : target
   await applyPunishment(sock, from, punishedUser, punishmentChoice, {
     severityMultiplier: pending.severityMultiplier || 1,
+    origin: pending.origin || "game",
   })
   clearPendingPunishment(from, sender)
   return true

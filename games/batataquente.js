@@ -43,11 +43,6 @@ module.exports = {
     return { valid: true, newHolder: toPlayerId }
   },
 
-  // Check if time expired
-  isExpired: (state) => {
-    return Date.now() - state.startedAt > state.durationMs
-  },
-
   // Get loser (potato holder at end)
   getLoser: (state) => {
     return state.currentHolder

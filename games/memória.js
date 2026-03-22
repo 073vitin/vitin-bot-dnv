@@ -68,7 +68,7 @@ module.exports = {
   },
 
   // Format game state (after sequence hidden)
-  formatHidden: (state) => {
+  formatHidden: () => {
     return (
       `🧠 A sequência foi escondida!\n\n` +
       `Envie apenas a sequência (sem comando e sem texto extra).\n` +
