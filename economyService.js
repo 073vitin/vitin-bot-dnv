@@ -1,5 +1,6 @@
 const fs = require("fs")
 const path = require("path")
+const telemetry = require("./telemetryService")
 
 const DATA_DIR = path.join(__dirname, ".data")
 const ECONOMY_FILE = path.join(DATA_DIR, "economy.json")
@@ -29,7 +30,7 @@ const ITEM_DEFINITIONS = {
     key: "kronos",
     aliases: ["coroa", "coroakronos", "kronos"],
     name: "Coroa Kronos",
-    price: 15000,
+    price: 18000,
     sellRate: 0.8,
     stackable: true,
     durationMs: 10 * DAY_MS,
@@ -168,7 +169,7 @@ function migrateUserShape(user) {
   })
   if (!Array.isArray(user.transactions)) user.transactions = []
 
-  // Backward compatibility with legacy schema.
+  // retroompatibilidade com sistema antigo (caso eu volte algum commit).
   if (Number.isFinite(user.shields) && user.shields > 0) {
     user.items.escudo = (Number(user.items.escudo) || 0) + Math.floor(user.shields)
     delete user.shields
@@ -252,6 +253,13 @@ function creditCoins(userId, amount, transaction = null) {
       deltaCoins: parsedAmount,
     })
   }
+  const txType = transaction?.type || "unspecified"
+  telemetry.incrementCounter("economy.minted", parsedAmount, { source: txType })
+  telemetry.appendEvent("economy.credit", {
+    userId: normalizeUserId(userId),
+    amount: parsedAmount,
+    source: txType,
+  })
   return parsedAmount
 }
 
@@ -271,6 +279,13 @@ function debitCoins(userId, amount, transaction = null) {
       deltaCoins: -parsedAmount,
     })
   }
+  const txType = transaction?.type || "unspecified"
+  telemetry.incrementCounter("economy.burned", parsedAmount, { source: txType })
+  telemetry.appendEvent("economy.debit", {
+    userId: normalizeUserId(userId),
+    amount: parsedAmount,
+    source: txType,
+  })
   return true
 }
 
@@ -287,6 +302,16 @@ function debitCoinsFlexible(userId, amount, transaction = null) {
     pushTransaction(userId, {
       ...transaction,
       deltaCoins: -taken,
+    })
+  }
+  if (taken > 0) {
+    const txType = transaction?.type || "unspecified"
+    telemetry.incrementCounter("economy.burned", taken, { source: txType })
+    telemetry.appendEvent("economy.debitFlexible", {
+      userId: normalizeUserId(userId),
+      requested: parsedAmount,
+      taken,
+      source: txType,
     })
   }
   return taken
@@ -414,7 +439,7 @@ function applyKronosGainMultiplier(userId, amount, type = "generic") {
 }
 
 function getStealSuccessChance(victimId) {
-  const baseChance = 0.35
+  const baseChance = 0.3
   const protection = hasActiveKronos(victimId) ? 0.1 : 0
   return Math.max(0.05, Math.min(0.95, baseChance - protection))
 }
@@ -571,7 +596,7 @@ function attemptSteal(thiefId, victimId, requestedAmount = 0) {
   const success = roll <= chance
 
   if (!success) {
-    const penalty = Math.max(10, Math.floor(Math.min(getCoins(thiefId), 30 + Math.random() * 80)))
+    const penalty = Math.max(20, Math.floor(Math.min(getCoins(thiefId), 50 + Math.random() * 100)))
     const lost = debitCoinsFlexible(thiefId, penalty, {
       type: "steal-failed",
       details: `Falhou ao roubar ${normalizeUserId(victimId)}`,
@@ -652,6 +677,40 @@ function claimDaily(userId, baseAmount = 100) {
     dayKey,
     kronosBonus: finalAmount > base,
   }
+}
+
+const _attemptSteal = attemptSteal
+attemptSteal = function wrappedAttemptSteal(thiefId, victimId, requestedAmount = 0) {
+  const startedAt = Date.now()
+  const result = _attemptSteal(thiefId, victimId, requestedAmount)
+  const status = result?.ok ? (result.success ? "success" : "failed") : (result?.reason || "rejected")
+  telemetry.incrementCounter("economy.steal.attempt", 1, { status })
+  telemetry.observeDuration("economy.steal.latency", Date.now() - startedAt, { status })
+  telemetry.appendEvent("economy.steal", {
+    thiefId: normalizeUserId(thiefId),
+    victimId: normalizeUserId(victimId),
+    status,
+    gained: result?.gained || 0,
+    lost: result?.lost || 0,
+    reason: result?.reason || null,
+  })
+  return result
+}
+
+const _claimDaily = claimDaily
+claimDaily = function wrappedClaimDaily(userId, baseAmount = 100) {
+  const result = _claimDaily(userId, baseAmount)
+  telemetry.incrementCounter("economy.daily.claim", 1, {
+    status: result?.ok ? "ok" : (result?.reason || "rejected"),
+  })
+  if (result?.ok) {
+    telemetry.appendEvent("economy.daily.claimed", {
+      userId: normalizeUserId(userId),
+      amount: result.amount,
+      kronosBonus: Boolean(result.kronosBonus),
+    })
+  }
+  return result
 }
 
 function getAllUsersSortedByCoins() {

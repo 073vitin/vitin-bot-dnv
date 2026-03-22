@@ -1,13 +1,13 @@
 /**
  * ADIVINHACAO
- * 1-4 players guess a number (1-100).
- * Closest guessers are safe, others are punished.
- * Duplicate guesses are punished 2x.
- * If exactly one player hits the exact number, they choose one target for 2x punishment.
+ * 1-4 jogadores tentam adivinhar um número (1-100).
+ * Quem chega mais perto ganha, os demais são punidos.
+ * Palpites duplicados recebem punição 2x.
+ * Se exatamente um jogador acerta o número exato, ele escolhe um alvo para punição 2x.
  */
 
 module.exports = {
-	// Start adivinhacao game
+	// Inicia jogo de adivinhação
 	start: (groupId, players) => {
 		const secretNumber = Math.floor(Math.random() * 100) + 1 // 1-100
 		const state = {
@@ -21,7 +21,7 @@ module.exports = {
 		return state
 	},
 
-	// Record a guess
+	// Registra um palpite
 	recordGuess: (state, playerId, guess) => {
 		const num = parseInt(guess, 10)
 		if (isNaN(num) || num < 1 || num > 100) {
@@ -36,7 +36,7 @@ module.exports = {
 		return { valid: true }
 	},
 
-	// Get results and punishments
+	// pega resultados e punições
 	getResults: (state) => {
 		const secret = state.secretNumber
 		const guesses = state.guesses
@@ -52,7 +52,7 @@ module.exports = {
 			}
 		}
 
-		// Find closest distance and exact guessers.
+		// Encontra a menor distância e quem acertou exatamente.
 		let closestDist = Infinity
 		const exactPlayers = []
 
@@ -74,12 +74,12 @@ module.exports = {
 			punishByPlayer.set(playerId, Math.max(current, severity))
 		}
 
-		// Closest players are safe by default; everyone else gets normal punishment.
+		// Jogadores mais próximos ficam seguros por padrão, os outros recebem punição normal.
 		playerIds
 			.filter((pid) => !closestPlayers.includes(pid))
 			.forEach((pid) => setPunishment(pid, 1))
 
-		// Duplicate guesses are punished 2x.
+		// Palpites duplicados recebem punição 2x.
 		const guessBuckets = {}
 		playerIds.forEach((pid) => {
 			const value = guesses[pid]
@@ -106,7 +106,7 @@ module.exports = {
 		}
 	},
 
-	// Format result message
+	// Formata mensagem de resultado
 	formatResults: (state, results, includePunishmentWarnings = true) => {
 		const secret = state.secretNumber
 		let msg = `🎰 O número era: ${secret}\n\n`

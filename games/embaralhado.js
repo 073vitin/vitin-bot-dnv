@@ -1,8 +1,8 @@
 /**
  * EMBARALHADO (Palavra Embaralhada)
- * Bot shows scrambled word. First to unscramble it wins.
- * Winner can punish anyone they choose.
- * Triggered on message threshold or via !scramble command.
+ * O bot mostra uma palavra embaralhada. Quem desembaralhar primeiro vence.
+ * O vencedor pode punir quem escolher.
+ * Disparado por threshold de mensagens ou por comando.
  */
 
 const gameManager = require("../gameManager")
@@ -35,7 +35,7 @@ function shuffleWord(word) {
 }
 
 module.exports = {
-  // Start embaralhado
+  // Inicia embaralhado
   start: (groupId, triggeredBy = null) => {
     const word = gameManager.pickRandom(words)
     const state = {
@@ -49,7 +49,7 @@ module.exports = {
     return state
   },
 
-  // Check if answer is correct
+  // Verifica se a resposta está correta
   checkAnswer: (state, playerId, answer) => {
     const normalized = (answer || "").trim().toUpperCase()
     if (normalized === state.word) {
@@ -59,7 +59,7 @@ module.exports = {
     return { correct: false }
   },
 
-  // Format game message
+  // Formata mensagem do jogo
   formatGame: (state) => {
     return (
       `📝 Desembaralhador de Palavras!\n\n` +
@@ -69,7 +69,7 @@ module.exports = {
     )
   },
 
-  // Format results
+  // Formata resultados
   formatResults: (state, includePunishmentNotice = true) => {
     if (!state.winner) {
       return `Ninguém conseguiu desembaralhar: ${state.word}`

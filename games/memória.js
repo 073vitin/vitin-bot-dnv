@@ -1,8 +1,8 @@
 /**
  * JOGO DA MEMORIA (Jogo da Memória)
- * Bot shows a 12-character sequence for 5 seconds, then deletes it.
- * First player to reproduce it correctly wins and punishes someone.
- * Triggered on message threshold.
+ * O bot mostra uma sequência de 12 caracteres por 5 segundos e depois a apaga.
+ * O primeiro jogador a reproduzir corretamente vence e pode punir alguém.
+ * Ativado por threshold de mensagens.
  */
 
 function generateSequence(length = 12) {
@@ -15,7 +15,7 @@ function generateSequence(length = 12) {
 }
 
 module.exports = {
-  // Start memória game
+  // Inicia jogo da memória
   start: (groupId, triggeredBy = null) => {
     const sequence = generateSequence(12)
     const state = {
@@ -24,19 +24,19 @@ module.exports = {
       shownAt: Date.now(),
       showDurationMs: 5000,
       winner: null,
-      attempts: {}, // playerId -> [attempts]
+      attempts: {}, // playerId -> [tentativas]
       createdAt: Date.now(),
       triggeredBy,
     }
     return state
   },
 
-  // Check if still showing
+  // Verifica se ainda está visível
   isVisible: (state) => {
     return Date.now() - state.shownAt < state.showDurationMs
   },
 
-  // Record attempt
+  // Registra tentativa
   recordAttempt: (state, playerId, answer) => {
     if (state.winner) {
       return { valid: false, error: "Jogo já terminou!" }
@@ -57,7 +57,7 @@ module.exports = {
     return { correct: false }
   },
 
-  // Format initial message (shows sequence)
+  // Formata mensagem inicial (mostra sequência)
   formatSequence: (state) => {
     return (
       `🧠 JOGO DA MEMÓRIA!\n\n` +
@@ -67,7 +67,7 @@ module.exports = {
     )
   },
 
-  // Format game state (after sequence hidden)
+  // Formata estado do jogo (após esconder sequência)
   formatHidden: () => {
     return (
       `🧠 A sequência foi escondida!\n\n` +
@@ -76,7 +76,7 @@ module.exports = {
     )
   },
 
-  // Format results
+  // Formata resultados
   formatResults: (state, includePunishmentNotice = true) => {
     if (!state.winner) {
       return `Ninguém se lembrou! Sequência: ${state.sequence}`

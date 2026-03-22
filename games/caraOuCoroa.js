@@ -88,7 +88,7 @@ function registerDobroLoss(groupId, loserId, result) {
   state.lastLoser = loserId
   state.lastTossAt = Date.now()
 
-  // Losing resets the tracked streak cycle.
+  // Perder reinicia o ciclo de sequência atual.
   state.activeStreak = 0
   state.streakPlayer = null
   state.doubledEnabled = false

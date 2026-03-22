@@ -8,7 +8,7 @@
 const gameManager = require("../gameManager")
 
 module.exports = {
-  // Start hot potato game
+  // Inicia batata quente
   start: (groupId, players) => {
     const initialHolder = gameManager.pickRandom(players)
     const state = {
@@ -22,7 +22,7 @@ module.exports = {
     return state
   },
 
-  // Handle pass
+  // Processa passe
   recordPass: (state, fromPlayerId, toPlayerId) => {
     if (state.currentHolder !== fromPlayerId) {
       return { valid: false, error: "Você não tem a batata!" }
@@ -43,12 +43,12 @@ module.exports = {
     return { valid: true, newHolder: toPlayerId }
   },
 
-  // Get loser (potato holder at end)
+  // Pega o perdedor (quem está com a batata no final)
   getLoser: (state) => {
     return state.currentHolder
   },
 
-  // Format game message
+  // Formata mensagem do jogo
   formatStatus: (state) => {
     const elapsed = Date.now() - state.startedAt
     const remaining = Math.max(0, state.durationMs - elapsed)

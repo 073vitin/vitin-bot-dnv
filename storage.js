@@ -4,12 +4,12 @@ const path = require("path")
 const DATA_DIR = path.join(__dirname, ".data")
 const STORAGE_FILE = path.join(DATA_DIR, "state.json")
 
-// Ensure data directory exists
+// Garante que a pasta de dados exista
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true })
 }
 
-// In-memory state cache
+// cache
 let stateCache = {
   mutedUsers: {},
   coinGames: {},
@@ -22,7 +22,7 @@ let stateCache = {
   gameStates: {}, // [groupJid]: { gameType: {...state} }
 }
 
-// Load state from disk on startup
+// Carrega estado do disco ao iniciar
 function loadState() {
   try {
     if (fs.existsSync(STORAGE_FILE)) {
@@ -35,7 +35,7 @@ function loadState() {
   }
 }
 
-// Save state to disk (debounced/throttled)
+// Salva estado em disco (com debounce/throttle)
 let saveTimeout = null
 function saveState(immediate = false) {
   const doSave = () => {
@@ -57,13 +57,13 @@ function saveState(immediate = false) {
     doSave()
   } else {
     clearTimeout(saveTimeout)
-    saveTimeout = setTimeout(doSave, 5000) // save after 5 seconds of inactivity
+    saveTimeout = setTimeout(doSave, 5000) // salva após 5 segundos de inatividade
   }
 }
 
-// Getters and setters for each state type
+// Funções de leitura e escrita para cada tipo de estado
 const storage = {
-  // Muted users
+  // Usuários mutados
   getMutedUsers: (groupId) => {
     if (groupId === undefined) return stateCache.mutedUsers
     return stateCache.mutedUsers[groupId] || {}
@@ -78,7 +78,7 @@ const storage = {
     saveState()
   },
 
-  // Coin games
+  // moeda
   getCoinGames: (groupId) => {
     if (groupId === undefined) return stateCache.coinGames
     return stateCache.coinGames[groupId] || {}
@@ -93,7 +93,7 @@ const storage = {
     saveState()
   },
 
-  // Coin punishment pending
+  // Punição pendente do !moeda
   getCoinPunishmentPending: (groupId) => {
     if (groupId === undefined) return stateCache.coinPunishmentPending
     return stateCache.coinPunishmentPending[groupId] || {}
@@ -108,7 +108,7 @@ const storage = {
     saveState()
   },
 
-  // Resenha enabled
+  // possível resenha
   getResenhaAveriguada: () => stateCache.resenhaAveriguada,
   setResenhaAveriguada: (map) => {
     stateCache.resenhaAveriguada = map || {}
@@ -120,7 +120,7 @@ const storage = {
     saveState()
   },
 
-  // Coin streaks
+  // Streaks do moeda
   getCoinStreaks: (groupId) => {
     if (groupId === undefined) return stateCache.coinStreaks
     return stateCache.coinStreaks[groupId] || {}
@@ -135,7 +135,7 @@ const storage = {
     saveState()
   },
 
-  // Coin streak max
+  // Streak máximo do moeda
   getCoinStreakMax: (groupId) => {
     if (groupId === undefined) return stateCache.coinStreakMax
     return stateCache.coinStreakMax[groupId] || {}
@@ -150,7 +150,7 @@ const storage = {
     saveState()
   },
 
-  // Coin historical max
+  // Máximo histórico do moeda
   getCoinHistoricalMax: (groupId) => {
     if (groupId === undefined) return stateCache.coinHistoricalMax
     return stateCache.coinHistoricalMax[groupId] || 0
@@ -165,7 +165,7 @@ const storage = {
     saveState()
   },
 
-  // Active punishments
+  // Punições ativas
   getActivePunishments: (groupId) => {
     if (groupId === undefined) return stateCache.activePunishments
     return stateCache.activePunishments[groupId] || {}
@@ -180,7 +180,7 @@ const storage = {
     saveState()
   },
 
-  // Generic game states
+  // Estados genéricos de jogos
   getGameState: (groupId, gameType) => {
     if (!stateCache.gameStates[groupId]) return null
     return stateCache.gameStates[groupId][gameType] || null
@@ -201,19 +201,19 @@ const storage = {
     }
   },
 
-  // Direct read/write for testing
+  // Leitura/escrita direta para testes
   getCache: () => stateCache,
   setCache: (newCache) => {
     stateCache = newCache
     saveState(true)
   },
 
-  // Persistence
+  // Persistência
   save: (immediate = false) => saveState(immediate),
   load: () => loadState(),
 }
 
-// Load state on module import
+// Carrega estado ao importar
 loadState()
 
 module.exports = storage

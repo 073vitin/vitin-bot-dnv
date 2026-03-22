@@ -4,3 +4,4 @@ auth_info/
 auth/
 .data/economy.json
 .data/state.json
+plano-roadmap balanceamento e modularização.md

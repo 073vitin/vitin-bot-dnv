@@ -1,12 +1,12 @@
 /**
  * REACAO (Teste de Reação)
- * 2+ players. Bot says "go!" and starts timer.
- * First to mention the bot wins. Last to react (or slowest) gets punished.
- * Uses message detection (not a timestamp-based game).
+ * 2+ jogadores. O bot avisa quando começa e inicia o tempo.
+ * Quem reagir primeiro vence.
+ * Usa detecção por mensagens (não é um jogo só de timestamp).
  */
 
 module.exports = {
-  // Start reação game
+  // Inicia jogo de reação
   start: (groupId, players = [], options = {}) => {
     const participants = Array.isArray(players) ? players : []
     const restrictToPlayers = Boolean(options.restrictToPlayers)
@@ -22,13 +22,13 @@ module.exports = {
     return state
   },
 
-  // Mark game as started (after bot says "go!")
+  // Marca jogo como iniciado (após o bot liberar)
   markStarted: (state) => {
     state.started = true
     state.startedAt = Date.now()
   },
 
-  // Record a reaction
+  // Registra uma reação
   recordReaction: (state, playerId) => {
     if (!state.started) {
       return { valid: false, error: "Jogo não começou!" }
@@ -38,7 +38,7 @@ module.exports = {
       return { valid: false, error: "Você não está na lista de participantes." }
     }
 
-    // Check if already reacted
+    // Verifica se já reagiu
     if (state.reactions.some((r) => r.playerId === playerId)) {
       return { valid: false, error: "Você já reagiu!" }
     }
@@ -53,16 +53,16 @@ module.exports = {
     return { valid: true, time: reacaoMs }
   },
 
-  // Get results
+  // Pega resultados
   getResults: (state) => {
     if (state.reactions.length === 0) {
       return { type: "no_reactions", winner: null, punish: [] }
     }
 
-    // Sort by reaction time
+    // Ordena por tempo de reação
     const sorted = [...state.reactions].sort((a, b) => a.time - b.time)
 
-    // Winner: fastest
+    // Vencedor: mais rápido
     const winner = sorted[0].playerId
 
     return {
@@ -73,7 +73,7 @@ module.exports = {
     }
   },
 
-  // Format results
+  // Formata resultados
   formatResults: (state, results, includePunishmentWarning = true) => {
     if (results.type === "no_reactions") {
       return includePunishmentWarning

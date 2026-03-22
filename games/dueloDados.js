@@ -1,14 +1,14 @@
 /**
  * DUELO DE DADOS (Dice Duel)
- * 2 players each roll a d20 (1-20).
- * Higher roll wins. Rolling a 1 guarantees double punishment regardless of outcome.
+ * 2 jogadores rolam um d20 (1-20).
+ * O maior valor vence.
  */
 
 module.exports = {
-  // Start dice duel
+  // Inicia duelo de dados
   start: (groupId, players) => {
     if (players.length !== 2) {
-      return null // Must be exactly 2
+      return null // Deve ser exatamente 2
     }
     const state = {
       groupId,
@@ -19,7 +19,7 @@ module.exports = {
     return state
   },
 
-  // Record die roll
+  // Registra rolagem do dado
   recordRoll: (state, playerId) => {
     if (state.rolls[playerId]) {
       return { valid: false, error: "Você já rolou!" }
@@ -30,21 +30,21 @@ module.exports = {
     return { valid: true, roll }
   },
 
-  // Get results
+  // pega resultados
   getResults: (state) => {
     const [p1, p2] = state.players
     const roll1 = state.rolls[p1]
     const roll2 = state.rolls[p2]
 
     if (roll1 === undefined || roll2 === undefined) {
-      return null // Incomplete
+      return null // Incompleto
     }
 
     let winner, loser
     let severity = 1
 
     if (roll1 === 1 && roll2 === 1) {
-      // Both rolled 1: both punished 2x
+      // Ambos tiraram 1: ambos recebem punição 2x
       return {
         type: "both_critical",
         punish: state.players,
@@ -55,7 +55,7 @@ module.exports = {
     }
 
     if (roll1 === roll2) {
-      // Same roll: both players are punished.
+      // Mesmo valor: ambos os jogadores são punidos.
       return {
         type: "tie",
         punish: state.players,
@@ -68,9 +68,8 @@ module.exports = {
     winner = roll1 > roll2 ? p1 : p2
     loser = winner === p1 ? p2 : p1
 
-    // Rules:
-    // - If a player rolls 1, that loser gets 2x punishment.
-    // - If a player rolls 20, the loser gets 2x punishment.
+    // Regras:
+    // - Se um jogador tira 1 ou 20, o perdedor recebe punição 2x.
     const loserRoll = state.rolls[loser]
     const winnerRoll = state.rolls[winner]
     if (loserRoll === 1 || winnerRoll === 20) {
@@ -87,7 +86,7 @@ module.exports = {
     }
   },
 
-  // Format results
+  // Formata resultados
   formatResults: (state, results, includePunishmentWarnings = true) => {
     const [p1, p2] = state.players
     let msg = `🎲 Duelo de Dados!\n\n`

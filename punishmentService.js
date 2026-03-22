@@ -1,6 +1,7 @@
 const crypto = require("crypto")
 const storage = require("./storage")
 const economyService = require("./economyService")
+const telemetry = require("./telemetryService")
 
 const LETTER_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 
@@ -95,6 +96,18 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
   if (origin !== "admin") {
     const blocked = economyService.consumeShield(userId)
     if (blocked) {
+      telemetry.incrementCounter("punishment.blocked", 1, {
+        origin,
+        reason: "shield",
+        punishmentId: String(punishmentId || ""),
+      })
+      telemetry.appendEvent("punishment.blocked", {
+        groupId,
+        userId,
+        origin,
+        punishmentId,
+        reason: "shield",
+      })
       await sock.sendMessage(groupId, {
         text: `🛡️ @${userId.split("@")[0]} bloqueou a punição com escudo!`,
         mentions: [userId],
@@ -175,6 +188,19 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
   }
 
   storage.setActivePunishments(activePunishments)
+
+  telemetry.incrementCounter("punishment.applied", 1, {
+    origin,
+    punishmentId: String(punishmentId || ""),
+  })
+  telemetry.appendEvent("punishment.applied", {
+    groupId,
+    userId,
+    origin,
+    punishmentId,
+    severityMultiplier,
+    timed: Boolean(punishmentState?.endsAt),
+  })
 
   await sock.sendMessage(groupId, {
     text: warningText,

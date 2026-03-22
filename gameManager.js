@@ -1,4 +1,5 @@
 const crypto = require("crypto")
+const telemetry = require("./telemetryService")
 
 function generateLobbyId() {
   return crypto.randomBytes(3).toString("hex").toUpperCase()
@@ -8,12 +9,12 @@ function normalizeLobbyId(lobbyId = "") {
   return String(lobbyId).trim().toUpperCase()
 }
 
-// Game registry and opt-in management
+// Registro de jogos e gerenciamento de entrada
 const gameManager = {
-  // Track opt-ins for multiplayer games: [groupJid]: { [gameId]: { players: [jid], createdAt } }
+  // Rastreia entradas de jogos multiplayer por grupo e por sala
   optInSessions: {},
 
-  // Get or create opt-in session for a game
+  // Obtém ou cria lobby para um jogo
   createOptInSession: (groupId, gameType, minPlayers, maxPlayers, timeoutMs = 30000) => {
     let gameId = generateLobbyId()
     if (!gameManager.optInSessions[groupId]) {
@@ -40,7 +41,7 @@ const gameManager = {
     return gameId
   },
 
-  // Add player to opt-in session
+  // Adiciona jogador ao lobby
   addPlayerToOptIn: (groupId, gameId, playerId) => {
     const normalizedGameId = normalizeLobbyId(gameId)
     const session = gameManager.optInSessions[groupId]?.[normalizedGameId]
@@ -54,13 +55,13 @@ const gameManager = {
     return false
   },
 
-  // Get session
+  // Obtém sessão
   getOptInSession: (groupId, gameId) => {
     const normalizedGameId = normalizeLobbyId(gameId)
     return gameManager.optInSessions[groupId]?.[normalizedGameId] || null
   },
 
-  // Clear session
+  // Limpa sessão
   clearOptInSession: (groupId, gameId) => {
     const normalizedGameId = normalizeLobbyId(gameId)
     if (gameManager.optInSessions[groupId]?.[normalizedGameId]) {
@@ -72,7 +73,7 @@ const gameManager = {
 
   normalizeLobbyId,
 
-  // Shuffle array (used for queue/turn order)
+  // Embaralha array (usado para fila/turno)
   shuffle: (arr) => {
     const copy = [...arr]
     for (let i = copy.length - 1; i > 0; i--) {
@@ -82,11 +83,10 @@ const gameManager = {
     return copy
   },
 
-  // Pick random element
   pickRandom: (arr) => arr[Math.floor(Math.random() * arr.length)],
 
-  // Periodic game trigger logic (for embaralhado, memória, último a obedecer)
-  // Track message counts per group for periodic triggers
+  // Lógica de disparo dos jogos periódicos (embaralhado, memória, último a obedecer)
+  // Rastreia contagem de mensagens por grupo pras ativações periódicas
   messageCounters: {}, // [groupId]: { count: N, users: Set, lastReset: timestamp }
 
   incrementMessageCounter: (groupId, userId) => {
@@ -96,7 +96,7 @@ const gameManager = {
         users: new Set(),
         windowStartedAt: Date.now(),
         burstStartedAt: Date.now(),
-        triggeredCount: 0, // how many times triggered in current 20min window
+        triggeredCount: 0, // quantas vezes ativou na janela atual de 20 min
       }
     }
 
@@ -105,7 +105,7 @@ const gameManager = {
     const windowMs = 20 * 60 * 1000 // 20 minutes
     const burstMs = 30 * 1000 // 30 seconds
 
-    // Reset global window (trigger quota)
+    // Reinicia janela global (cota de ativação)
     if (now - counter.windowStartedAt > windowMs) {
       counter.count = 0
       counter.users.clear()
@@ -114,7 +114,7 @@ const gameManager = {
       counter.burstStartedAt = now
     }
 
-    // Reset burst counter used for trigger threshold detection
+    // Reinicia contador de rajada usado para detectar o threshold de ativação
     if (now - counter.burstStartedAt > burstMs) {
       counter.count = 0
       counter.users.clear()
@@ -125,7 +125,7 @@ const gameManager = {
     counter.users.add(userId)
   },
 
-  // Check if should trigger periodic game (needs 10+ messages from 2+ users in 30s, max 4 times per 20min)
+  // Verifica se deve puxar jogo periódico (10+ mensagens de 2+ usuários em 30s, máx. 4 vezes por 20 min)
   shouldTriggerPeriodicGame: (groupId) => {
     const counter = gameManager.messageCounters[groupId]
     if (!counter) return false
@@ -143,6 +143,13 @@ const gameManager = {
       gameManager.messageCounters[groupId].count = 0
       gameManager.messageCounters[groupId].users.clear()
       gameManager.messageCounters[groupId].burstStartedAt = Date.now()
+      telemetry.incrementCounter("games.periodic.trigger", 1, {
+        scope: "group",
+      })
+      telemetry.appendEvent("games.periodic.trigger", {
+        groupId,
+        triggeredCount: gameManager.messageCounters[groupId].triggeredCount,
+      })
     }
   },
 
