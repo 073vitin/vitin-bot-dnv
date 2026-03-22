@@ -27,11 +27,233 @@ const prefix = "!"
 let qrImage = null
 let mutedUsers = {}
 let coinGames = {} // [groupJid]: { [playerJid]: { resultado, createdAt } }
-let coinPrizePending = {} // [groupJid]: { [playerJid]: { createdAt } }
+let coinPunishmentPending = {} // [groupJid]: { [playerJid]: { mode, target, createdAt } }
 let resenhaAveriguada = {} // [groupJid]: boolean
 let coinStreaks = {} // [groupJid]: { [playerJid]: number }
 let coinStreakMax = {} // [groupJid]: { [playerJid]: number }
 let coinHistoricalMax = {} // [groupJid]: number
+let activePunishments = {} // [groupJid]: { [userJid]: punishmentState }
+const LETTER_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
+
+// =========================
+// HELPERS DE PUNIÇÃO
+// =========================
+function getPunishmentChoiceFromText(text = "") {
+  const cleaned = text.toLowerCase().trim()
+  if (cleaned === "1") return "1"
+  if (cleaned === "2") return "2"
+  if (cleaned === "3") return "3"
+  if (cleaned === "4") return "4"
+  if (cleaned === "5") return "5"
+  return null
+}
+
+function getRandomPunishmentChoice() {
+  const choices = ["1", "2", "3", "4", "5"]
+  return choices[crypto.randomInt(0, choices.length)]
+}
+
+function getPunishmentNameById(punishmentId) {
+  if (punishmentId === "1") return "máx. 5 caracteres (5 min)"
+  if (punishmentId === "2") return "1 mensagem/20s (10 min)"
+  if (punishmentId === "3") return "bloqueio por 2 letras (indefinido)"
+  if (punishmentId === "4") return "somente emojis (5 min)"
+  if (punishmentId === "5") return "mute total (5 min)"
+  return "desconhecida"
+}
+
+function getRandomDifferentLetters() {
+  const firstIndex = crypto.randomInt(0, LETTER_ALPHABET.length)
+  let secondIndex = crypto.randomInt(0, LETTER_ALPHABET.length)
+  while (secondIndex === firstIndex) secondIndex = crypto.randomInt(0, LETTER_ALPHABET.length)
+  return [LETTER_ALPHABET[firstIndex], LETTER_ALPHABET[secondIndex]]
+}
+
+function stripWhitespaceExceptSpace(text = "") {
+  // Mantém espaço comum (" ") contando no limite, ignora outros whitespaces.
+  return text.replace(/[\t\n\r\f\v\u00A0\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/g, "")
+}
+
+function isEmojiOnlyMessage(text = "") {
+  const compact = text.replace(/\s+/g, "")
+  if (!compact) return false
+  const emojiCluster = /^(?:\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?)*)+$/u
+  return emojiCluster.test(compact)
+}
+
+function isUnlockLettersMessage(text = "", letters = []) {
+  const normalized = text.toLowerCase().replace(/\s+/g, "")
+  if (!normalized) return false
+  const [a, b] = letters
+  for (const ch of normalized) {
+    if (ch !== a && ch !== b) return false
+  }
+  return true
+}
+
+function containsPunishmentLetters(text = "", letters = []) {
+  const normalized = text.toLowerCase()
+  return letters.some((letter) => normalized.includes(letter))
+}
+
+function getPunishmentMenuText() {
+  return [
+    "Escolha a punição digitando *1*, *2*, *3*, *4* ou *5*:",
+    "1. Mensagens com no máximo 5 caracteres por 5 minutos.",
+    "2. Máximo de 1 mensagem a cada 20 segundos por 10 minutos.",
+    "3. Bloqueio por duas letras aleatórias (indefinido até cumprir condição de saída).",
+    "4. Só pode enviar emojis por 5 minutos.",
+    "5. Mute total por 5 minutos (tudo que enviar será apagado)."
+  ].join("\n")
+}
+
+function ensureGroupMap(store, groupId) {
+  if (!store[groupId]) store[groupId] = {}
+}
+
+function clearPendingPunishment(groupId, playerId) {
+  if (!coinPunishmentPending[groupId]?.[playerId]) return
+  delete coinPunishmentPending[groupId][playerId]
+  if (Object.keys(coinPunishmentPending[groupId]).length === 0) delete coinPunishmentPending[groupId]
+}
+
+function clearPunishment(groupId, userId) {
+  if (!activePunishments[groupId]?.[userId]) return
+  const timerId = activePunishments[groupId][userId]?.timerId
+  if (timerId) clearTimeout(timerId)
+  delete activePunishments[groupId][userId]
+  if (Object.keys(activePunishments[groupId]).length === 0) delete activePunishments[groupId]
+}
+
+async function applyPunishment(sock, groupId, userId, punishmentId) {
+  ensureGroupMap(activePunishments, groupId)
+  clearPunishment(groupId, userId)
+
+  const mentionTag = `@${userId.split("@")[0]}`
+  const now = Date.now()
+  let punishmentState = null
+  let warningText = ""
+
+  if (punishmentId === "1") {
+    punishmentState = {
+      type: "max5chars",
+      endsAt: now + 5 * 60_000
+    }
+    warningText = `${mentionTag}, punição ativada: suas mensagens só podem ter até *5 caracteres* por *5 minutos* (espaço conta). Mensagens fora disso serão apagadas.`
+  }
+
+  if (punishmentId === "2") {
+    punishmentState = {
+      type: "rate20s",
+      endsAt: now + 10 * 60_000,
+      lastAllowedAt: 0
+    }
+    warningText = `${mentionTag}, punição ativada: você só pode enviar *1 mensagem a cada 20 segundos* por *10 minutos*. Mensagens acima da taxa serão apagadas.`
+  }
+
+  if (punishmentId === "3") {
+    const letters = getRandomDifferentLetters()
+    punishmentState = {
+      type: "lettersBlock",
+      letters
+    }
+    warningText = `${mentionTag}, punição ativada: qualquer mensagem sua contendo ao menos 1 de 2 letras selecionadas aleatóriamente será apagada. Isso é *indefinido* e só acaba quando você enviar uma mensagem contendo apenas uma ou ambas essas letras.\nBoa sorte tentando descobrir quais letras elas são.`
+  }
+
+  if (punishmentId === "4") {
+    punishmentState = {
+      type: "emojiOnly",
+      endsAt: now + 5 * 60_000
+    }
+    warningText = `${mentionTag}, punição ativada: por *5 minutos* você só pode enviar mensagens formadas apenas por emojis. Qualquer mensagem contendo texto não emoji será apagada.`
+  }
+
+  if (punishmentId === "5") {
+    punishmentState = {
+      type: "mute5m",
+      endsAt: now + 5 * 60_000
+    }
+    warningText = `${mentionTag}, punição ativada: *mute total por 5 minutos*. Qualquer mensagem sua será apagada.`
+  }
+
+  if (!punishmentState) return
+
+  activePunishments[groupId][userId] = punishmentState
+
+  if (punishmentState?.endsAt) {
+    const msRemaining = Math.max(0, punishmentState.endsAt - now)
+    const timerId = setTimeout(() => {
+      clearPunishment(groupId, userId)
+    }, msRemaining)
+    activePunishments[groupId][userId].timerId = timerId
+  }
+
+  await sock.sendMessage(groupId, {
+    text: warningText,
+    mentions: [userId]
+  })
+}
+
+// =========================
+// FISCALIZAÇÃO DE PUNIÇÕES
+// =========================
+async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGroup, skipForCommand = false) {
+  if (!isGroup) return false
+  if (skipForCommand) return false
+  const punishment = activePunishments[from]?.[sender]
+  if (!punishment) return false
+
+  const now = Date.now()
+  if (punishment.endsAt && now >= punishment.endsAt) {
+    clearPunishment(from, sender)
+    return false
+  }
+
+  let shouldDelete = false
+
+  if (punishment.type === "max5chars") {
+    const measured = stripWhitespaceExceptSpace(text)
+    shouldDelete = measured.length > 5
+  }
+
+  if (punishment.type === "rate20s") {
+    if (punishment.lastAllowedAt && now - punishment.lastAllowedAt < 20_000) {
+      shouldDelete = true
+    } else {
+      punishment.lastAllowedAt = now
+    }
+  }
+
+  if (punishment.type === "lettersBlock") {
+    const letters = punishment.letters || []
+    if (isUnlockLettersMessage(text, letters)) {
+      clearPunishment(from, sender)
+      await sock.sendMessage(from, {
+        text: `@${sender.split("@")[0]}, você cumpriu a condição e foi liberado da punição das letras (${letters[0]} / ${letters[1]}).`,
+        mentions: [sender]
+      })
+      return false
+    }
+    shouldDelete = containsPunishmentLetters(text, letters)
+  }
+
+  if (punishment.type === "emojiOnly") {
+    shouldDelete = !isEmojiOnlyMessage(text)
+  }
+
+  if (punishment.type === "mute5m") {
+    shouldDelete = true
+  }
+
+  if (!shouldDelete) return false
+
+  try {
+    await sock.sendMessage(from, { delete: msg.key })
+  } catch (e) {
+    console.error("Erro ao apagar mensagem por punição", e)
+  }
+  return true
+}
 
 // Override
 const overrideJid = jidNormalizedUser("5521995409899@s.whatsapp.net")
@@ -159,8 +381,60 @@ async function startBot(){
       ""
 
     const cmd = text.toLowerCase().trim()
+    const isCommand = cmd.startsWith(prefix)
     const mentioned = (msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []).map(jidNormalizedUser)
     let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+
+    // =========================
+    // IDENTIFICAÇÃO DE ADMIN
+    // =========================
+    let senderIsAdmin = false
+    if (isGroup && isCommand) {
+      const metadata = await sock.groupMetadata(from)
+      const admins = (metadata?.participants || []).filter(p => p.admin).map(p => p.id)
+      senderIsAdmin = admins.includes(sender)
+    }
+
+    // =========================
+    // ESCOLHA PENDENTE DE PUNIÇÃO
+    // =========================
+    if (isGroup) {
+      const pending = coinPunishmentPending[from]?.[sender]
+      if (pending && !(senderIsAdmin && isCommand)) {
+        const punishmentChoice = getPunishmentChoiceFromText(text)
+        let target = pending.target
+
+        if (pending.mode === "target" && mentioned.length > 0) {
+          target = mentioned[0]
+          coinPunishmentPending[from][sender].target = target
+        }
+
+        if (pending.mode === "target" && !target) {
+          await sock.sendMessage(from, {
+            text: "Marque primeiro quem vai receber a punição.\n" + getPunishmentMenuText()
+          })
+          return
+        }
+
+        if (!punishmentChoice) {
+          await sock.sendMessage(from, {
+            text: "Escolha inválida.\n" + getPunishmentMenuText()
+          })
+          return
+        }
+
+        const punishedUser = pending.mode === "self" ? sender : target
+        await applyPunishment(sock, from, punishedUser, punishmentChoice)
+        clearPendingPunishment(from, sender)
+        return
+      }
+    }
+
+    // =========================
+    // APLICAÇÃO DE PUNIÇÃO ATIVA
+    // =========================
+    const punishedMessageDeleted = await handlePunishmentEnforcement(sock, msg, from, sender, text, isGroup, senderIsAdmin && isCommand)
+    if (punishedMessageDeleted) return
 
     if (cmd === prefix + "resenha"){
       if (!isGroup) {
@@ -183,32 +457,6 @@ async function startBot(){
           : "não há possibilidade de resenha..."
       })
       return
-    }
-
-    // =========================
-    // MENÇÃO PENDENTE DO PRÊMIO DA MOEDA
-    // =========================
-    if (isGroup && resenhaAveriguada[from] && coinPrizePending[from]?.[sender]) {
-      if (mentioned.length > 0) {
-        const alvo = mentioned[0]
-        if (!mutedUsers[from]) mutedUsers[from] = {}
-        mutedUsers[from][alvo] = true
-        delete coinPrizePending[from][sender]
-        if (Object.keys(coinPrizePending[from]).length === 0) delete coinPrizePending[from]
-
-        await sock.sendMessage(from, {
-          text: `@${alvo.split("@")[0]} foi mutado por 1 minuto como prêmio surpresa.`,
-          mentions: [alvo]
-        })
-
-        setTimeout(() => {
-          if (mutedUsers[from]) {
-            delete mutedUsers[from][alvo]
-            if (Object.keys(mutedUsers[from]).length === 0) delete mutedUsers[from]
-          }
-        }, 60_000)
-        return
-      }
     }
 
     // =========================
@@ -235,16 +483,19 @@ async function startBot(){
         coinHistoricalMax[from] = Math.max(coinHistoricalMax[from] || 0, streak)
 
         await sock.sendMessage(from, {
-          text: `Você acertou! A moeda caiu em *${game.resultado}*.\nStreak: *${streak}*\nTem um prêmio surpresa te esperando.`
+          text: `Você acertou! A moeda caiu em *${game.resultado}*.\nStreak: *${streak}*\nEscolha um alvo e a punição dele em até 30 segundos.\n${getPunishmentMenuText()}\nMarque alguém para punir.`
         })
 
-        if (!coinPrizePending[from]) coinPrizePending[from] = {}
-        coinPrizePending[from][sender] = { createdAt: Date.now() }
+        ensureGroupMap(coinPunishmentPending, from)
+        coinPunishmentPending[from][sender] = {
+          mode: "target",
+          target: null,
+          createdAt: Date.now()
+        }
 
         setTimeout(() => {
-          if (coinPrizePending[from]?.[sender]) {
-            delete coinPrizePending[from][sender]
-            if (Object.keys(coinPrizePending[from]).length === 0) delete coinPrizePending[from]
+          if (coinPunishmentPending[from]?.[sender]) {
+            clearPendingPunishment(from, sender)
           }
         }, 30_000)
       } else if (acertou) {
@@ -268,19 +519,12 @@ async function startBot(){
         })
 
         if (resenhaAveriguada[from]) {
-          if (!mutedUsers[from]) mutedUsers[from] = {}
-          mutedUsers[from][sender] = true
+          const randomPunishment = getRandomPunishmentChoice()
           await sock.sendMessage(from, {
-            text: `...E você foi mutado por 1 minuto.`,
+            text: `Punição sorteada: *${getPunishmentNameById(randomPunishment)}*`,
             mentions: [sender]
           })
-
-          setTimeout(() => {
-            if (mutedUsers[from]) {
-              delete mutedUsers[from][sender]
-              if (Object.keys(mutedUsers[from]).length === 0) delete mutedUsers[from]
-            }
-          }, 60_000)
+          await applyPunishment(sock, from, sender, randomPunishment)
         }
       }
       return
@@ -323,6 +567,9 @@ async function startBot(){
 │ ${prefix}mute @user
 │ ${prefix}unmute @user
 │ ${prefix}ban @user
+│ ${prefix}punições @user
+│ ${prefix}puniçõesclr @user
+│ ${prefix}puniçõesadd @user
 ╰━━━━━━━━━━━━━━━━━━━━╯
 `
       })
@@ -523,9 +770,9 @@ async function startBot(){
     // =========================
     if (cmd === prefix + "moeda" && isGroup){
       // bloqueia nova rodada para este jogador se já houver prêmio pendente
-      if (coinPrizePending[from]?.[sender]) {
+      if (coinPunishmentPending[from]?.[sender]) {
         await sock.sendMessage(from, {
-          text: "Você já ganhou. Use seu prêmio antes de iniciar uma próxima rodada."
+          text: "Você já tem uma escolha de punição pendente. Resolva isso antes de iniciar outra rodada."
         })
         return
       }
@@ -564,23 +811,13 @@ async function startBot(){
     }
 
     // =========================
-    // FUNÇÕES ADMIN
-    // =========================
-    const isAdmin = async (jid) => {
-      if(!isGroup) return false
-      const meta = await sock.groupMetadata(from)
-      const admins = (meta?.participants || []).filter(p => p.admin).map(p => p.id)
-      return admins.includes(jid)
-    }
-
-    // =========================
-    // MUTE / UNMUTE / BAN
+    // MUTE / UNMUTE / BAN / NUKE
     // =========================
     if(cmd.startsWith(prefix + "mute") && isGroup){
       const alvo = mentioned[0]
       if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para mutar!" })
       if(alvo === sock.user.id + "@s.whatsapp.net") return sock.sendMessage(from,{ text:"Não posso me mutar!" }) 
-      if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem mutar!" })
+      if(!senderIsAdmin) return sock.sendMessage(from,{ text:"Apenas admins podem mutar!" })
       if (!mutedUsers[from]) mutedUsers[from] = {}
       mutedUsers[from][alvo] = true
       await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi mutado! Finalmente vai calar a boca.`, mentions:[alvo] })
@@ -590,7 +827,7 @@ async function startBot(){
       const alvo = mentioned[0]
       if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para desmutar!" })
       if(alvo === sock.user.id + "@s.whatsapp.net") return sock.sendMessage(from,{ text:"Não posso me desmutar!" }) 
-      if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem desmutar!" })
+      if(!senderIsAdmin) return sock.sendMessage(from,{ text:"Apenas admins podem desmutar!" })
       if (mutedUsers[from]) {
         delete mutedUsers[from][alvo]
         if (Object.keys(mutedUsers[from]).length === 0) delete mutedUsers[from]
@@ -602,15 +839,118 @@ async function startBot(){
       const alvo = mentioned[0]
       if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para banir!" })
       if(alvo === sock.user.id + "@s.whatsapp.net") return sock.sendMessage(from,{ text:"Não posso me banir!" }) 
-      if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem banir!" })
+      if(!senderIsAdmin) return sock.sendMessage(from,{ text:"Apenas admins podem banir!" })
       await sock.groupParticipantsUpdate(from,[alvo],"remove")
       await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi banido do grupo.`, mentions:[alvo] })
+    }
+
+    if (cmd === prefix + "nuke" && isGroup) {
+      if (!senderIsAdmin) return sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
+      try {
+        await sock.sendMessage(from, { delete: msg.key })
+      } catch (e) {
+        console.error("Erro ao apagar mensagem do !nuke", e)
+      }
+      clearPunishment(from, sender)
+      if (mutedUsers[from]?.[sender]) {
+        delete mutedUsers[from][sender]
+        if (Object.keys(mutedUsers[from]).length === 0) delete mutedUsers[from]
+      }
+      if (coinPunishmentPending[from]?.[sender]) clearPendingPunishment(from, sender)
+      await sock.sendMessage(from, {
+        text: `@${sender.split("@")[0]} teve todas as punições removidas instantaneamente.`,
+        mentions: [sender]
+      })
+      return
+    }
+
+    // =========================
+    // COMANDOS ADMIN DE PUNIÇÃO
+    // =========================
+    if (cmd === prefix + "punições" && isGroup) {
+      if (!senderIsAdmin) return sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
+      const alvo = mentioned[0]
+      if (!alvo) return sock.sendMessage(from, { text: "Marque alguém para listar as punições." })
+
+      const lines = []
+      if (mutedUsers[from]?.[alvo]) lines.push("- Mute admin manual (indefinido)")
+
+      const active = activePunishments[from]?.[alvo]
+      if (active) {
+        if (active.type === "max5chars") lines.push("- Máx. 5 caracteres")
+        if (active.type === "rate20s") lines.push("- 1 mensagem/20s")
+        if (active.type === "lettersBlock") lines.push(`- Bloqueio por letras (${(active.letters || []).join("/")})`)
+        if (active.type === "emojiOnly") lines.push("- Somente emojis")
+        if (active.type === "mute5m") lines.push("- Mute total 5 minutos")
+      }
+
+      if (coinPunishmentPending[from]) {
+        const penders = Object.keys(coinPunishmentPending[from]).filter((jid) => {
+          const p = coinPunishmentPending[from][jid]
+          return jid === alvo || p.target === alvo
+        })
+        if (penders.length > 0) lines.push(`- Escolha pendente ligada ao usuário (${penders.length})`)
+      }
+
+      await sock.sendMessage(from, {
+        text: lines.length > 0
+          ? `Punições de @${alvo.split("@")[0]}:\n${lines.join("\n")}`
+          : `@${alvo.split("@")[0]} não possui punições ativas.`,
+        mentions: [alvo]
+      })
+      return
+    }
+
+    if (cmd.startsWith(prefix + "puniçõesclr") && isGroup) {
+      if (!senderIsAdmin) return sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
+      const alvo = mentioned[0]
+      if (!alvo) return sock.sendMessage(from, { text: "Marque alguém para limpar as punições." })
+
+      clearPunishment(from, alvo)
+      if (mutedUsers[from]?.[alvo]) {
+        delete mutedUsers[from][alvo]
+        if (Object.keys(mutedUsers[from]).length === 0) delete mutedUsers[from]
+      }
+
+      if (coinPunishmentPending[from]) {
+        const keys = Object.keys(coinPunishmentPending[from])
+        for (const key of keys) {
+          const pending = coinPunishmentPending[from][key]
+          if (key === alvo || pending.target === alvo) {
+            clearPendingPunishment(from, key)
+          }
+        }
+      }
+
+      await sock.sendMessage(from, {
+        text: `Todas as punições de @${alvo.split("@")[0]} foram removidas.`,
+        mentions: [alvo]
+      })
+      return
+    }
+
+    if (cmd.startsWith(prefix + "puniçõesadd") && isGroup) {
+      if (!senderIsAdmin) return sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
+      const alvo = mentioned[0]
+      if (!alvo) return sock.sendMessage(from, { text: "Marque alguém para aplicar punição." })
+
+      const parts = text.trim().split(/\s+/)
+      const punishmentChoice = getPunishmentChoiceFromText(parts[parts.length - 1] || "")
+      if (!punishmentChoice) {
+        return sock.sendMessage(from, {
+          text: "Use: !puniçõesadd @user <1-5>\n" + getPunishmentMenuText(),
+          mentions: [alvo]
+        })
+      }
+
+      await applyPunishment(sock, from, alvo, punishmentChoice)
+      return
     }
 
     // =========================
     // BLOQUEIO DE MENSAGENS DE USUÁRIOS MUTADOS
     // =========================
-    if(mutedUsers[from]?.[sender] && isGroup && sender !== sock.user.id){
+    if(mutedUsers[from]?.[sender] && isGroup && sender !== sock.user.id && !(senderIsAdmin && isCommand)){
       try{
         await sock.sendMessage(from,{ delete: msg.key })
       }catch(e){
@@ -618,7 +958,9 @@ async function startBot(){
       }
       return
     }
-
+    // =========================
+    // COMANDOS DE STREAKS
+    // =========================
     if (cmd === prefix + "streakranking" && isGroup) {
       const maxMap = coinStreakMax[from] || {}
       const currentMap = coinStreaks[from] || {}
