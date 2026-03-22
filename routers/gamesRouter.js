@@ -63,7 +63,33 @@ async function handleGameCommands(ctx) {
     }
     return true
   }
+// fé que não quebra
+function handleGamesCommand(msg, user, group, sendMessage) {
+  const command = msg.body.toLowerCase();
 
+  if (command === '!brincadeiras') {
+    const reply = `
+╭━━━〔 🎮 SUBMENU: BRINCADEIRAS 〕━━━╮
+│ Jogos de lobby:
+│ - adivinhacao
+│ - batata
+│ - dados
+│ - roleta
+│ - moeda
+│ - streak / streakranking
+│
+│ Jogos rápidos:
+│ - embaralhado
+│ - memoria
+│ - reacao
+│ - piada
+╰━━━━━━━━━━━━━━━━━━━━╯
+    `;
+    sendMessage(reply);
+  }
+}
+
+module.exports = { handleGamesCommand };
   if (cmdName === prefix + "jogos" && cmdArg1 === "stats") {
     const profile = economyService.getProfile(sender)
     await sock.sendMessage(from, {
