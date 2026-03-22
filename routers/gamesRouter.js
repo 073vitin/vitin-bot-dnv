@@ -1278,7 +1278,11 @@ async function handleGameMessageFlow(ctx) {
   return false
 }
 
+// Retrocompatibilidade: alguns ambientes ainda referenciam handleGamesCommand.
+const handleGamesCommand = handleGameCommands
+
 module.exports = {
   handleGameCommands,
+  handleGamesCommand,
   handleGameMessageFlow,
 }
