@@ -1,3 +1,6 @@
 node_modules/
 auth_info/
 .env
+auth/
+.data/
+plano-roadmap balanceamento e modularização.md

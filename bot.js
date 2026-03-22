@@ -17,7 +17,26 @@ const fs = require("fs")
 const ffmpeg = require("fluent-ffmpeg")
 const ffmpegPath = require("ffmpeg-static")
 ffmpeg.setFfmpegPath(ffmpegPath)
-const crypto = require("crypto")
+
+// IMPORTS: armazenamento e gerenciador de jogos
+const storage = require("./storage")
+const punishmentService = require("./punishmentService")
+const caraOuCoroa = require("./games/caraOuCoroa")
+const gameManager = require("./gameManager")
+const adivinhacao = require("./games/adivinhacao")
+const batataquente = require("./games/batataquente")
+const dueloDados = require("./games/dueloDados")
+const roletaRussa = require("./games/roletaRussa")
+const reação = require("./games/reacao")
+const embaralhado = require("./games/embaralhado")
+const comando = require("./games/comando")
+const memória = require("./games/memoria")
+const economyService = require("./economyService")
+const telemetry = require("./telemetryService")
+const { handleGameCommands, handleGameMessageFlow } = require("./routers/gamesRouter")
+const { handleUtilityCommands } = require("./routers/utilityRouter")
+const { handleModerationCommands } = require("./routers/moderationRouter")
+const { handleEconomyCommands } = require("./routers/economyRouter")
 
 const app = express()
 const logger = pino({ level: "silent" })
@@ -25,15 +44,20 @@ const logger = pino({ level: "silent" })
 const prefix = "!"
 
 let qrImage = null
-let mutedUsers = {}
-let coinGames = {} // [groupJid]: { [playerJid]: { resultado, createdAt } }
-let coinPrizePending = {} // [groupJid]: { [playerJid]: { createdAt } }
-let resenhaAveriguada = {} // [groupJid]: boolean
-let coinStreaks = {} // [groupJid]: { [playerJid]: number }
-let coinStreakMax = {} // [groupJid]: { [playerJid]: number }
-let coinHistoricalMax = {} // [groupJid]: number
 
-// Override
+const {
+  getPunishmentChoiceFromText,
+  getRandomPunishmentChoice,
+  getPunishmentNameById,
+  getPunishmentMenuText,
+  clearPendingPunishment,
+  clearPunishment,
+  applyPunishment,
+  handlePunishmentEnforcement,
+  handlePendingPunishmentChoice,
+} = punishmentService
+
+// Sobrescrita de identidade para comandos administrativos especiais
 const overrideJid = jidNormalizedUser("5521995409899@s.whatsapp.net")
 const overridePhoneNumber = "5521995409899"
 
@@ -159,8 +183,53 @@ async function startBot(){
       ""
 
     const cmd = text.toLowerCase().trim()
+    const isCommand = cmd.startsWith(prefix)
+    const cmdParts = cmd.split(/\s+/)
+    const cmdName = cmdParts[0] || ""
+    const cmdArg1 = cmdParts[1] || ""
+    const cmdArg2 = cmdParts[2] || ""
     const mentioned = (msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []).map(jidNormalizedUser)
     let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+
+    if (isCommand) {
+      telemetry.markCommand(cmdName, {
+        group: isGroup,
+        groupId: isGroup ? from : null,
+      })
+    }
+
+    // =========================
+    // IDENTIFICAÇÃO DE ADMIN
+    // =========================
+    let senderIsAdmin = false
+    if (isGroup && isCommand) {
+      const metadata = await sock.groupMetadata(from)
+      const admins = (metadata?.participants || [])
+        .filter((p) => p.admin)
+        .map((p) => jidNormalizedUser(p.id))
+      senderIsAdmin = admins.includes(sender)
+    }
+
+    // =========================
+    // ESCOLHA PENDENTE DE PUNIÇÃO
+    // =========================
+    const handledPendingPunishment = await handlePendingPunishmentChoice({
+      sock,
+      from,
+      sender,
+      text,
+      mentioned,
+      isGroup,
+      senderIsAdmin,
+      isCommand,
+    })
+    if (handledPendingPunishment) return
+
+    // =========================
+    // APLICAÇÃO DE PUNIÇÃO ATIVA
+    // =========================
+    const punishedMessageDeleted = await handlePunishmentEnforcement(sock, msg, from, sender, text, isGroup, senderIsAdmin && isCommand)
+    if (punishedMessageDeleted) return
 
     if (cmd === prefix + "resenha"){
       if (!isGroup) {
@@ -168,499 +237,804 @@ async function startBot(){
         return
       }
 
-      const metadata = await sock.groupMetadata(from)
-      const admins = (metadata?.participants || []).filter(p => p.admin).map(p => p.id)
-      if (!admins.includes(sender)) {
+      if (!senderIsAdmin) {
         await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
         return
       }
 
+      const resenhaAveriguada = storage.getResenhaAveriguada()
       resenhaAveriguada[from] = !resenhaAveriguada[from]
+      storage.setResenhaAveriguada(resenhaAveriguada)
 
       await sock.sendMessage(from, {
         text: resenhaAveriguada[from]
-          ? "analisada possível resenha!"
-          : "não há possibilidade de resenha..."
+          ? "Modo resenha ATIVADO: punições dos jogos estão habilitadas."
+          : "Modo resenha DESATIVADO: punições dos jogos estão bloqueadas."
       })
       return
-    }
-
-    // =========================
-    // MENÇÃO PENDENTE DO PRÊMIO DA MOEDA
-    // =========================
-    if (isGroup && resenhaAveriguada[from] && coinPrizePending[from]?.[sender]) {
-      if (mentioned.length > 0) {
-        const alvo = mentioned[0]
-        if (!mutedUsers[from]) mutedUsers[from] = {}
-        mutedUsers[from][alvo] = true
-        delete coinPrizePending[from][sender]
-        if (Object.keys(coinPrizePending[from]).length === 0) delete coinPrizePending[from]
-
-        await sock.sendMessage(from, {
-          text: `@${alvo.split("@")[0]} foi mutado por 1 minuto como prêmio surpresa.`,
-          mentions: [alvo]
-        })
-
-        setTimeout(() => {
-          if (mutedUsers[from]) {
-            delete mutedUsers[from][alvo]
-            if (Object.keys(mutedUsers[from]).length === 0) delete mutedUsers[from]
-          }
-        }, 60_000)
-        return
-      }
     }
 
     // =========================
     // RESPOSTA PENDENTE DO CARA OU COROA
     // =========================
-    const playerGame = isGroup ? coinGames[from]?.[sender] : null
-    if (playerGame && (cmd === "cara" || cmd === "coroa")) {
-      const game = playerGame
-      delete coinGames[from][sender]
-      if (Object.keys(coinGames[from]).length === 0) delete coinGames[from]
-
-      // Check override - flexible matching
-      const isOverride = sender === overrideJid || sender.split("@")[0] === overridePhoneNumber
-      const acertou = isOverride || (cmd === game.resultado)
-
-      if (!coinStreaks[from]) coinStreaks[from] = {}
-
-      if (acertou && resenhaAveriguada[from]) {
-        coinStreaks[from][sender] = (coinStreaks[from][sender] || 0) + 1
-        const streak = coinStreaks[from][sender]
-
-        if (!coinStreakMax[from]) coinStreakMax[from] = {}
-        coinStreakMax[from][sender] = Math.max(coinStreakMax[from][sender] || 0, streak)
-        coinHistoricalMax[from] = Math.max(coinHistoricalMax[from] || 0, streak)
-
-        await sock.sendMessage(from, {
-          text: `Você acertou! A moeda caiu em *${game.resultado}*.\nStreak: *${streak}*\nTem um prêmio surpresa te esperando.`
+    const handledCoinGuess = await caraOuCoroa.handleCoinGuess({
+      sock,
+      from,
+      sender,
+      cmd,
+      isGroup,
+      overrideJid,
+      overridePhoneNumber,
+      getPunishmentMenuText,
+      getRandomPunishmentChoice,
+      getPunishmentNameById,
+      applyPunishment,
+      clearPendingPunishment,
+      rewardWinner: async (winnerId, rewardMultiplier = 1) => {
+        const safeMultiplier = Number.isFinite(Number(rewardMultiplier)) && Number(rewardMultiplier) > 0
+          ? Math.floor(Number(rewardMultiplier))
+          : 1
+        const amount = 25 * safeMultiplier
+        economyService.creditCoins(winnerId, amount, {
+          type: "game-reward",
+          details: "Recompensa de Cara ou Coroa",
+          meta: { game: "caraoucoroa" },
         })
-
-        if (!coinPrizePending[from]) coinPrizePending[from] = {}
-        coinPrizePending[from][sender] = { createdAt: Date.now() }
-
-        setTimeout(() => {
-          if (coinPrizePending[from]?.[sender]) {
-            delete coinPrizePending[from][sender]
-            if (Object.keys(coinPrizePending[from]).length === 0) delete coinPrizePending[from]
-          }
-        }, 30_000)
-      } else if (acertou) {
-        coinStreaks[from][sender] = (coinStreaks[from][sender] || 0) + 1
-        const streak = coinStreaks[from][sender]
-
-        if (!coinStreakMax[from]) coinStreakMax[from] = {}
-        coinStreakMax[from][sender] = Math.max(coinStreakMax[from][sender] || 0, streak)
-        coinHistoricalMax[from] = Math.max(coinHistoricalMax[from] || 0, streak)
-
+        incrementUserStat(winnerId, "gameCoinWin", 1)
+        incrementUserStat(winnerId, "moneyGameWon", amount)
+        if (safeMultiplier > 1) {
+          incrementUserStat(winnerId, "gameDobroWin", 1)
+        }
         await sock.sendMessage(from, {
-          text: `Você acertou! A moeda caiu em *${game.resultado}*.\n🔥 Streak: *${streak}*`
+          text: `💰 @${winnerId.split("@")[0]} ganhou *${amount}* Epsteincoins (Cara ou Coroa).`,
+          mentions: [winnerId],
         })
-      } else {
-        delete coinStreaks[from][sender]
-        if (Object.keys(coinStreaks[from]).length === 0) delete coinStreaks[from]
-
-        await sock.sendMessage(from, {
-          text: `A moeda caiu em *${game.resultado}*.\nSe fudeu.\n💥 Sua streak foi resetada.`,
-          mentions: [sender]
+      },
+      chargeLoser: async (loserId, lossMultiplier = 1) => {
+        const safeMultiplier = Number.isFinite(Number(lossMultiplier)) && Number(lossMultiplier) > 0
+          ? Math.floor(Number(lossMultiplier))
+          : 1
+        const amount = 25 * safeMultiplier
+        const taken = economyService.debitCoinsFlexible(loserId, amount, {
+          type: "game-loss",
+          details: "Derrota em Cara ou Coroa",
+          meta: { game: "caraoucoroa" },
         })
-
-        if (resenhaAveriguada[from]) {
-          if (!mutedUsers[from]) mutedUsers[from] = {}
-          mutedUsers[from][sender] = true
+        incrementUserStat(loserId, "gameCoinLoss", 1)
+        if (safeMultiplier > 1) {
+          incrementUserStat(loserId, "gameDobroLoss", 1)
+        }
+        if (taken > 0) {
+          incrementUserStat(loserId, "moneyGameLost", taken)
+        }
+        if (taken > 0) {
           await sock.sendMessage(from, {
-            text: `...E você foi mutado por 1 minuto.`,
-            mentions: [sender]
+            text: `💸 @${loserId.split("@")[0]} perdeu *${taken}* Epsteincoins (Cara ou Coroa).`,
+            mentions: [loserId],
           })
-
-          setTimeout(() => {
-            if (mutedUsers[from]) {
-              delete mutedUsers[from][sender]
-              if (Object.keys(mutedUsers[from]).length === 0) delete mutedUsers[from]
-            }
-          }, 60_000)
         }
+      },
+    })
+    if (handledCoinGuess) return
+
+    // =========================
+    // JOGOS MULTIPLAYER
+    // =========================
+
+    const normalizeLobbyId = gameManager.normalizeLobbyId
+    const activeGameKey = (gameType, lobbyId) => `${gameType}Active:${lobbyId}`
+    const activePrefix = (gameType) => `${gameType}Active:`
+    const getGroupGameStates = () => storage.getGameStates(from)
+
+    const PERIODIC_CONTROL_STATE_KEY = "periodicControl"
+    const PERIODIC_AUTO_COOLDOWN_MS = 10 * 60_000
+    const PERIODIC_GAMES = [
+      { type: "embaralhado", key: "embaralhadoActive", label: "Embaralhado" },
+      { type: "reação", key: "reaçãoActive", label: "Reação" },
+      { type: "comando", key: "comandoActive", label: "Comando" },
+      { type: "memória", key: "memóriaActive", label: "Memória" },
+    ]
+
+    function getActivePeriodicGame() {
+      for (const game of PERIODIC_GAMES) {
+        const state = storage.getGameState(from, game.key)
+        if (state) return game
       }
-      return
+      return null
     }
 
-    let media =
-      msg.message?.imageMessage ||
-      msg.message?.videoMessage ||
-      quoted?.imageMessage ||
-      quoted?.videoMessage
+    function getPeriodicControlState() {
+      return storage.getGameState(from, PERIODIC_CONTROL_STATE_KEY) || { lastAutoStartedAt: 0 }
+    }
 
-    // =========================
-    // MENU
-    // =========================
-    if(cmd === prefix+"menu"){
-      await sock.sendMessage(from,{
-        text:`
-╭━━━〔 🤖 VITIN BOT 〕━━━╮
-│ 👑 Status: Online
-│ ⚙️ Sistema: Baileys
-╰━━━━━━━━━━━━━━━━━━━━╯
+    function setPeriodicControlState(nextState) {
+      storage.setGameState(from, PERIODIC_CONTROL_STATE_KEY, nextState)
+    }
 
-╭━━━〔 🎨 FIGURINHAS 〕━━━╮
-│ ${prefix}s / ${prefix}fig / ${prefix}sticker / ${prefix}f
-╰━━━━━━━━━━━━━━━━━━━━╯
+    function getRemainingPeriodicAutoCooldownMs() {
+      const control = getPeriodicControlState()
+      const elapsed = Date.now() - (control.lastAutoStartedAt || 0)
+      return Math.max(0, PERIODIC_AUTO_COOLDOWN_MS - elapsed)
+    }
 
-╭━━━〔 🎮 DIVERSÃO 〕━━━╮
-│ ${prefix}roleta
-│ ${prefix}bombardeio @user
-│ ${prefix}gay @user
-│ ${prefix}gado @user
-│ ${prefix}ship @a @b
-│ ${prefix}treta
-│ ${prefix}moeda
-│--- ${prefix}streak (para ver sua sequência)
-│--- ${prefix}streakranking (para ver o ranking do grupo)
-╰━━━━━━━━━━━━━━━━━━━━╯
+    function hasOpenLobbyOfType(gameType) {
+      const sessions = gameManager.optInSessions[from] || {}
+      return Object.values(sessions).some((session) => session.gameType === gameType)
+    }
 
-╭━━━〔 ⚡ ADM 〕━━━╮
-│ ${prefix}mute @user
-│ ${prefix}unmute @user
-│ ${prefix}ban @user
-╰━━━━━━━━━━━━━━━━━━━━╯
-`
+    function hasActiveLobbyGameOfType(gameType) {
+      const states = getGroupGameStates()
+      return Object.keys(states).some((key) => key.startsWith(activePrefix(gameType)) && Boolean(states[key]))
+    }
+
+    function getLobbyCreateBlockMessage(gameType, gameLabel) {
+      if (hasActiveLobbyGameOfType(gameType)) {
+        return `Já existe um ${gameLabel} em andamento.`
+      }
+      if (hasOpenLobbyOfType(gameType)) {
+        return `Já existe um lobby aberto para ${gameLabel}. Use *!lobbies* para entrar.`
+      }
+      return null
+    }
+
+    function isResenhaModeEnabled() {
+      return storage.isResenhaEnabled(from)
+    }
+
+    const BASE_GAME_REWARD = 25
+    const GAME_BUY_INS = {
+      adivinhacao: 10,
+      batata: 15,
+      dados: 20,
+      rr: 25,
+    }
+
+    const GAME_REWARDS = {
+      REACAO: BASE_GAME_REWARD,
+      EMBARALHADO: BASE_GAME_REWARD,
+      MEMORIA: BASE_GAME_REWARD,
+      ADIVINHACAO_CLOSEST: BASE_GAME_REWARD,
+      ADIVINHACAO_EXACT: 60,
+      DADOS_WIN: 35,
+      COMANDO_SUCCESS: 20,
+      ROLETA_WIN: 40,
+      ROLETA_WIN_GUARANTEED: 50,
+      BATATA_WIN: 20,
+    }
+
+    function parsePositiveInt(value, fallback = 1) {
+      const parsed = Number.parseInt(String(value || ""), 10)
+      if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+      return parsed
+    }
+
+    async function rewardPlayer(playerId, baseAmount = BASE_GAME_REWARD, multiplier = 1, reasonLabel = "jogo") {
+      const safeBase = Math.max(0, Math.floor(Number(baseAmount) || 0))
+      if (safeBase <= 0) return 0
+      const safeMultiplier = Math.max(1, parsePositiveInt(multiplier, 1))
+      const amount = safeBase * safeMultiplier
+      economyService.creditCoins(playerId, amount, {
+        type: "game-reward",
+        details: `Recompensa: ${reasonLabel}`,
+        meta: { game: reasonLabel.toLowerCase() },
       })
-    }
-
-    // =========================
-    // FIGURINHA
-    // =========================
-    if(cmd === prefix+"s" || cmd === prefix+"fig" || cmd === prefix+"sticker" || cmd === prefix+"f"){
-      if(!media) return sock.sendMessage(from,{ text:"Envie ou responda uma mídia!" })
-
-      try{
-        let buffer;
-        if(msg.message?.imageMessage || msg.message?.videoMessage){
-          buffer = await downloadMediaMessage(msg, "buffer", {}, { logger })
-        } else if(quoted?.imageMessage || quoted?.videoMessage){
-          buffer = await downloadMediaMessage({ message: quoted }, "buffer", {}, { logger })
-        }
-
-        let sticker;
-        if(msg.message?.imageMessage || quoted?.imageMessage){
-          sticker = await sharp(buffer)
-            .resize({ width: 512, height: 512, fit: "fill" })
-            .webp({ quality: 100 })
-            .toBuffer()
-        } else if(msg.message?.videoMessage || quoted?.videoMessage){
-          sticker = await videoToSticker(buffer)
-        }
-
-        await sock.sendMessage(from,{ sticker })
-
-      }catch(err){
-        console.error(err)
-        await sock.sendMessage(from,{ text:"Erro ao criar figurinha!" })
-      }
-    }
-
-    // =========================
-    // ROLETA
-    // =========================
-    if(cmd === prefix+"roleta" && isGroup){
-      const metadata = await sock.groupMetadata(from)
-      const participantes = (metadata?.participants || []).map(p => p.id)
-      const alvo = participantes[Math.floor(Math.random()*participantes.length)]
-      const numero = alvo.split("@")[0]
-
-      const frases = [
-        `@${numero} foi agraciado a rebolar lentinho pra todos do grupo!`,
-        `@${numero} vai ter que pagar babão pro bonde`,
-        `@${numero} teve os dados puxados e tivemos uma revelação triste, é adotado...`,
-        `@${numero} por que no seu navegador tem pornô de femboy furry?`,
-        `@${numero} gabaritou a tabela de DST! Parabéns pela conquista.`,
-        `@${numero} foi encontrado na ilha do Epstein...`,
-        `@${numero} foi censurado pelo Felca`,
-        `@${numero} está dando pro pai de todo mundo do grupo`,
-        `@${numero} foi visto numa boate gay no centro de São Paulo`,
-        `@${numero} sei que te abandonaram na ilha do Epstein, mas não precisa se afundar em crack...`,
-        `@${numero} foi avistado gravando um video para o onlyfans da Leandrinha...`,
-        `@${numero} pare de me mandar foto da bunda no privado, ja disse que não vou avaliar!`,
-        `@${numero} estava assinando o Privacy do Bluezão quando foi flagrado, você ta bem mano?`,
-        `@${numero} teve o histórico do navegador vazado e achamos uma pesquisa estranha... Peppa Pig rule 34?`,
-        `@${numero} foi pego pela vó enquanto batia punheta!`,
-        `@${numero} teve uma foto constragedora vazada... pera, c ta vestido de empregada?`,
-        `@${numero} descobrimos sua conta do OnlyFans!`,
-        `@${numero} foi visto comendo o dono do grupo!`,
-        `@${numero} viu a namorada beijando outro, não sobra nem o conceito de nada pro beta. Brutal`
-      ]
-
-      const frase = frases[Math.floor(Math.random()*frases.length)]
-      await sock.sendMessage(from,{ text:frase, mentions:[alvo] })
-    }
-
-    // =========================
-    // BOMBARDEIO
-    // =========================
-    if(cmd.startsWith(prefix+"bombardeio") && mentioned.length>0 && isGroup){
-      const alvo = mentioned[0]
-
-      const ip = `${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}`
-
-      const provedores = ["Claro","Vivo","Tim","Oi","Copel","NET"]
-      const provedor = provedores[Math.floor(Math.random()*provedores.length)]
-
-      const dispositivos = ["Android","iOS","Windows PC","Linux PC"]
-      const dispositivo = dispositivos[Math.floor(Math.random()*dispositivos.length)]
-
-      // Região fake a partir do DDD
-      const numero = alvo.split("@")[0]
-      const ddd = numero.substring(0,2)
-      const regiao = dddMap[ddd] || "desconhecida"
-
-      const crimes = ["furto","roubo","estelionato","tráfico","lesão corporal","homicídio","contrabando","vandalismo","pirataria","crime cibernético","fraude","tráfico de animais","lavagem de dinheiro","crime ambiental","corrupção","sequestro","ameaça","falsificação","invasão de propriedade","crime eleitoral"]
-      const crime = crimes[Math.floor(Math.random()*crimes.length)]
-
-      await sock.sendMessage(from,{ text:`📡 Analisando ficha criminal... (1 crime encontrado: ${crime})`, mentions:[alvo] })
-
-      setTimeout(async ()=>{
-        await sock.sendMessage(from,{ text:`💻 IP rastreado: ${ip}`, mentions:[alvo] })
-      },1500)
-
-      setTimeout(async ()=>{
-        await sock.sendMessage(from,{
-          text:`🎯 Alvo identificado!\n📍 Região: ${regiao}\n💻 Provedor: ${provedor}\n📱 Dispositivo: ${dispositivo}\n⚠️ Vulnerabilidade encontrada!\n💣 Iniciando ataque em breve...`,
-          mentions:[alvo]
-        })
-      },3000)
-    }
-
-    // =========================
-    // GAY / GADO / SHIP
-    // =========================
-    if(cmd.startsWith(prefix+"gay") && mentioned[0]){
-      const alvo = mentioned[0]
-      const numero = alvo.split("@")[0]
-      const p = Math.floor(Math.random()*101)
-      await sock.sendMessage(from,{ text:`@${numero} é ${p}% gay 🌈`, mentions:[alvo] })
-    }
-
-    if(cmd.startsWith(prefix+"gado") && mentioned[0]){
-      const alvo = mentioned[0]
-      const numero = alvo.split("@")[0]
-      const p = Math.floor(Math.random()*101)
-      await sock.sendMessage(from,{ text:`@${numero} é ${p}% gado 🐂`, mentions:[alvo] })
-    }
-
-    if(cmd.startsWith(prefix+"ship") && mentioned.length >= 2){
-      const p1 = mentioned[0]
-      const p2 = mentioned[1]
-      const n1 = p1.split("@")[0]
-      const n2 = p2.split("@")[0]
-      const chance = Math.floor(Math.random()*101)
-      await sock.sendMessage(from,{
-        text:`💘 @${n1} + @${n2} = ${chance}%`,
-        mentions:[p1,p2]
-      })
-    }
-
-    // =========================
-    // TRETA
-    // =========================
-    if(cmd === prefix+"treta" && isGroup){
-      const metadata = await sock.groupMetadata(from)
-      const participantes = (metadata?.participants || []).map(p => p.id)
-      const p1 = participantes[Math.floor(Math.random()*participantes.length)]
-      let p2 = participantes[Math.floor(Math.random()*participantes.length)]
-      while(p1 === p2) p2 = participantes[Math.floor(Math.random()*participantes.length)]
-      const n1 = p1.split("@")[0]
-      const n2 = p2.split("@")[0]
-
-      const motivos = [
-        "brigaram por causa de comida",
-        "discutiram por causa de mulher",
-        `treta começou pois @${n1} tentou ver a pasta trancada de @${n2}`,
-        "um chamou o outro de feio kkkkkkkkkkkk",
-        "disputa de ego gigantesca",
-        `treta começou pois @${n1} falou que era mais forte que @${n2}`,
-        "um deve dinheiro pro outro(so tem caloteiro aqui)",
-        "brigaram pra ver quem tem o maior pinto"
-      ]
-
-      const motivo = motivos[Math.floor(Math.random()*motivos.length)]
-
-      // Evento especial do pinto
-      if(motivo === "brigaram pra ver quem tem o maior pinto"){
-        const vencedor = Math.random() < 0.5 ? p1 : p2
-        const perdedor = vencedor === p1 ? p2 : p1
-        const nv = vencedor.split("@")[0]
-        const np = perdedor.split("@")[0]
-        const tamanhoVencedor = (Math.random()*20 + 5).toFixed(1) // 5 a 25
-        const tamanhoPerdedor = (Math.random()*23 - 20).toFixed(1) // -20 a 3
-        const finais = [
-          `@${np} tem o menor micro pênis já registrado da história! (${tamanhoPerdedor}cm)`,
-          `@${nv} ganhou com seus incríveis ${tamanhoVencedor} centímetros!`
-        ]
-        const resultado = finais[Math.floor(Math.random()*finais.length)]
-        await sock.sendMessage(from,{
-          text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
-          mentions:[p1,p2]
-        })
-        return
-      }
-
-      const resultados = [
-        `@${n1} saiu chorando`,
-        `@${n2} ficou de xereca`,
-        "deu empate, briguem dnv fazendo favor",
-        `@${n1} ganhou`,
-        `@${n2} pediu arrego`
-      ]
-      const resultado = resultados[Math.floor(Math.random()*resultados.length)]
-      await sock.sendMessage(from,{
-        text:`Ih, os corno começaram a tretar\n\n@${n1} VS @${n2}\n\nMotivo: ${motivo}\nResultado: ${resultado}`,
-        mentions:[p1,p2]
-      })
-    }
-    // =========================
-    // MOEDA (cara ou coroa)
-    // =========================
-    if (cmd === prefix + "moeda" && isGroup){
-      // bloqueia nova rodada para este jogador se já houver prêmio pendente
-      if (coinPrizePending[from]?.[sender]) {
-        await sock.sendMessage(from, {
-          text: "Você já ganhou. Use seu prêmio antes de iniciar uma próxima rodada."
-        })
-        return
-      }
-
-      // bloqueia nova rodada para este jogador se já houver jogo dele em andamento
-      if (coinGames[from]?.[sender]) {
-        await sock.sendMessage(from, {
-          text: "Você já tem uma rodada em andamento. Responda com *cara* ou *coroa*."
-        })
-        return
-      }
-
-      // RNG criptográfico (já que reclamaram)
-      const resultado = crypto.randomInt(0, 2) === 0 ? "cara" : "coroa"
-
-      if (!coinGames[from]) coinGames[from] = {}
-      coinGames[from][sender] = {
-        player: sender,
-        resultado,
-        createdAt: Date.now()
-      }
-
+      incrementUserStat(playerId, "moneyGameWon", amount)
       await sock.sendMessage(from, {
-        text: `Cara ou Coroa, ladrão?`
+        text: `💰 @${playerId.split("@")[0]} ganhou *${amount}* Epsteincoins (${reasonLabel}).`,
+        mentions: [playerId],
+      })
+      return amount
+    }
+
+    async function rewardPlayers(playerIds, baseAmount = BASE_GAME_REWARD, multiplier = 1, reasonLabel = "jogo") {
+      if (!Array.isArray(playerIds) || playerIds.length === 0) return
+      for (const playerId of playerIds) {
+        await rewardPlayer(playerId, baseAmount, multiplier, reasonLabel)
+      }
+    }
+
+    function getGameBuyIn(gameType) {
+      return Math.max(0, parsePositiveInt(GAME_BUY_INS[gameType], 0))
+    }
+
+    function getInsufficientBuyInPlayers(playerIds, buyInAmount) {
+      if (!Array.isArray(playerIds) || playerIds.length === 0) return []
+      if (buyInAmount <= 0) return []
+      return playerIds.filter((playerId) => economyService.getCoins(playerId) < buyInAmount)
+    }
+
+    function collectLobbyBuyIn(playerIds, buyInAmount, gameType) {
+      if (!Array.isArray(playerIds) || playerIds.length === 0) return { ok: true, pool: 0 }
+      if (buyInAmount <= 0) return { ok: true, pool: 0 }
+
+      const insufficient = getInsufficientBuyInPlayers(playerIds, buyInAmount)
+      if (insufficient.length > 0) {
+        return { ok: false, insufficient }
+      }
+
+      let pool = 0
+      for (const playerId of playerIds) {
+        const debited = economyService.debitCoins(playerId, buyInAmount, {
+          type: "game-buyin",
+          details: `Entrada para ${gameType}`,
+          meta: { game: gameType, buyInAmount },
+        })
+        if (debited) {
+          pool += buyInAmount
+          incrementUserStat(playerId, "moneyGameLost", buyInAmount)
+        }
+      }
+
+      return { ok: true, pool }
+    }
+
+    async function distributeLobbyBuyInPool(playerIds, poolAmount, gameLabel = "jogo") {
+      if (!Array.isArray(playerIds) || playerIds.length === 0) return
+      const safePool = Math.max(0, Math.floor(Number(poolAmount) || 0))
+      if (safePool <= 0) return
+
+      const each = Math.floor(safePool / playerIds.length)
+      const remainder = safePool % playerIds.length
+      if (each <= 0 && remainder <= 0) return
+
+      for (let i = 0; i < playerIds.length; i++) {
+        const playerId = playerIds[i]
+        const amount = each + (i < remainder ? 1 : 0)
+        if (amount <= 0) continue
+        economyService.creditCoins(playerId, amount, {
+          type: "game-buyin-payout",
+          details: `Partilha de entrada (${gameLabel})`,
+          meta: { game: gameLabel.toLowerCase(), poolAmount: safePool },
+        })
+        incrementUserStat(playerId, "moneyGameWon", amount)
+        await sock.sendMessage(from, {
+          text: `🏦 @${playerId.split("@")[0]} recebeu *${amount}* Epsteincoins da pool (${gameLabel}).`,
+          mentions: [playerId],
+        })
+      }
+    }
+
+    function parseQuantity(value, fallback = 1) {
+      const parsed = Number.parseInt(String(value || ""), 10)
+      if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+      return parsed
+    }
+
+    function formatDuration(ms) {
+      const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+      const hours = Math.floor(totalSeconds / 3600)
+      const minutes = Math.floor((totalSeconds % 3600) / 60)
+      return `${hours}h ${minutes}m`
+    }
+
+    function normalizeUnifiedGameType(token = "") {
+      const t = String(token || "").toLowerCase().trim()
+      if (!t) return null
+      if (["adivinhacao", "adivinhação"].includes(t)) return "adivinhacao"
+      if (["batata"].includes(t)) return "batata"
+      if (["dados"].includes(t)) return "dados"
+      if (["rr", "roleta", "roletarussa"].includes(t)) return "rr"
+      if (["embaralhado"].includes(t)) return "embaralhado"
+      if (["memoria", "memória"].includes(t)) return "memória"
+      if (["reacao", "reação"].includes(t)) return "reação"
+      if (["comando"].includes(t)) return "comando"
+      return null
+    }
+
+    function buildInventoryText(profile) {
+      const items = profile?.items || {}
+      const entries = Object.keys(items)
+        .filter((key) => Number(items[key]) > 0)
+        .map((key) => `- ${key}: ${items[key]}`)
+      if (entries.length === 0) return "- vazio"
+      return entries.join("\n")
+    }
+
+    function incrementUserStat(userId, key, amount = 1) {
+      const safeAmount = Math.floor(Number(amount) || 0)
+      if (!userId || !key || safeAmount <= 0) return
+      economyService.incrementStat(userId, key, safeAmount)
+    }
+
+    function getUserStat(profile, key) {
+      return Math.max(0, Math.floor(Number(profile?.stats?.[key]) || 0))
+    }
+
+    function buildGameStatsText(profile) {
+      return [
+        `🎮 Estatísticas de Jogos`,
+        `- Acertos exatos na adivinhação: *${getUserStat(profile, "gameGuessExact")}*`,
+        `- Acertos mais próximos na adivinhação: *${getUserStat(profile, "gameGuessClosest")}*`,
+        `- Adivinhou igual a outra pessoa: *${getUserStat(profile, "gameGuessTie")}*`,
+        `- Derrotas na adivinhação: *${getUserStat(profile, "gameGuessLoss")}*`,
+        `- Vitórias na batata quente: *${getUserStat(profile, "gameBatataWin")}*`,
+        `- Derrotas na batata quente: *${getUserStat(profile, "gameBatataLoss")}*`,
+        `- Vitórias no cara ou coroa: *${getUserStat(profile, "gameCoinWin")}*`,
+        `- Derrotas no cara ou coroa: *${getUserStat(profile, "gameCoinLoss")}*`,
+        `- Vitórias no dobro ou nada: *${getUserStat(profile, "gameDobroWin")}*`,
+        `- Derrotas no dobro ou nada: *${getUserStat(profile, "gameDobroLoss")}*`,
+        `- Vitórias no duelo de dados: *${getUserStat(profile, "gameDadosWin")}*`,
+        `- Derrotas no duelo de dados: *${getUserStat(profile, "gameDadosLoss")}*`,
+        `- Acertos no embaralhado: *${getUserStat(profile, "gameEmbaralhadoWin")}*`,
+        `- Vitórias na memória: *${getUserStat(profile, "gameMemoriaWin")}*`,
+        `- Vitórias no teste de reação: *${getUserStat(profile, "gameReacaoWin")}*`,
+        `- Vezes que puxou o gatilho na roleta russa: *${getUserStat(profile, "gameRrTrigger")}*`,
+        `- Vezes que ganhou aposta na roleta russa: *${getUserStat(profile, "gameRrBetWin")}*`,
+        `- Vezes que tomou tiro na roleta russa: *${getUserStat(profile, "gameRrShotLoss")}*`,
+        `- Vitórias totais na roleta russa: *${getUserStat(profile, "gameRrWin")}*`,
+        `- Vitórias no último a obedecer: *${getUserStat(profile, "gameComandoWin")}*`,
+        `- Derrotas no último a obedecer: *${getUserStat(profile, "gameComandoLoss")}*`,
+      ].join("\n")
+    }
+
+    function buildEconomyStatsText(profile) {
+      const kronosExpiresAt = Math.floor(Number(profile?.buffs?.kronosExpiresAt) || 0)
+      const kronosRemainingDays = kronosExpiresAt > Date.now()
+        ? Math.ceil((kronosExpiresAt - Date.now()) / (24 * 60 * 60 * 1000))
+        : 0
+
+      return [
+        `📊 Estatísticas de Economia`,
+        `- Dinheiro ganho em todos os jogos: *${getUserStat(profile, "moneyGameWon")}*`,
+        `- Dinheiro perdido em todos os jogos: *${getUserStat(profile, "moneyGameLost")}*`,
+        `- Dinheiro ganho no cassino: *${getUserStat(profile, "moneyCasinoWon")}*`,
+        `- Dinheiro perdido no cassino: *${getUserStat(profile, "moneyCasinoLost")}*`,
+        `- Moedas ganhas no lifetime: *${getUserStat(profile, "coinsLifetimeEarned")}*`,
+        `- Vezes que foi roubado: *${getUserStat(profile, "stealVictimCount")}* | Moedas perdidas: *${getUserStat(profile, "stealVictimCoinsLost")}*`,
+        `- Vezes que roubou com sucesso: *${getUserStat(profile, "stealSuccessCount")}* | Moedas ganhas: *${getUserStat(profile, "stealSuccessCoins")}*`,
+        `- Itens comprados: *${getUserStat(profile, "itemsBought")}*`,
+        `- Escudos usados: *${getUserStat(profile, "shieldsUsed")}*`,
+        `- Dias restantes com Coroa do Kronos: *${kronosRemainingDays}*`,
+        `- Trabalhos realizados: *${getUserStat(profile, "works")}*`,
+      ].join("\n")
+    }
+
+    async function applyRandomGamePunishment(targetId, options = {}) {
+      if (!isResenhaModeEnabled()) return false
+      const punishment = getRandomPunishmentChoice()
+      await applyPunishment(sock, from, targetId, punishment, {
+        ...options,
+        origin: "game",
+      })
+      return true
+    }
+
+    async function createPendingTargetForWinner(winnerId, winnerText, severityMultiplier = 1, allowedTargets = null) {
+      if (!isResenhaModeEnabled()) {
+        await sock.sendMessage(from, { text: winnerText, mentions: [winnerId] })
+        return false
+      }
+
+      const coinPunishmentPending = storage.getCoinPunishmentPending()
+      if (!coinPunishmentPending[from]) coinPunishmentPending[from] = {}
+
+      coinPunishmentPending[from][winnerId] = {
+        mode: "target",
+        target: null,
+        createdAt: Date.now(),
+        severityMultiplier,
+        origin: "game",
+      }
+
+      if (Array.isArray(allowedTargets) && allowedTargets.length > 0) {
+        coinPunishmentPending[from][winnerId].allowedTargets = allowedTargets
+      }
+
+      storage.setCoinPunishmentPending(coinPunishmentPending)
+
+      const severityText = severityMultiplier > 1 ? ` *${severityMultiplier}x*` : ""
+      await sock.sendMessage(from, {
+        text:
+          `${winnerText}\n` +
+          `Escolha quem será punido${severityText} em até 30s.\n` +
+          `${getPunishmentMenuText()}\n` +
+          `Marque alguém para punir.`,
+        mentions: [winnerId],
       })
 
-      // expira depois de 30s (apenas a rodada deste jogador)
       setTimeout(() => {
-        if (coinGames[from]?.[sender]) {
-          delete coinGames[from][sender]
-          if (Object.keys(coinGames[from]).length === 0) delete coinGames[from]
+        const coinPunishmentPendingTimeout = storage.getCoinPunishmentPending()
+        if (coinPunishmentPendingTimeout[from]?.[winnerId]) {
+          clearPendingPunishment(from, winnerId)
         }
       }, 30_000)
 
-      return
+      return true
     }
 
-    // =========================
-    // FUNÇÕES ADMIN
-    // =========================
-    const isAdmin = async (jid) => {
-      if(!isGroup) return false
-      const meta = await sock.groupMetadata(from)
-      const admins = (meta?.participants || []).filter(p => p.admin).map(p => p.id)
-      return admins.includes(jid)
-    }
+    async function startPeriodicGame(gameType, options = {}) {
+      const { triggeredBy = null, automatic = false, reactionParticipants = null } = options
 
-    // =========================
-    // MUTE / UNMUTE / BAN
-    // =========================
-    if(cmd.startsWith(prefix + "mute") && isGroup){
-      const alvo = mentioned[0]
-      if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para mutar!" })
-      if(alvo === sock.user.id + "@s.whatsapp.net") return sock.sendMessage(from,{ text:"Não posso me mutar!" }) 
-      if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem mutar!" })
-      if (!mutedUsers[from]) mutedUsers[from] = {}
-      mutedUsers[from][alvo] = true
-      await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi mutado! Finalmente vai calar a boca.`, mentions:[alvo] })
-    }
-
-    if(cmd.startsWith(prefix + "unmute") && isGroup){
-      const alvo = mentioned[0]
-      if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para desmutar!" })
-      if(alvo === sock.user.id + "@s.whatsapp.net") return sock.sendMessage(from,{ text:"Não posso me desmutar!" }) 
-      if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem desmutar!" })
-      if (mutedUsers[from]) {
-        delete mutedUsers[from][alvo]
-        if (Object.keys(mutedUsers[from]).length === 0) delete mutedUsers[from]
+      const activePeriodic = getActivePeriodicGame()
+      if (activePeriodic) {
+        return { ok: false, reason: "active", message: `Já existe um jogo periódico ativo: ${activePeriodic.label}.` }
       }
-      await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi desmutado! Infelizmente pode falar de novo.`, mentions:[alvo] })
+
+      if (automatic) {
+        const remainingMs = getRemainingPeriodicAutoCooldownMs()
+        if (remainingMs > 0) {
+          return { ok: false, reason: "cooldown", message: `Aguardando cooldown do gatilho periódico (${Math.ceil(remainingMs / 60_000)} min).` }
+        }
+
+        setPeriodicControlState({
+          ...getPeriodicControlState(),
+          lastAutoStartedAt: Date.now(),
+        })
+      }
+
+      if (gameType === "embaralhado") {
+        const state = embaralhado.start(from, triggeredBy)
+        storage.setGameState(from, "embaralhadoActive", state)
+        await sock.sendMessage(from, {
+          text: embaralhado.formatGame(state)
+        })
+
+        setTimeout(async () => {
+          const finalState = storage.getGameState(from, "embaralhadoActive")
+          if (finalState && !finalState.winner) {
+            await sock.sendMessage(from, {
+              text: embaralhado.formatResults(finalState)
+            })
+            storage.clearGameState(from, "embaralhadoActive")
+          }
+        }, 30_000)
+
+        return { ok: true }
+      }
+
+      if (gameType === "reação") {
+        const participants = Array.isArray(reactionParticipants) ? reactionParticipants : []
+        const restrictToPlayers = participants.length > 0
+        const state = reação.start(from, participants, { restrictToPlayers })
+        storage.setGameState(from, "reaçãoActive", state)
+
+        const participantText = restrictToPlayers
+          ? `\nParticipantes: ${participants.length} (somente lista definida).`
+          : "\nSem lista fixa: qualquer pessoa pode participar."
+
+        await sock.sendMessage(from, {
+          text: `⚡ Teste de Reação iniciado! Aguarde o *início*...${participantText}`,
+        })
+
+        const goDelayMs = 3000 + Math.floor(Math.random() * 4000)
+        setTimeout(async () => {
+          const currentState = storage.getGameState(from, "reaçãoActive")
+          if (!currentState || currentState.started || currentState.winner) return
+
+          reação.markStarted(currentState)
+          storage.setGameState(from, "reaçãoActive", currentState)
+
+          await sock.sendMessage(from, {
+            text: "🟢 VAI! Mande uma mensagem AGORA. O primeiro vence!",
+          })
+
+          setTimeout(async () => {
+            const finalState = storage.getGameState(from, "reaçãoActive")
+            if (!finalState || finalState.winner) return
+
+            const results = reação.getResults(finalState)
+            const resenhaOn = isResenhaModeEnabled()
+            await sock.sendMessage(from, {
+              text: reação.formatResults(finalState, results, resenhaOn),
+            })
+
+            if (results.winner) {
+              await rewardPlayer(results.winner, GAME_REWARDS.REACAO, 1, "Reação")
+              incrementUserStat(results.winner, "gameReacaoWin", 1)
+              const allowedTargets = finalState.restrictToPlayers
+                ? (finalState.players || []).filter((p) => p !== results.winner)
+                : null
+              await createPendingTargetForWinner(
+                results.winner,
+                `⚡ @${results.winner.split("@")[0]}, você venceu o Teste de Reação!`,
+                1,
+                allowedTargets
+              )
+            }
+
+            storage.clearGameState(from, "reaçãoActive")
+          }, 20_000)
+        }, goDelayMs)
+
+        return { ok: true }
+      }
+
+      if (gameType === "comando") {
+        const state = comando.start(from, triggeredBy)
+        storage.setGameState(from, "comandoActive", state)
+        const resenhaOn = isResenhaModeEnabled()
+        await sock.sendMessage(from, {
+          text: comando.formatInstruction(state, resenhaOn)
+        })
+
+        setTimeout(async () => {
+          const finalState = storage.getGameState(from, "comandoActive")
+          if (finalState) {
+            const resenhaOn = isResenhaModeEnabled()
+            await sock.sendMessage(from, {
+              text: comando.formatResults(finalState, resenhaOn)
+            })
+            const loser = comando.getLoser(finalState)
+            if (loser) {
+              const rewardedPlayers = finalState.instruction?.cmd === "silence"
+                ? (finalState.participants || []).filter((playerId) => playerId && playerId !== loser)
+                : (finalState.compliers || [])
+                    .map((entry) => entry.playerId)
+                    .filter((playerId) => playerId && playerId !== loser)
+              rewardedPlayers.forEach((playerId) => incrementUserStat(playerId, "gameComandoWin", 1))
+              incrementUserStat(loser, "gameComandoLoss", 1)
+              await rewardPlayers(rewardedPlayers, GAME_REWARDS.COMANDO_SUCCESS, 1, "Comando")
+              await applyRandomGamePunishment(loser)
+            }
+            storage.clearGameState(from, "comandoActive")
+          }
+        }, 20_000)
+
+        return { ok: true }
+      }
+
+      if (gameType === "memória") {
+        const state = memória.start(from, triggeredBy)
+        storage.setGameState(from, "memóriaActive", state)
+        await sock.sendMessage(from, {
+          text: memória.formatSequence(state)
+        })
+
+        setTimeout(async () => {
+          const finalState = storage.getGameState(from, "memóriaActive")
+          if (finalState) {
+            await sock.sendMessage(from, {
+              text: memória.formatHidden(finalState)
+            })
+          }
+        }, 5000)
+
+        setTimeout(async () => {
+          const finalState = storage.getGameState(from, "memóriaActive")
+          if (finalState && !finalState.winner) {
+            await sock.sendMessage(from, {
+              text:
+                `⏰ Tempo do Jogo da Memória encerrado (60s).\n` +
+                `Ninguém acertou a sequência a tempo.\n` +
+                `Sequência correta: ${finalState.sequence}`,
+            })
+            storage.clearGameState(from, "memóriaActive")
+          }
+        }, 60_000)
+
+        return { ok: true }
+      }
+
+      return { ok: false, reason: "unknown", message: "Tipo de jogo periódico inválido." }
     }
 
-    if(cmd.startsWith(prefix + "ban") && isGroup){
-      const alvo = mentioned[0]
-      if(!alvo) return sock.sendMessage(from,{ text:"Marque alguém para banir!" })
-      if(alvo === sock.user.id + "@s.whatsapp.net") return sock.sendMessage(from,{ text:"Não posso me banir!" }) 
-      if(!await isAdmin(sender)) return sock.sendMessage(from,{ text:"Apenas admins podem banir!" })
-      await sock.groupParticipantsUpdate(from,[alvo],"remove")
-      await sock.sendMessage(from,{ text:`@${alvo.split("@")[0]} foi banido do grupo.`, mentions:[alvo] })
+    function resolveActiveLobbyForPlayer(gameType, maybeLobbyToken, playerId) {
+      const groupStates = getGroupGameStates()
+      const explicitLobbyId = normalizeLobbyId(maybeLobbyToken || "")
+      if (explicitLobbyId) {
+        const explicitKey = activeGameKey(gameType, explicitLobbyId)
+        const explicitState = storage.getGameState(from, explicitKey)
+        if (explicitState) {
+          const inExplicitLobby = Array.isArray(explicitState.players) && explicitState.players.includes(playerId)
+          return {
+            ok: inExplicitLobby,
+            foundExplicit: true,
+            reason: inExplicitLobby ? null : "not-in-lobby",
+            lobbyId: explicitLobbyId,
+            stateKey: explicitKey,
+            state: explicitState,
+          }
+        }
+      }
+
+      const matches = Object.keys(groupStates)
+        .filter((key) => key.startsWith(activePrefix(gameType)))
+        .map((key) => ({ key, state: groupStates[key], lobbyId: key.substring(activePrefix(gameType).length) }))
+        .filter((entry) => Array.isArray(entry.state?.players) && entry.state.players.includes(playerId))
+
+      if (matches.length === 1) {
+        return {
+          ok: true,
+          foundExplicit: false,
+          reason: null,
+          lobbyId: matches[0].lobbyId,
+          stateKey: matches[0].key,
+          state: matches[0].state,
+        }
+      }
+
+      return {
+        ok: false,
+        foundExplicit: false,
+        reason: matches.length === 0 ? "not-found" : "ambiguous",
+        lobbyId: null,
+        stateKey: null,
+        state: null,
+      }
     }
+
+    const handledGameCommand = await handleGameCommands({
+      sock,
+      from,
+      sender,
+      cmd,
+      cmdName,
+      cmdArg1,
+      cmdArg2,
+      mentioned,
+      prefix,
+      isGroup,
+      text,
+      msg,
+      storage,
+      gameManager,
+      economyService,
+      caraOuCoroa,
+      adivinhacao,
+      batataquente,
+      dueloDados,
+      roletaRussa,
+      startPeriodicGame,
+      GAME_REWARDS,
+      BASE_GAME_REWARD,
+      normalizeUnifiedGameType,
+      normalizeLobbyId,
+      activeGameKey,
+      resolveActiveLobbyForPlayer,
+      getLobbyCreateBlockMessage,
+      getGameBuyIn,
+      collectLobbyBuyIn,
+      distributeLobbyBuyInPool,
+      parsePositiveInt,
+      isResenhaModeEnabled,
+      rewardPlayer,
+      rewardPlayers,
+      incrementUserStat,
+      applyRandomGamePunishment,
+      createPendingTargetForWinner,
+      jidNormalizedUser,
+    })
+    if (handledGameCommand) return
+
+    const handledGameMessageFlow = await handleGameMessageFlow({
+      sock,
+      from,
+      sender,
+      text,
+      msg,
+      mentioned,
+      isGroup,
+      isCommand,
+      storage,
+      gameManager,
+      reação,
+      embaralhado,
+      memória,
+      comando,
+      startPeriodicGame,
+      GAME_REWARDS,
+      isResenhaModeEnabled,
+      rewardPlayer,
+      incrementUserStat,
+      createPendingTargetForWinner,
+    })
+    if (handledGameMessageFlow) return
+
+    const handledUtilityCommand = await handleUtilityCommands({
+      sock,
+      from,
+      sender,
+      cmd,
+      prefix,
+      isGroup,
+      msg,
+      quoted,
+      mentioned,
+      sharp,
+      downloadMediaMessage,
+      logger,
+      videoToSticker,
+      dddMap,
+      jidNormalizedUser,
+    })
+    if (handledUtilityCommand) return
+
+    const handledEconomyCommand = await handleEconomyCommands({
+      sock,
+      from,
+      sender,
+      cmd,
+      cmdName,
+      cmdArg1,
+      cmdArg2,
+      cmdParts,
+      mentioned,
+      prefix,
+      isGroup,
+      senderIsAdmin,
+      jidNormalizedUser,
+      storage,
+      economyService,
+      parseQuantity,
+      formatDuration,
+      buildGameStatsText,
+      buildEconomyStatsText,
+      buildInventoryText,
+      incrementUserStat,
+    })
+    if (handledEconomyCommand) return
+
+    const handledModerationCommand = await handleModerationCommands({
+      sock,
+      msg,
+      from,
+      sender,
+      text,
+      cmd,
+      cmdName,
+      prefix,
+      isGroup,
+      senderIsAdmin,
+      mentioned,
+      jidNormalizedUser,
+      storage,
+      clearPunishment,
+      clearPendingPunishment,
+      getPunishmentMenuText,
+      getPunishmentChoiceFromText,
+      applyPunishment,
+    })
+    if (handledModerationCommand) return
+
+    // =========================
+    // MOEDA (cara ou coroa)
+    // =========================
+    const handledCoinRound = await caraOuCoroa.startCoinRound({
+      sock,
+      from,
+      sender,
+      cmd,
+      prefix,
+      isGroup,
+    })
+    if (handledCoinRound) return
 
     // =========================
     // BLOQUEIO DE MENSAGENS DE USUÁRIOS MUTADOS
     // =========================
-    if(mutedUsers[from]?.[sender] && isGroup && sender !== sock.user.id){
-      try{
-        await sock.sendMessage(from,{ delete: msg.key })
-      }catch(e){
-        console.error("Erro ao apagar mensagem de usuário mutado", e)
-      }
-      return
-    }
-
-    if (cmd === prefix + "streakranking" && isGroup) {
-      const maxMap = coinStreakMax[from] || {}
-      const currentMap = coinStreaks[from] || {}
-
-      const entries = Object.keys(maxMap).map((jid) => ({
-        jid,
-        max: maxMap[jid] || 0,
-        current: currentMap[jid] || 0
-      }))
-
-      if (entries.length === 0) {
-        await sock.sendMessage(from, { text: "Sem dados de streak neste grupo ainda." })
+    {
+      const mutedUsers = storage.getMutedUsers()
+      if(mutedUsers[from]?.[sender] && isGroup && sender !== sock.user.id && !(senderIsAdmin && isCommand)){
+        try{
+          await sock.sendMessage(from,{ delete: msg.key })
+        }catch(e){
+          console.error("Erro ao apagar mensagem de usuário mutado", e)
+        }
         return
       }
-
-      entries.sort((a, b) => (b.max - a.max) || (b.current - a.current))
-      const top = entries.slice(0, 10)
-      const hist = coinHistoricalMax[from] || top[0].max || 0
-
-      const rankingLines = top.map((u, i) =>
-        `${i + 1}. @${u.jid.split("@")[0]} — max: *${u.max}* | atual: *${u.current}*`
-      )
-
-      await sock.sendMessage(from, {
-        text:
-          `🏆 Recorde histórico do grupo: *${hist}*\nPelo menos até o bot resetar.\n` +
-          `📊 Ranking de streak (max | atual):\n` +
-          rankingLines.join("\n"),
-        mentions: top.map(u => u.jid)
-      })
-      return
     }
+    // =========================
+    // COMANDOS DE STREAKS
+    // =========================
+    const handledStreakRanking = await caraOuCoroa.sendStreakRanking({
+      sock,
+      from,
+      cmd,
+      prefix,
+      isGroup,
+    })
+    if (handledStreakRanking) return
 
-    if ((cmd === prefix + "streak" || cmd.startsWith(prefix + "streak ")) && isGroup) {
-      const alvo = mentioned[0] || sender
-      const valor = coinStreaks[from]?.[alvo] || 0
-      await sock.sendMessage(from, {
-        text: `Streak de @${alvo.split("@")[0]}: *${valor}*`,
-        mentions: [alvo]
-      })
-      return
-    }
+    const handledStreakValue = await caraOuCoroa.sendStreakValue({
+      sock,
+      from,
+      sender,
+      mentioned,
+      cmd,
+      prefix,
+      isGroup,
+    })
+    if (handledStreakValue) return
 
   })
 } 

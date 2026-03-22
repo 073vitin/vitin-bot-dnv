@@ -1,0 +1,876 @@
+const fs = require("fs")
+const path = require("path")
+const telemetry = require("./telemetryService")
+
+const DATA_DIR = path.join(__dirname, ".data")
+const ECONOMY_FILE = path.join(DATA_DIR, "economy.json")
+const DEFAULT_COINS = 0
+const DAY_MS = 24 * 60 * 60 * 1000
+
+const ITEM_DEFINITIONS = {
+  escudo: {
+    key: "escudo",
+    aliases: ["shield"],
+    name: "Escudo",
+    price: 900,
+    sellRate: 0.8,
+    stackable: true,
+    description: "Protege automaticamente contra 1 punição não administrativa.",
+  },
+  mute: {
+    key: "mute",
+    aliases: ["silencio", "silêncio"],
+    name: "Mute",
+    price: 600,
+    sellRate: 0.8,
+    stackable: true,
+    description: "Permite usar !silenciar @alvo. Dura por 10 minutos.",
+  },
+  kronos: {
+    key: "kronos",
+    aliases: ["coroa", "coroakronos", "kronos"],
+    name: "Coroa Kronos",
+    price: 18000,
+    sellRate: 0.8,
+    stackable: true,
+    durationMs: 10 * DAY_MS,
+    description: "+30% ganhos (cassino, roubo, trabalhos), +10% daily, -10% chance de ser roubado e +10 escudos.",
+  },
+}
+
+const SHIELD_PRICE = ITEM_DEFINITIONS.escudo.price
+
+const DEFAULT_USER_STATS = {
+  casinoPlays: 0,
+  works: 0,
+  steals: 0,
+  gameGuessExact: 0,
+  gameGuessClosest: 0,
+  gameGuessTie: 0,
+  gameGuessLoss: 0,
+  gameBatataWin: 0,
+  gameBatataLoss: 0,
+  gameCoinWin: 0,
+  gameCoinLoss: 0,
+  gameDobroWin: 0,
+  gameDobroLoss: 0,
+  gameDadosWin: 0,
+  gameDadosLoss: 0,
+  gameEmbaralhadoWin: 0,
+  gameMemoriaWin: 0,
+  gameReacaoWin: 0,
+  gameRrTrigger: 0,
+  gameRrBetWin: 0,
+  gameRrShotLoss: 0,
+  gameRrWin: 0,
+  gameComandoWin: 0,
+  gameComandoLoss: 0,
+  moneyGameWon: 0,
+  moneyGameLost: 0,
+  moneyCasinoWon: 0,
+  moneyCasinoLost: 0,
+  coinsLifetimeEarned: 0,
+  stealVictimCount: 0,
+  stealVictimCoinsLost: 0,
+  stealSuccessCount: 0,
+  stealSuccessCoins: 0,
+  itemsBought: 0,
+  shieldsUsed: 0,
+}
+
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true })
+}
+
+let economyCache = {
+  users: {}, // [userJid]: { coins, items, buffs, cooldowns, stats, createdAt, updatedAt }
+}
+
+function normalizeUserId(userId = "") {
+  return String(userId || "").trim().toLowerCase()
+}
+
+function loadEconomy() {
+  try {
+    if (!fs.existsSync(ECONOMY_FILE)) return
+    const data = JSON.parse(fs.readFileSync(ECONOMY_FILE, "utf8"))
+    economyCache = {
+      users: {},
+      ...data,
+    }
+    if (!economyCache.users || typeof economyCache.users !== "object") {
+      economyCache.users = {}
+    }
+  } catch (err) {
+    console.error("Erro ao carregar economia:", err)
+    economyCache = { users: {} }
+  }
+}
+
+function getDayKey(ts = Date.now()) {
+  const d = new Date(ts)
+  const yyyy = String(d.getFullYear())
+  const mm = String(d.getMonth() + 1).padStart(2, "0")
+  const dd = String(d.getDate()).padStart(2, "0")
+  return `${yyyy}-${mm}-${dd}`
+}
+
+let saveTimeout = null
+function saveEconomy(immediate = false) {
+  const doSave = () => {
+    try {
+      fs.writeFileSync(ECONOMY_FILE, JSON.stringify(economyCache, null, 2), "utf8")
+    } catch (err) {
+      console.error("Erro ao salvar economia:", err)
+    }
+  }
+
+  if (immediate) {
+    clearTimeout(saveTimeout)
+    doSave()
+    return
+  }
+
+  clearTimeout(saveTimeout)
+  saveTimeout = setTimeout(doSave, 1500)
+}
+
+function migrateUserShape(user) {
+  if (!user || typeof user !== "object") return
+  if (!user.items || typeof user.items !== "object") user.items = {}
+  if (!user.buffs || typeof user.buffs !== "object") user.buffs = { kronosExpiresAt: 0 }
+  if (!Number.isFinite(user.buffs.kronosExpiresAt)) user.buffs.kronosExpiresAt = 0
+  if (!user.cooldowns || typeof user.cooldowns !== "object") {
+    user.cooldowns = {
+      dailyClaimKey: null,
+      workAt: 0,
+      stealAt: 0,
+      stealDailyKey: null,
+      stealTargets: {},
+      stealAttemptsToday: 0,
+    }
+  }
+  if (!user.cooldowns.stealTargets || typeof user.cooldowns.stealTargets !== "object") {
+    user.cooldowns.stealTargets = {}
+  }
+  if (!Number.isFinite(user.cooldowns.stealAttemptsToday)) {
+    user.cooldowns.stealAttemptsToday = 0
+  }
+  if (typeof user.cooldowns.stealDailyKey !== "string" && user.cooldowns.stealDailyKey !== null) {
+    user.cooldowns.stealDailyKey = null
+  }
+  if (!user.stats || typeof user.stats !== "object") {
+    user.stats = { ...DEFAULT_USER_STATS }
+  }
+  Object.keys(DEFAULT_USER_STATS).forEach((key) => {
+    if (!Number.isFinite(user.stats[key])) {
+      user.stats[key] = DEFAULT_USER_STATS[key]
+    }
+  })
+  if (!Array.isArray(user.transactions)) user.transactions = []
+
+  // retroompatibilidade com sistema antigo (caso eu volte algum commit).
+  if (Number.isFinite(user.shields) && user.shields > 0) {
+    user.items.escudo = (Number(user.items.escudo) || 0) + Math.floor(user.shields)
+    delete user.shields
+  }
+}
+
+function ensureUser(userId) {
+  const normalized = normalizeUserId(userId)
+  if (!normalized) return null
+
+  if (!economyCache.users[normalized]) {
+    const now = Date.now()
+    economyCache.users[normalized] = {
+      coins: DEFAULT_COINS,
+      items: {},
+      buffs: {
+        kronosExpiresAt: 0,
+      },
+      cooldowns: {
+        dailyClaimKey: null,
+        workAt: 0,
+        stealAt: 0,
+        stealDailyKey: null,
+        stealTargets: {},
+        stealAttemptsToday: 0,
+      },
+      stats: {
+        ...DEFAULT_USER_STATS,
+      },
+      createdAt: now,
+      updatedAt: now,
+    }
+    saveEconomy()
+  }
+
+  migrateUserShape(economyCache.users[normalized])
+  return economyCache.users[normalized]
+}
+
+function touchUser(user) {
+  user.updatedAt = Date.now()
+}
+
+function pushTransaction(userId, entry = {}) {
+  const user = ensureUser(userId)
+  if (!user) return
+  const next = {
+    at: Date.now(),
+    type: String(entry.type || "system"),
+    deltaCoins: Math.floor(Number(entry.deltaCoins) || 0),
+    balanceAfter: getCoins(userId),
+    details: entry.details || "",
+    meta: entry.meta || null,
+  }
+  user.transactions.push(next)
+  if (user.transactions.length > 200) {
+    user.transactions = user.transactions.slice(-200)
+  }
+  touchUser(user)
+  saveEconomy()
+}
+
+function getCoins(userId) {
+  const user = ensureUser(userId)
+  if (!user) return 0
+  return Number.isFinite(user.coins) ? user.coins : DEFAULT_COINS
+}
+
+function creditCoins(userId, amount, transaction = null) {
+  const user = ensureUser(userId)
+  const parsedAmount = Math.floor(Number(amount) || 0)
+  if (!user || parsedAmount <= 0) return 0
+
+  user.coins = Math.max(0, getCoins(userId) + parsedAmount)
+  user.stats.coinsLifetimeEarned = Math.max(0, Math.floor(Number(user.stats.coinsLifetimeEarned) || 0) + parsedAmount)
+  touchUser(user)
+  saveEconomy()
+  if (transaction) {
+    pushTransaction(userId, {
+      ...transaction,
+      deltaCoins: parsedAmount,
+    })
+  }
+  const txType = transaction?.type || "unspecified"
+  telemetry.incrementCounter("economy.minted", parsedAmount, { source: txType })
+  telemetry.appendEvent("economy.credit", {
+    userId: normalizeUserId(userId),
+    amount: parsedAmount,
+    source: txType,
+  })
+  return parsedAmount
+}
+
+function debitCoins(userId, amount, transaction = null) {
+  const user = ensureUser(userId)
+  const parsedAmount = Math.floor(Number(amount) || 0)
+  if (!user || parsedAmount <= 0) return false
+
+  if (getCoins(userId) < parsedAmount) return false
+
+  user.coins = getCoins(userId) - parsedAmount
+  touchUser(user)
+  saveEconomy()
+  if (transaction) {
+    pushTransaction(userId, {
+      ...transaction,
+      deltaCoins: -parsedAmount,
+    })
+  }
+  const txType = transaction?.type || "unspecified"
+  telemetry.incrementCounter("economy.burned", parsedAmount, { source: txType })
+  telemetry.appendEvent("economy.debit", {
+    userId: normalizeUserId(userId),
+    amount: parsedAmount,
+    source: txType,
+  })
+  return true
+}
+
+function debitCoinsFlexible(userId, amount, transaction = null) {
+  const user = ensureUser(userId)
+  const parsedAmount = Math.floor(Number(amount) || 0)
+  if (!user || parsedAmount <= 0) return 0
+  const available = getCoins(userId)
+  const taken = Math.min(available, parsedAmount)
+  user.coins = available - taken
+  touchUser(user)
+  saveEconomy()
+  if (transaction && taken > 0) {
+    pushTransaction(userId, {
+      ...transaction,
+      deltaCoins: -taken,
+    })
+  }
+  if (taken > 0) {
+    const txType = transaction?.type || "unspecified"
+    telemetry.incrementCounter("economy.burned", taken, { source: txType })
+    telemetry.appendEvent("economy.debitFlexible", {
+      userId: normalizeUserId(userId),
+      requested: parsedAmount,
+      taken,
+      source: txType,
+    })
+  }
+  return taken
+}
+
+function normalizeItemKey(itemKey = "") {
+  const normalized = String(itemKey || "").trim().toLowerCase()
+  if (!normalized) return null
+  const entries = Object.values(ITEM_DEFINITIONS)
+  const found = entries.find((item) => item.key === normalized || (item.aliases || []).includes(normalized))
+  return found?.key || null
+}
+
+function getItemDefinition(itemKey = "") {
+  const key = normalizeItemKey(itemKey)
+  if (!key) return null
+  return ITEM_DEFINITIONS[key] || null
+}
+
+function getItemQuantity(userId, itemKey) {
+  const user = ensureUser(userId)
+  const key = normalizeItemKey(itemKey)
+  if (!user || !key) return 0
+  return Math.max(0, Math.floor(Number(user.items[key]) || 0))
+}
+
+function setItemQuantity(userId, itemKey, quantity) {
+  const user = ensureUser(userId)
+  const key = normalizeItemKey(itemKey)
+  if (!user || !key) return 0
+  const next = Math.max(0, Math.floor(Number(quantity) || 0))
+  if (next <= 0) {
+    delete user.items[key]
+  } else {
+    user.items[key] = next
+  }
+  touchUser(user)
+  saveEconomy()
+  return next
+}
+
+function grantKronosBenefits(userId, quantity = 1) {
+  const user = ensureUser(userId)
+  const qty = Math.max(1, Math.floor(Number(quantity) || 1))
+  const def = getItemDefinition("kronos")
+  if (!user || !def) return
+  const now = Date.now()
+  const currentEnd = Math.max(Number(user.buffs.kronosExpiresAt) || 0, now)
+  user.buffs.kronosExpiresAt = currentEnd + (def.durationMs * qty)
+  user.items.escudo = (Math.floor(Number(user.items.escudo) || 0) + (10 * qty))
+  touchUser(user)
+  saveEconomy()
+}
+
+function removeKronosDuration(userId, quantity = 1) {
+  const user = ensureUser(userId)
+  const qty = Math.max(1, Math.floor(Number(quantity) || 1))
+  const def = getItemDefinition("kronos")
+  if (!user || !def) return
+  const now = Date.now()
+  const currentEnd = Math.max(Number(user.buffs.kronosExpiresAt) || 0, now)
+  user.buffs.kronosExpiresAt = Math.max(now, currentEnd - (def.durationMs * qty))
+  touchUser(user)
+  saveEconomy()
+}
+
+function addItem(userId, itemKey, quantity = 1) {
+  const key = normalizeItemKey(itemKey)
+  const qty = Math.floor(Number(quantity) || 0)
+  if (!key || qty <= 0) return 0
+  const current = getItemQuantity(userId, key)
+  const next = setItemQuantity(userId, key, current + qty)
+  if (key === "kronos") {
+    grantKronosBenefits(userId, qty)
+  }
+  return next
+}
+
+function removeItem(userId, itemKey, quantity = 1) {
+  const key = normalizeItemKey(itemKey)
+  const qty = Math.floor(Number(quantity) || 0)
+  if (!key || qty <= 0) return 0
+  const current = getItemQuantity(userId, key)
+  const next = Math.max(0, current - qty)
+  setItemQuantity(userId, key, next)
+  if (key === "kronos") {
+    removeKronosDuration(userId, Math.min(current, qty))
+  }
+  return next
+}
+
+function getShields(userId) {
+  return getItemQuantity(userId, "escudo")
+}
+
+function addShields(userId, quantity = 1) {
+  return addItem(userId, "escudo", quantity)
+}
+
+function consumeShield(userId) {
+  if (getShields(userId) <= 0) return false
+  removeItem(userId, "escudo", 1)
+  incrementStat(userId, "shieldsUsed", 1)
+  return true
+}
+
+function buyShield(userId) {
+  return buyItem(userId, "escudo", 1, userId).ok
+}
+
+function hasActiveKronos(userId) {
+  const user = ensureUser(userId)
+  if (!user) return false
+  const expiresAt = Number(user.buffs.kronosExpiresAt) || 0
+  return expiresAt > Date.now()
+}
+
+function applyKronosGainMultiplier(userId, amount, type = "generic") {
+  const base = Math.max(0, Math.floor(Number(amount) || 0))
+  if (base <= 0) return 0
+  if (!hasActiveKronos(userId)) return base
+  if (type === "daily") return Math.floor(base * 1.1)
+  if (type === "casino" || type === "steal" || type === "work") return Math.floor(base * 1.3)
+  return base
+}
+
+function getStealSuccessChance(victimId) {
+  const baseChance = 0.3
+  const protection = hasActiveKronos(victimId) ? 0.1 : 0
+  return Math.max(0.05, Math.min(0.95, baseChance - protection))
+}
+
+function canAttemptSteal(thiefId, victimId) {
+  const user = ensureUser(thiefId)
+  if (!user) return { ok: false, reason: "invalid-user" }
+
+  const dayKey = getDayKey()
+  if (user.cooldowns.stealDailyKey !== dayKey) {
+    user.cooldowns.stealDailyKey = dayKey
+    user.cooldowns.stealTargets = {}
+    user.cooldowns.stealAttemptsToday = 0
+    touchUser(user)
+    saveEconomy()
+  }
+
+  const victim = normalizeUserId(victimId)
+  if (user.cooldowns.stealTargets[victim]) {
+    return { ok: false, reason: "same-target-today" }
+  }
+
+  if ((user.cooldowns.stealAttemptsToday || 0) >= 3) {
+    return { ok: false, reason: "daily-limit-reached" }
+  }
+
+  return { ok: true }
+}
+
+function registerStealAttempt(thiefId, victimId) {
+  const user = ensureUser(thiefId)
+  if (!user) return
+  const dayKey = getDayKey()
+  if (user.cooldowns.stealDailyKey !== dayKey) {
+    user.cooldowns.stealDailyKey = dayKey
+    user.cooldowns.stealTargets = {}
+    user.cooldowns.stealAttemptsToday = 0
+  }
+  const victim = normalizeUserId(victimId)
+  user.cooldowns.stealTargets[victim] = true
+  user.cooldowns.stealAttemptsToday = (Math.floor(Number(user.cooldowns.stealAttemptsToday) || 0) + 1)
+  touchUser(user)
+  saveEconomy()
+}
+
+function buyItem(buyerId, itemKey, quantity = 1, recipientId = buyerId) {
+  const item = getItemDefinition(itemKey)
+  const qty = Math.floor(Number(quantity) || 0)
+  if (!item || qty <= 0) {
+    return { ok: false, reason: "invalid-item" }
+  }
+
+  const totalCost = item.price * qty
+  if (!debitCoins(buyerId, totalCost, {
+    type: "buy",
+    details: `Compra de ${qty}x ${item.key}`,
+    meta: { item: item.key, quantity: qty, recipientId: normalizeUserId(recipientId) },
+  })) {
+    return { ok: false, reason: "insufficient-funds", totalCost }
+  }
+
+  addItem(recipientId, item.key, qty)
+  incrementStat(buyerId, "itemsBought", qty)
+  if (normalizeUserId(recipientId) !== normalizeUserId(buyerId)) {
+    pushTransaction(recipientId, {
+      type: "buy-received",
+      deltaCoins: 0,
+      details: `Recebeu ${qty}x ${item.key} via compra de ${normalizeUserId(buyerId)}`,
+      meta: { buyer: normalizeUserId(buyerId), item: item.key, quantity: qty },
+    })
+  }
+  return { ok: true, totalCost, itemKey: item.key, quantity: qty }
+}
+
+function sellItem(userId, itemKey, quantity = 1) {
+  const item = getItemDefinition(itemKey)
+  const qty = Math.floor(Number(quantity) || 0)
+  if (!item || qty <= 0) return { ok: false, reason: "invalid-item" }
+
+  const available = getItemQuantity(userId, item.key)
+  if (available < qty) return { ok: false, reason: "insufficient-items", available }
+
+  removeItem(userId, item.key, qty)
+  const valuePerUnit = Math.floor(item.price * (Number(item.sellRate) || 0.8))
+  const total = valuePerUnit * qty
+  creditCoins(userId, total, {
+    type: "sell",
+    details: `Venda de ${qty}x ${item.key}`,
+    meta: { item: item.key, quantity: qty },
+  })
+  return { ok: true, total, quantity: qty, itemKey: item.key }
+}
+
+function transferCoins(fromUserId, toUserId, amount) {
+  const parsedAmount = Math.floor(Number(amount) || 0)
+  if (parsedAmount <= 0) return { ok: false, reason: "invalid-amount" }
+  if (!debitCoins(fromUserId, parsedAmount, {
+    type: "donate-out",
+    details: `Doação para ${normalizeUserId(toUserId)}`,
+    meta: { to: normalizeUserId(toUserId) },
+  })) return { ok: false, reason: "insufficient-funds" }
+  creditCoins(toUserId, parsedAmount, {
+    type: "donate-in",
+    details: `Recebido de ${normalizeUserId(fromUserId)}`,
+    meta: { from: normalizeUserId(fromUserId) },
+  })
+  return { ok: true, amount: parsedAmount }
+}
+
+function transferItem(fromUserId, toUserId, itemKey, quantity = 1) {
+  const item = getItemDefinition(itemKey)
+  const qty = Math.floor(Number(quantity) || 0)
+  if (!item || qty <= 0) return { ok: false, reason: "invalid-item" }
+
+  const available = getItemQuantity(fromUserId, item.key)
+  if (available < qty) return { ok: false, reason: "insufficient-items", available }
+
+  removeItem(fromUserId, item.key, qty)
+  addItem(toUserId, item.key, qty)
+  pushTransaction(fromUserId, {
+    type: "donate-item-out",
+    deltaCoins: 0,
+    details: `Doou ${qty}x ${item.key} para ${normalizeUserId(toUserId)}`,
+    meta: { to: normalizeUserId(toUserId), item: item.key, quantity: qty },
+  })
+  pushTransaction(toUserId, {
+    type: "donate-item-in",
+    deltaCoins: 0,
+    details: `Recebeu ${qty}x ${item.key} de ${normalizeUserId(fromUserId)}`,
+    meta: { from: normalizeUserId(fromUserId), item: item.key, quantity: qty },
+  })
+  return { ok: true, itemKey: item.key, quantity: qty }
+}
+
+function attemptSteal(thiefId, victimId, requestedAmount = 0) {
+  if (normalizeUserId(thiefId) === normalizeUserId(victimId)) {
+    return { ok: false, reason: "same-user" }
+  }
+
+  const canSteal = canAttemptSteal(thiefId, victimId)
+  if (!canSteal.ok) {
+    return { ok: false, reason: canSteal.reason }
+  }
+
+  registerStealAttempt(thiefId, victimId)
+
+  const victimCoins = getCoins(victimId)
+  if (victimCoins <= 0) {
+    return { ok: false, reason: "victim-empty" }
+  }
+
+  const chance = getStealSuccessChance(victimId)
+  const roll = Math.random()
+  const success = roll <= chance
+
+  if (!success) {
+    const penalty = Math.max(20, Math.floor(Math.min(getCoins(thiefId), 50 + Math.random() * 100)))
+    const lost = debitCoinsFlexible(thiefId, penalty, {
+      type: "steal-failed",
+      details: `Falhou ao roubar ${normalizeUserId(victimId)}`,
+      meta: { victim: normalizeUserId(victimId) },
+    })
+    return {
+      ok: true,
+      success: false,
+      lost,
+      successChance: chance,
+      rolled: roll,
+    }
+  }
+
+  const requested = Math.max(0, Math.floor(Number(requestedAmount) || 0))
+  const randomBase = Math.floor(50 + Math.random() * 151)
+  const baseAmount = requested > 0 ? requested : randomBase
+  const stealBase = Math.min(victimCoins, baseAmount)
+
+  if (stealBase <= 0) {
+    return { ok: false, reason: "invalid-amount" }
+  }
+
+  const gained = applyKronosGainMultiplier(thiefId, stealBase, "steal")
+  const removed = debitCoinsFlexible(victimId, stealBase, {
+    type: "stolen-from",
+    details: `Roubado por ${normalizeUserId(thiefId)}`,
+    meta: { thief: normalizeUserId(thiefId) },
+  })
+  creditCoins(thiefId, gained, {
+    type: "steal-success",
+    details: `Roubo em ${normalizeUserId(victimId)}`,
+    meta: { victim: normalizeUserId(victimId), base: stealBase },
+  })
+
+  if (removed > 0) {
+    incrementStat(victimId, "stealVictimCount", 1)
+    incrementStat(victimId, "stealVictimCoinsLost", removed)
+  }
+  if (gained > 0) {
+    incrementStat(thiefId, "stealSuccessCount", 1)
+    incrementStat(thiefId, "stealSuccessCoins", gained)
+  }
+
+  return {
+    ok: true,
+    success: true,
+    successChance: chance,
+    rolled: roll,
+    stolenFromVictim: removed,
+    gained,
+  }
+}
+
+function claimDaily(userId, baseAmount = 100) {
+  const user = ensureUser(userId)
+  const base = Math.max(0, Math.floor(Number(baseAmount) || 0))
+  if (!user || base <= 0) return { ok: false, reason: "invalid" }
+
+  const dayKey = getDayKey()
+  if (user.cooldowns.dailyClaimKey === dayKey) {
+    return { ok: false, reason: "already-claimed", dayKey }
+  }
+
+  const finalAmount = applyKronosGainMultiplier(userId, base, "daily")
+  user.cooldowns.dailyClaimKey = dayKey
+  touchUser(user)
+  saveEconomy()
+  creditCoins(userId, finalAmount, {
+    type: "daily",
+    details: "Resgate diário",
+    meta: { dayKey },
+  })
+
+  return {
+    ok: true,
+    amount: finalAmount,
+    dayKey,
+    kronosBonus: finalAmount > base,
+  }
+}
+
+const _attemptSteal = attemptSteal
+attemptSteal = function wrappedAttemptSteal(thiefId, victimId, requestedAmount = 0) {
+  const startedAt = Date.now()
+  const result = _attemptSteal(thiefId, victimId, requestedAmount)
+  const status = result?.ok ? (result.success ? "success" : "failed") : (result?.reason || "rejected")
+  telemetry.incrementCounter("economy.steal.attempt", 1, { status })
+  telemetry.observeDuration("economy.steal.latency", Date.now() - startedAt, { status })
+  telemetry.appendEvent("economy.steal", {
+    thiefId: normalizeUserId(thiefId),
+    victimId: normalizeUserId(victimId),
+    status,
+    gained: result?.gained || 0,
+    lost: result?.lost || 0,
+    reason: result?.reason || null,
+  })
+  return result
+}
+
+const _claimDaily = claimDaily
+claimDaily = function wrappedClaimDaily(userId, baseAmount = 100) {
+  const result = _claimDaily(userId, baseAmount)
+  telemetry.incrementCounter("economy.daily.claim", 1, {
+    status: result?.ok ? "ok" : (result?.reason || "rejected"),
+  })
+  if (result?.ok) {
+    telemetry.appendEvent("economy.daily.claimed", {
+      userId: normalizeUserId(userId),
+      amount: result.amount,
+      kronosBonus: Boolean(result.kronosBonus),
+    })
+  }
+  return result
+}
+
+function getAllUsersSortedByCoins() {
+  return Object.keys(economyCache.users)
+    .map((userId) => ({ userId, coins: getCoins(userId) }))
+    .sort((a, b) => (b.coins - a.coins) || a.userId.localeCompare(b.userId))
+}
+
+function getGlobalRanking(limit = 10) {
+  const safeLimit = Math.max(1, Math.floor(Number(limit) || 10))
+  return getAllUsersSortedByCoins().slice(0, safeLimit)
+}
+
+function getUserGlobalPosition(userId) {
+  const normalized = normalizeUserId(userId)
+  const ranking = getAllUsersSortedByCoins()
+  const idx = ranking.findIndex((entry) => entry.userId === normalized)
+  return idx >= 0 ? idx + 1 : null
+}
+
+function getGroupRanking(memberIds = [], limit = 10) {
+  const members = new Set((memberIds || []).map((id) => normalizeUserId(id)).filter(Boolean))
+  const safeLimit = Math.max(1, Math.floor(Number(limit) || 10))
+  return getAllUsersSortedByCoins()
+    .filter((entry) => members.has(entry.userId))
+    .slice(0, safeLimit)
+}
+
+function getItemCatalog() {
+  return Object.values(ITEM_DEFINITIONS).map((item) => ({ ...item }))
+}
+
+function getShopIndexText() {
+  const lines = ["Loja (indice)"]
+  const catalog = getItemCatalog()
+  catalog.forEach((item, idx) => {
+    lines.push(`${idx + 1}. ${item.name} (${item.key}) - ${item.price} Epsteincoins`)
+  })
+  lines.push("")
+  lines.push("Compre com: !comprar <item> <quantidade>")
+  lines.push("Compre para outro: !comprarpara @usuario <item> <quantidade>")
+  return lines.join("\n")
+}
+
+function getProfile(userId) {
+  const user = ensureUser(userId)
+  if (!user) {
+    return {
+      coins: DEFAULT_COINS,
+      shields: 0,
+      items: {},
+      buffs: {
+        kronosActive: false,
+        kronosExpiresAt: 0,
+      },
+    }
+  }
+
+  return {
+    coins: getCoins(userId),
+    shields: getShields(userId),
+    items: { ...user.items },
+    buffs: {
+      kronosActive: hasActiveKronos(userId),
+      kronosExpiresAt: Number(user.buffs?.kronosExpiresAt) || 0,
+    },
+    cooldowns: { ...user.cooldowns },
+    stats: { ...user.stats },
+  }
+}
+
+function incrementStat(userId, key, amount = 1) {
+  const user = ensureUser(userId)
+  const safeAmount = Math.max(1, Math.floor(Number(amount) || 1))
+  if (!user) return 0
+  if (!Number.isFinite(user.stats[key])) user.stats[key] = 0
+  user.stats[key] = Math.max(0, Math.floor(Number(user.stats[key]) || 0) + safeAmount)
+  touchUser(user)
+  saveEconomy()
+  return user.stats[key]
+}
+
+function getStatement(userId, limit = 10) {
+  const user = ensureUser(userId)
+  if (!user) return []
+  const safeLimit = Math.max(1, Math.floor(Number(limit) || 10))
+  return (user.transactions || []).slice(-safeLimit).reverse()
+}
+
+function setWorkCooldown(userId, timestamp = Date.now()) {
+  const user = ensureUser(userId)
+  if (!user) return
+  user.cooldowns.workAt = Math.floor(Number(timestamp) || Date.now())
+  touchUser(user)
+  saveEconomy()
+}
+
+function getWorkCooldown(userId) {
+  const user = ensureUser(userId)
+  if (!user) return 0
+  return Math.floor(Number(user.cooldowns.workAt) || 0)
+}
+
+function setStealCooldown(userId, timestamp = Date.now()) {
+  const user = ensureUser(userId)
+  if (!user) return
+  user.cooldowns.stealAt = Math.floor(Number(timestamp) || Date.now())
+  touchUser(user)
+  saveEconomy()
+}
+
+function getStealCooldown(userId) {
+  const user = ensureUser(userId)
+  if (!user) return 0
+  return Math.floor(Number(user.cooldowns.stealAt) || 0)
+}
+
+loadEconomy()
+
+module.exports = {
+  DEFAULT_COINS,
+  ITEM_DEFINITIONS,
+  SHIELD_PRICE,
+  getDayKey,
+  loadEconomy,
+  saveEconomy,
+  getCoins,
+  creditCoins,
+  debitCoins,
+  debitCoinsFlexible,
+  normalizeItemKey,
+  getItemDefinition,
+  getItemCatalog,
+  getItemQuantity,
+  addItem,
+  removeItem,
+  getShields,
+  addShields,
+  consumeShield,
+  buyShield,
+  buyItem,
+  sellItem,
+  transferCoins,
+  transferItem,
+  attemptSteal,
+  claimDaily,
+  hasActiveKronos,
+  applyKronosGainMultiplier,
+  getStealSuccessChance,
+  canAttemptSteal,
+  getGlobalRanking,
+  getGroupRanking,
+  getUserGlobalPosition,
+  getShopIndexText,
+  pushTransaction,
+  getStatement,
+  incrementStat,
+  setWorkCooldown,
+  getWorkCooldown,
+  setStealCooldown,
+  getStealCooldown,
+  getProfile,
+}
