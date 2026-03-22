@@ -36,7 +36,7 @@ function formatDobroStatus(groupId, preloadedState = null) {
   if (!state.streakPlayer) return "Sem sequência ativa"
   const resenhaOn = storage.isResenhaEnabled(groupId)
 
-  let msg = `🔥 Sequência: ${state.activeStreak}/4 vitórias\n`
+  let msg = `🔥 Sequência: ${state.activeStreak}/2 vitórias\n`
   msg += `🎯 Jogador: ${state.streakPlayer.substring(0, 5)}...\n`
 
   if (state.doubledEnabled && resenhaOn) {
@@ -49,7 +49,7 @@ function formatDobroStatus(groupId, preloadedState = null) {
 
 function registerDobroWin(groupId, winnerId, result) {
   const state = getDobroState(groupId)
-  if (!state?.enabled) return { active: false, state: null, doubledJustActivated: false }
+  if (!state?.enabled) return { active: false, state: null, doubledJustActivated: false, objectiveReachedNow: false }
 
   if (state.streakPlayer !== winnerId) {
     state.streakPlayer = winnerId
@@ -59,7 +59,7 @@ function registerDobroWin(groupId, winnerId, result) {
   }
 
   const wasDoubled = !!state.doubledEnabled
-  if (state.activeStreak >= 4) {
+  if (state.activeStreak >= 2) {
     state.doubledEnabled = true
     if (!state.activeSince) state.activeSince = Date.now()
   }
@@ -74,6 +74,7 @@ function registerDobroWin(groupId, winnerId, result) {
     active: true,
     state,
     doubledJustActivated: !wasDoubled && state.doubledEnabled,
+    objectiveReachedNow: !wasDoubled && state.doubledEnabled,
   }
 }
 
@@ -172,8 +173,7 @@ async function handleCoinGuess({
 
   if (acertou && resenhaAveriguada[from]) {
     const dobroOutcome = registerDobroWin(from, sender, game.resultado)
-    const dobroState = getDobroState(from)
-    const rewardMultiplier = dobroState?.doubledEnabled ? 2 : 1
+    const rewardMultiplier = dobroOutcome.objectiveReachedNow ? 2 : 1
 
     coinStreaks[from][sender] = (coinStreaks[from][sender] || 0) + 1
     const streak = coinStreaks[from][sender]
@@ -187,7 +187,7 @@ async function handleCoinGuess({
     storage.setCoinStreakMax(coinStreakMax)
     storage.setCoinHistoricalMax(coinHistoricalMax)
 
-    if (typeof rewardWinner === "function") {
+    if (typeof rewardWinner === "function" && (!dobroOutcome.active || dobroOutcome.objectiveReachedNow)) {
       await rewardWinner(sender, rewardMultiplier)
     }
 
@@ -196,9 +196,12 @@ async function handleCoinGuess({
       `Streak: *${streak}*\n`
 
     if (dobroOutcome.active) {
-      winText += `Dobro ou Nada: ${dobroOutcome.state.activeStreak}/4\n`
+      winText += `Dobro ou Nada: ${dobroOutcome.state.activeStreak}/2\n`
       if (dobroOutcome.doubledJustActivated) {
         winText += "⚠️ DOBRO OU NADA ATIVADO! A próxima derrota terá punição com duração dobrada.\n"
+        winText += "✅ Objetivo atingido! Recompensa paga nesta rodada.\n"
+      } else {
+        winText += "Sem recompensa ainda: atinja o objetivo para receber no Dobro ou Nada.\n"
       }
     }
 
@@ -228,8 +231,7 @@ async function handleCoinGuess({
 
   if (acertou) {
     const dobroOutcome = registerDobroWin(from, sender, game.resultado)
-    const dobroState = getDobroState(from)
-    const rewardMultiplier = dobroState?.doubledEnabled ? 2 : 1
+    const rewardMultiplier = dobroOutcome.objectiveReachedNow ? 2 : 1
 
     coinStreaks[from][sender] = (coinStreaks[from][sender] || 0) + 1
     const streak = coinStreaks[from][sender]
@@ -243,15 +245,18 @@ async function handleCoinGuess({
     storage.setCoinStreakMax(coinStreakMax)
     storage.setCoinHistoricalMax(coinHistoricalMax)
 
-    if (typeof rewardWinner === "function") {
+    if (typeof rewardWinner === "function" && (!dobroOutcome.active || dobroOutcome.objectiveReachedNow)) {
       await rewardWinner(sender, rewardMultiplier)
     }
 
     let winText = `Voce acertou! A moeda caiu em *${game.resultado}*.\n🔥 Streak: *${streak}*`
     if (dobroOutcome.active) {
-      winText += `\nDobro ou Nada: ${dobroOutcome.state.activeStreak}/4`
+      winText += `\nDobro ou Nada: ${dobroOutcome.state.activeStreak}/2`
       if (dobroOutcome.doubledJustActivated && resenhaAveriguada[from]) {
         winText += "\n⚠️ DOBRO OU NADA ATIVADO! A próxima derrota terá punição com duração dobrada."
+        winText += "\n✅ Objetivo atingido! Recompensa paga nesta rodada."
+      } else if (!dobroOutcome.objectiveReachedNow) {
+        winText += "\nSem recompensa ainda: atinja o objetivo para receber no Dobro ou Nada."
       }
     }
 

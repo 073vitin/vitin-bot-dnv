@@ -15,7 +15,7 @@ const gameManager = {
   optInSessions: {},
 
   // Obtém ou cria lobby para um jogo
-  createOptInSession: (groupId, gameType, minPlayers, maxPlayers, timeoutMs = 30000) => {
+  createOptInSession: (groupId, gameType, minPlayers, maxPlayers, timeoutMs = 30000, options = {}) => {
     let gameId = generateLobbyId()
     if (!gameManager.optInSessions[groupId]) {
       gameManager.optInSessions[groupId] = {}
@@ -25,9 +25,17 @@ const gameManager = {
       gameId = generateLobbyId()
     }
     
+    const initialPlayers = Array.isArray(options?.initialPlayers)
+      ? options.initialPlayers.filter(Boolean)
+      : []
+    const dedupedInitialPlayers = [...new Set(initialPlayers)]
+    const cappedInitialPlayers = Number.isFinite(maxPlayers)
+      ? dedupedInitialPlayers.slice(0, Math.max(0, maxPlayers))
+      : dedupedInitialPlayers
+
     gameManager.optInSessions[groupId][gameId] = {
       gameType,
-      players: [],
+      players: cappedInitialPlayers,
       minPlayers,
       maxPlayers,
       createdAt: Date.now(),

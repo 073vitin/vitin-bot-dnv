@@ -41,7 +41,14 @@ async function handleGameCommands(ctx) {
     jidNormalizedUser,
   } = ctx
 
-  if (cmdName === prefix + "começa" && isGroup) {
+  const isJoinCommand = cmdName === prefix + "entrar" || cmdName === prefix + "join"
+  const isStartLobbyCommand = (
+    cmdName === prefix + "começar" ||
+    cmdName === prefix + "comecar" ||
+    cmdName === prefix + "start"
+  )
+
+  if ((cmdName === prefix + "começa" || cmdName === prefix + "comeca") && isGroup) {
     const targetType = normalizeUnifiedGameType(cmdArg1)
     if (!targetType) {
       await sock.sendMessage(from, {
@@ -59,20 +66,23 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((cmdName === prefix + "começa" && normalizeUnifiedGameType(cmdArg1) === "adivinhacao") && isGroup) {
+  if ((isStartLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "adivinhacao") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("adivinhacao", "Adivinhação")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
       return true
     }
 
-    const lobbyId = gameManager.createOptInSession(from, "adivinhacao", 1, 4, 30000)
+    const lobbyId = gameManager.createOptInSession(from, "adivinhacao", 1, 4, 30000, {
+      initialPlayers: [sender],
+    })
     await sock.sendMessage(from, {
       text:
         `🎰 Jogo de Adivinhação criado!\n` +
         `Lobby ID: *${lobbyId}*\n\n` +
-        `Para entrar: *!entrar ${lobbyId}*\n` +
-        `Para iniciar: *!começar ${lobbyId}*\n\n` +
+        `Criador já entrou automaticamente no lobby.\n` +
+        `Para entrar: *!entrar ${lobbyId}* (ou *!join ${lobbyId}*)\n` +
+        `Para iniciar: *!começar ${lobbyId}* (ou *!comecar ${lobbyId}* / *!start ${lobbyId}*)\n\n` +
         `Entrada por jogador: *${getGameBuyIn("adivinhacao")}* Epsteincoins (cobrada ao iniciar).\n` +
         `1-4 jogadores, número secreto entre 1 e 100.\n` +
         `Depois de iniciar, responda com *!resposta <número>*.`,
@@ -80,69 +90,78 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((cmdName === prefix + "começa" && normalizeUnifiedGameType(cmdArg1) === "batata") && isGroup) {
+  if ((isStartLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "batata") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("batata", "Batata Quente")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
       return true
     }
 
-    const lobbyId = gameManager.createOptInSession(from, "batata", 2, null, 30000)
+    const lobbyId = gameManager.createOptInSession(from, "batata", 2, null, 30000, {
+      initialPlayers: [sender],
+    })
     await sock.sendMessage(from, {
       text:
         `🥔 Batata Quente criada!\n` +
         `Lobby ID: *${lobbyId}*\n\n` +
-        `Para entrar: *!entrar ${lobbyId}*\n` +
-        `Para iniciar: *!começar ${lobbyId}*\n` +
+        `Criador já entrou automaticamente no lobby.\n` +
+        `Para entrar: *!entrar ${lobbyId}* (ou *!join ${lobbyId}*)\n` +
+        `Para iniciar: *!começar ${lobbyId}* (ou *!comecar ${lobbyId}* / *!start ${lobbyId}*)\n` +
         `Entrada por jogador: *${getGameBuyIn("batata")}* Epsteincoins (cobrada ao iniciar).\n` +
         `Mínimo de 2 jogadores, sem limite máximo.`,
     })
     return true
   }
 
-  if ((cmdName === prefix + "começa" && normalizeUnifiedGameType(cmdArg1) === "dados") && isGroup) {
+  if ((isStartLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "dados") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("dados", "Duelo de Dados")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
       return true
     }
 
-    const lobbyId = gameManager.createOptInSession(from, "dados", 2, 2, 30000)
+    const lobbyId = gameManager.createOptInSession(from, "dados", 2, 2, 30000, {
+      initialPlayers: [sender],
+    })
     await sock.sendMessage(from, {
       text:
         `🎲 Duelo de Dados criado!\n` +
         `Lobby ID: *${lobbyId}*\n\n` +
-        `Para entrar: *!entrar ${lobbyId}*\n` +
-        `Para iniciar: *!começar ${lobbyId}*\n` +
+        `Criador já entrou automaticamente no lobby.\n` +
+        `Para entrar: *!entrar ${lobbyId}* (ou *!join ${lobbyId}*)\n` +
+        `Para iniciar: *!começar ${lobbyId}* (ou *!comecar ${lobbyId}* / *!start ${lobbyId}*)\n` +
         `Entrada por jogador: *${getGameBuyIn("dados")}* Epsteincoins (cobrada ao iniciar).`,
     })
     return true
   }
 
-  if ((cmdName === prefix + "começa" && normalizeUnifiedGameType(cmdArg1) === "rr") && isGroup) {
+  if ((isStartLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "rr") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("rr", "Roleta Russa")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
       return true
     }
 
-    const lobbyId = gameManager.createOptInSession(from, "rr", 1, 4, 30000)
+    const lobbyId = gameManager.createOptInSession(from, "rr", 1, 4, 30000, {
+      initialPlayers: [sender],
+    })
     await sock.sendMessage(from, {
       text:
         `🔫 Roleta Russa criada!\n` +
         `Lobby ID: *${lobbyId}*\n\n` +
-        `Para entrar: *!entrar ${lobbyId}*\n` +
-        `Para iniciar: *!começar ${lobbyId} [aposta]*\n` +
+        `Criador já entrou automaticamente no lobby.\n` +
+        `Para entrar: *!entrar ${lobbyId}* (ou *!join ${lobbyId}*)\n` +
+        `Para iniciar: *!começar ${lobbyId}* (ou *!comecar ${lobbyId}* / *!start ${lobbyId}*) [aposta]\n` +
         `Entrada por jogador: *${getGameBuyIn("rr")}* Epsteincoins (cobrada ao iniciar).\n` +
         `Exemplo: *!começar ${lobbyId} 3*`,
     })
     return true
   }
 
-  if (cmdName === prefix + "entrar" && isGroup) {
+  if (isJoinCommand && isGroup) {
     const lobbyId = normalizeLobbyId(cmdArg1)
     if (!lobbyId) {
-      await sock.sendMessage(from, { text: "Use: !entrar <LobbyID>" })
+      await sock.sendMessage(from, { text: "Use: !entrar <LobbyID> ou !join <LobbyID>" })
       return true
     }
 
@@ -189,10 +208,10 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if (cmdName === prefix + "começar" && isGroup) {
+  if (isStartLobbyCommand && isGroup) {
     const lobbyId = normalizeLobbyId(cmdArg1)
     if (!lobbyId) {
-      await sock.sendMessage(from, { text: "Use: !começar <LobbyID>" })
+      await sock.sendMessage(from, { text: "Use: !começar <LobbyID> (ou !comecar / !start)" })
       return true
     }
 
@@ -371,6 +390,12 @@ async function handleGameCommands(ctx) {
       storage.setGameState(from, stateKey, state)
       gameManager.clearOptInSession(from, lobbyId)
 
+      const currentPlayer = roletaRussa.getCurrentPlayer(state)
+      const startMentions = Array.from(new Set([
+        ...session.players,
+        ...(currentPlayer ? [currentPlayer] : []),
+      ]))
+
       await sock.sendMessage(from, {
         text:
           `🔫 Roleta Russa iniciada no lobby *${lobbyId}*!\n` +
@@ -379,7 +404,7 @@ async function handleGameCommands(ctx) {
           `${roletaRussa.formatStatus(state)}\n` +
           `Atire com: *!atirar* (auto)\n` +
           `Ou: *!atirar ${lobbyId}*`,
-        mentions: session.players,
+        mentions: startMentions,
       })
       return true
     }
@@ -651,9 +676,14 @@ async function handleGameCommands(ctx) {
       await distributeLobbyBuyInPool(winners, state.buyInPool, "Roleta Russa")
       storage.clearGameState(from, stateKey)
     } else {
+      const currentPlayer = roletaRussa.getCurrentPlayer(state)
+      const clickMentions = Array.from(new Set([
+        sender,
+        ...(currentPlayer ? [currentPlayer] : []),
+      ]))
       await sock.sendMessage(from, {
         text: `*CLICK*\n✅ @${sender.split("@")[0]} sobreviveu no lobby *${lobbyId}*!\n\n${roletaRussa.formatStatus(state)}`,
-        mentions: [sender],
+        mentions: clickMentions,
       })
     }
     return true

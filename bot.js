@@ -776,13 +776,20 @@ async function startBot(){
       if (gameType === "memória") {
         const state = memória.start(from, triggeredBy)
         storage.setGameState(from, "memóriaActive", state)
-        await sock.sendMessage(from, {
+        const sequenceMessage = await sock.sendMessage(from, {
           text: memória.formatSequence(state)
         })
 
         setTimeout(async () => {
           const finalState = storage.getGameState(from, "memóriaActive")
           if (finalState) {
+            if (sequenceMessage?.key) {
+              try {
+                await sock.sendMessage(from, { delete: sequenceMessage.key })
+              } catch (e) {
+                console.error("Erro ao apagar mensagem da sequência da memória", e)
+              }
+            }
             await sock.sendMessage(from, {
               text: memória.formatHidden(finalState)
             })
