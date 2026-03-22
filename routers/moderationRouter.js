@@ -353,3 +353,48 @@ async function handleModerationCommands(ctx) {
 module.exports = {
   handleModerationCommands,
 }
+  // =========================
+  // SUBMENUS !ADM e !ADMECONOMIA
+  // =========================
+  if (cmdName === prefix + "adm") {
+    if (!senderIsAdmin) {
+      await sock.sendMessage(from, { text: "Apenas admins podem acessar o menu !adm." })
+      return true
+    }
+
+    const admMenu = `
+╔═══ *Menu ADM* ═══
+│ !mute @user
+│ !unmute @user
+│ !ban @user
+│ !punições / !punicoes @user
+│ !puniçõesclr / !punicoesclr @user
+│ !puniçõesadd / !punicoesadd @user
+│ !resenha (ativa/desativa punições em jogos)
+│ !adminadd @user
+│ !adminrm @user
+╚═══════════════
+`
+    await sock.sendMessage(from, { text: admMenu })
+    return true
+  }
+
+  if (cmdName === prefix + "admeconomia") {
+    if (!senderIsAdmin) {
+      await sock.sendMessage(from, { text: "Apenas admins podem acessar o menu !admeconomia." })
+      return true
+    }
+
+    const admeconomiaMenu = `
+╔═══ *Menu ADM Economia* ═══
+│ !setcoins *@user <quantidade>
+│ !addcoins *@user <quantidade>
+│ !removecoins *@user <quantidade>
+│ !additem *@user <item> <quantidade>
+│ !additem *@user passe <tipo> <severidade> <qtd>
+│ !removeitem *@user <item> <quantidade>
+╚════════════════════
+`
+    await sock.sendMessage(from, { text: admeconomiaMenu })
+    return true
+  }
