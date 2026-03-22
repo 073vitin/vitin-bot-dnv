@@ -2,7 +2,7 @@
  * ROLETA RUSSA (Russian Roulette)
  * 1-4 jogadores se revezam atirando. Chance de 1/6 de ser punido.
  * No 6º tiro sem acerto, o acerto é garantido.
- * Inicia com !começa rr e os tiros são com !atirar
+ * Inicia com !começar rr (ou aliases !comecar/!start) e os tiros são com !atirar
  */
 
 const gameManager = require("../gameManager")
@@ -47,18 +47,6 @@ module.exports = {
     const isHit = state.cylinders === ((state.shotsFired - 1) % 6)
     const surpassedBet = currentPlayerShotCount > (state.betValue || 0)
 
-    // Em jogo solo, ultrapassar a aposta já encerra com vitória automática.
-    if (state.players.length === 1 && surpassedBet) {
-      return {
-        hit: false,
-        autoWin: true,
-        winner: currentPlayer,
-        winners: [currentPlayer],
-        currentPlayerShotCount,
-        surpassedBet,
-      }
-    }
-
     if (isHit) {
       if (state.players.length > 1 && surpassedBet) {
         return {
@@ -76,6 +64,18 @@ module.exports = {
         hit: true,
         guaranteed: state.shotsFired >= 6,
         loser: state.loser,
+        currentPlayerShotCount,
+        surpassedBet,
+      }
+    }
+
+    // Em jogo solo, só há vitória automática após ultrapassar aposta em tiro sem acerto.
+    if (state.players.length === 1 && surpassedBet) {
+      return {
+        hit: false,
+        autoWin: true,
+        winner: currentPlayer,
+        winners: [currentPlayer],
         currentPlayerShotCount,
         surpassedBet,
       }

@@ -419,6 +419,15 @@ async function handleEconomyCommands(ctx) {
       return true
     }
 
+    for (const roll of result.results) {
+      if (!roll?.punishment?.type) continue
+      await applyPunishment(sock, from, roll.targetUser, String(roll.punishment.type), {
+        severityMultiplier: Number(roll.punishment.severity) || 1,
+        origin: "game",
+        botUserId: sock.user?.id,
+      })
+    }
+
     const resultLines = result.results.map((r) => `\n🎁 ${r.effect}\n${r.result}`).join("")
     const mentions = result.results
       .filter((r) => r.targetIsOther)

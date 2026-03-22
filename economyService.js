@@ -1111,9 +1111,9 @@ const LOOTBOX_EFFECTS = [
   { id: "shield_3_loss", name: "Perder 3 escudos", weight: 2, description: "-3 escudos" },
   { id: "kronos_quebrada", name: "Ganhar Coroa Kronos (Quebrada)", weight: 1, description: "+1 Coroa Kronos (Quebrada)" },
   { id: "punishment_pass_1x", name: "Passe de Punição (1x)", weight: 2, description: "+1 Passe de Punição (1x)" },
-  { id: "punishment_1x", name: "Punição (1x)", weight: 4, description: "-1 de punição" },
+  { id: "punishment_1x", name: "Punição (1x)", weight: 4, description: "Punição aleatória (1x)" },
   { id: "punishment_pass_5x", name: "Passe de Punição (5x)", weight: 1, description: "+1 Passe de Punição (5x)" },
-  { id: "punishment_5x", name: "Punição (5x)", weight: 3, description: "-1 de punição (5x)" },
+  { id: "punishment_5x", name: "Punição (5x)", weight: 3, description: "Punição aleatória (5x)" },
 ]
 
 function selectRandomEffect() {
@@ -1144,6 +1144,15 @@ function openLootbox(userId, quantity = 1, groupMembers = []) {
   incrementStat(userId, "lootboxesOpened", qty)
   
   const results = []
+  const ownerNormalized = normalizeUserId(userId)
+  const eligibleMembers = Array.from(new Set(groupMembers || []))
+    .filter((memberId) => {
+      const normalized = normalizeUserId(memberId)
+      if (!normalized || normalized === ownerNormalized) return false
+      const existing = economyCache.users[normalized]
+      return Boolean(existing && Number.isFinite(existing.coins) && existing.coins >= 100)
+    })
+
   for (let i = 0; i < qty; i++) {
     const effect = selectRandomEffect()
     
@@ -1152,24 +1161,16 @@ function openLootbox(userId, quantity = 1, groupMembers = []) {
     const isNegativeEffect = effect.id.includes("loss") || effect.id.includes("punishment")
     incrementStat(userId, isNegativeEffect ? "lootboxNegativeRolls" : "lootboxPositiveRolls", 1)
     
-    if (!isNegativeEffect && groupMembers.length > 0) {
+    if (!isNegativeEffect && eligibleMembers.length > 0) {
       // 25% chance para efeitos positivos irem para outro jogador
       if (Math.random() < 0.25) {
-        const eligibleMembers = groupMembers.filter((memberId) => {
-          return getCoins(memberId) >= 100 && normalizeUserId(memberId) !== normalizeUserId(userId)
-        })
-        
         if (eligibleMembers.length > 0) {
           targetUser = eligibleMembers[Math.floor(Math.random() * eligibleMembers.length)]
         }
       }
-    } else if (isNegativeEffect && groupMembers.length > 0) {
+    } else if (isNegativeEffect && eligibleMembers.length > 0) {
       // Efeitos negativos tem chance menor (20%) de ir para outro jogador
       if (Math.random() < 0.2) {
-        const eligibleMembers = groupMembers.filter((memberId) => {
-          return getCoins(memberId) >= 100 && normalizeUserId(memberId) !== normalizeUserId(userId)
-        })
-        
         if (eligibleMembers.length > 0) {
           targetUser = eligibleMembers[Math.floor(Math.random() * eligibleMembers.length)]
         }
@@ -1179,6 +1180,7 @@ function openLootbox(userId, quantity = 1, groupMembers = []) {
     let resultText = ""
     const targetIsOther = normalizeUserId(targetUser) !== normalizeUserId(userId)
     const targetPrefix = targetIsOther ? `@${targetUser.split("@")[0]}: ` : "Você: "
+    let punishment = null
     
     // Apply the effect
     switch (effect.id) {
@@ -1229,7 +1231,11 @@ function openLootbox(userId, quantity = 1, groupMembers = []) {
       case "punishment_1x":
         {
           const punishmentType = pickRandomPunishmentType()
-          resultText = `${targetPrefix}Sofreu punição ${punishmentType} (1x)`
+          punishment = {
+            type: punishmentType,
+            severity: 1,
+          }
+          resultText = `${targetPrefix}Punição sorteada ${punishmentType} (1x)`
         }
         break
       case "punishment_pass_5x":
@@ -1243,7 +1249,11 @@ function openLootbox(userId, quantity = 1, groupMembers = []) {
       case "punishment_5x":
         {
           const punishmentType = pickRandomPunishmentType()
-          resultText = `${targetPrefix}Sofreu punição ${punishmentType} (5x)`
+          punishment = {
+            type: punishmentType,
+            severity: 5,
+          }
+          resultText = `${targetPrefix}Punição sorteada ${punishmentType} (5x)`
         }
         break
       case "daily_reset":
@@ -1269,6 +1279,7 @@ function openLootbox(userId, quantity = 1, groupMembers = []) {
       result: resultText,
       targetUser,
       targetIsOther,
+      punishment,
     })
   }
   

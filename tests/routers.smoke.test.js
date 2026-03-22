@@ -294,7 +294,7 @@ test("games router handles !jogos submenu", async () => {
   assert.match(sent[0].payload.text, /SUBMENU: JOGOS/)
 })
 
-test("games router blocks command reaction start with fewer than 3 participants", async () => {
+test("games router blocks !começar reação with fewer than 3 participants", async () => {
   const sent = []
   let started = false
   const sock = {
@@ -317,14 +317,14 @@ test("games router blocks command reaction start with fewer than 3 participants"
     sock,
     from: "group@g.us",
     sender: "user@s.whatsapp.net",
-    cmd: "!começa reação",
-    cmdName: "!começa",
+    cmd: "!começar reação",
+    cmdName: "!começar",
     cmdArg1: "reação",
     cmdArg2: "",
     mentioned: [],
     prefix: "!",
     isGroup: true,
-    text: "!começa reação",
+    text: "!começar reação",
     msg: { message: {} },
     storage: {
       getGameState: () => null,
@@ -445,6 +445,66 @@ test("economy router no longer handles !jogos", async () => {
 
   assert.equal(handled, false)
   assert.equal(sent.length, 0)
+})
+
+test("economy router applies lootbox punishment effects", async () => {
+  const { sock, sent } = createSockCapture()
+  const punishCalls = []
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "autor@s.whatsapp.net",
+    cmd: "!lootbox 1",
+    cmdName: "!lootbox",
+    cmdArg1: "1",
+    cmdArg2: "",
+    cmdParts: ["!lootbox", "1"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    economyService: {
+      openLootbox: () => ({
+        ok: true,
+        quantity: 1,
+        results: [
+          {
+            effect: "Punição (1x)",
+            result: "@alvo: Punição sorteada 5 (1x)",
+            targetUser: "alvo@s.whatsapp.net",
+            targetIsOther: true,
+            punishment: {
+              type: 5,
+              severity: 1,
+            },
+          },
+        ],
+      }),
+    },
+    parseQuantity: (v, fallback = 1) => {
+      const n = Number.parseInt(String(v || ""), 10)
+      return Number.isFinite(n) && n > 0 ? n : fallback
+    },
+    formatDuration: () => "0m",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+    applyPunishment: async (...args) => {
+      punishCalls.push(args)
+    },
+  })
+
+  assert.equal(handled, true)
+  assert.equal(punishCalls.length, 1)
+  assert.equal(punishCalls[0][2], "alvo@s.whatsapp.net")
+  assert.equal(sent.length, 1)
+  assert.match(sent[0].payload.text, /Lootbox/)
 })
 
 test("games message flow triggers periodic game and records trigger", async () => {

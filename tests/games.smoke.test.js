@@ -61,6 +61,17 @@ test("roletaRussa solo auto-win triggers after surpassing bet", () => {
   assert.deepEqual(outcome.winners, [player])
 })
 
+test("roletaRussa solo prioritizes hit over auto-win when chamber matches", () => {
+  const player = "solo@s.whatsapp.net"
+  const state = roletaRussa.start("g@g.us", [player], { betValue: 0 })
+  state.cylinders = 0
+
+  const outcome = roletaRussa.takeShotAt(state)
+  assert.equal(outcome.hit, true)
+  assert.equal(Boolean(outcome.autoWin), false)
+  assert.equal(outcome.loser, player)
+})
+
 test("roletaRussa multiplayer hit after surpassing bet becomes all-win", () => {
   const players = ["a@s.whatsapp.net", "b@s.whatsapp.net"]
   const state = roletaRussa.start("g@g.us", players, { betValue: 1 })

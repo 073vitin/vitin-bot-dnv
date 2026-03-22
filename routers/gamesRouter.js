@@ -1,6 +1,7 @@
 const telemetry = require("../telemetryService")
 
 const RR_TURN_TIMEOUT_MS = 60_000
+const RR_TURN_TIMEOUT_SECONDS = Math.floor(RR_TURN_TIMEOUT_MS / 1000)
 const rrTurnTimeouts = new Map()
 
 function rrTurnTimerKey(groupId, lobbyId) {
@@ -63,11 +64,13 @@ async function handleGameCommands(ctx) {
   } = ctx
 
   const isJoinCommand = cmdName === prefix + "entrar" || cmdName === prefix + "join"
-  const isStartLobbyCommand = (
+  const isStartCommand = (
     cmdName === prefix + "começar" ||
     cmdName === prefix + "comecar" ||
     cmdName === prefix + "start"
   )
+  const normalizedStartTarget = normalizeUnifiedGameType(cmdArg1)
+  const isQuickGameStartTarget = ["embaralhado", "memória", "reação", "comando"].includes(normalizedStartTarget)
 
   async function getCommandParticipants() {
     const metadata = await sock.groupMetadata(from)
@@ -117,7 +120,7 @@ async function handleGameCommands(ctx) {
 
       await sock.sendMessage(from, {
         text:
-          `⏱️ Lobby *${lobbyId}*: @${timedOutPlayer.split("@")[0]} não usou *!atirar* em 60s.\n` +
+          `⏱️ Lobby *${lobbyId}*: @${timedOutPlayer.split("@")[0]} não usou *!atirar* em ${RR_TURN_TIMEOUT_SECONDS}s.\n` +
           (winners.length > 0
             ? `🏆 Vitória automática para ${winners.map((p) => `@${p.split("@")[0]}`).join(" ")} (multiplicador ${betMultiplier}x).`
             : "Partida encerrada por timeout."),
@@ -192,14 +195,14 @@ async function handleGameCommands(ctx) {
 │ ${prefix}lobbies
 │ ${prefix}começar <jogo> (ou ${prefix}comecar / ${prefix}start)
 │ ${prefix}começar <LobbyID> (ou ${prefix}comecar / ${prefix}start)
-│ ${prefix}começa <embaralhado|memória|reação|comando>
-│ ${prefix}comeca <embaralhado|memoria|reacao|comando>
+│ ${prefix}começar <embaralhado|memória|reação|comando>
+│ ${prefix}comecar <embaralhado|memoria|reacao|comando>
 ╰━━━━━━━━━━━━━━━━━━━━╯`,
     })
     return true
   }
 
-  if ((isStartLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "adivinhacao") && isGroup) {
+  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "adivinhacao") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("adivinhacao", "Adivinhação")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
@@ -229,7 +232,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isStartLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "batata") && isGroup) {
+  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "batata") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("batata", "Batata Quente")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
@@ -258,7 +261,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isStartLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "dados") && isGroup) {
+  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "dados") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("dados", "Duelo de Dados")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
@@ -286,7 +289,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isStartLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "rr") && isGroup) {
+  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "rr") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("rr", "Roleta Russa")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
@@ -368,7 +371,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if (isStartLobbyCommand && isGroup) {
+  if (isStartCommand && isGroup && !isQuickGameStartTarget) {
     const lobbyId = normalizeLobbyId(cmdArg1)
     if (!lobbyId) {
       await sock.sendMessage(from, { text: "Use: !começar <LobbyID> (ou !comecar / !start)" })
@@ -583,7 +586,7 @@ async function handleGameCommands(ctx) {
           `Aposta: *${state.betValue || 0}*\n` +
           `Multiplicador (aposta + 1): *${state.betMultiplier || 1}x*\n` +
           `${roletaRussa.formatStatus(state)}\n` +
-          `⏱️ Cada turno expira em *60s*.\n` +
+          `⏱️ Cada turno expira em *${RR_TURN_TIMEOUT_SECONDS}s*.\n` +
           `Atire com: *!atirar* (auto)\n` +
           `Ou: *!atirar ${lobbyId}*`,
         mentions: startMentions,
@@ -592,7 +595,7 @@ async function handleGameCommands(ctx) {
       return true
     }
 
-    await sock.sendMessage(from, { text: "Esse lobby deve ser iniciado com !começa <jogo>." })
+    await sock.sendMessage(from, { text: "Esse lobby deve ser iniciado com !começar <jogo> (ou !comecar / !start)." })
     return true
   }
 
@@ -982,7 +985,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((cmd === prefix + "embaralhado" || ((cmdName === prefix + "começa" || cmdName === prefix + "comeca") && normalizeUnifiedGameType(cmdArg1) === "embaralhado")) && isGroup) {
+  if ((cmd === prefix + "embaralhado" || (isStartCommand && normalizeUnifiedGameType(cmdArg1) === "embaralhado")) && isGroup) {
     const participants = await getCommandParticipants()
     if (participants.length < 3) {
       await sock.sendMessage(from, { text: "São necessários pelo menos 3 participantes para iniciar o Embaralhado por comando." })
@@ -999,7 +1002,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if (((cmdName === prefix + "começa" || cmdName === prefix + "comeca") && normalizeUnifiedGameType(cmdArg1) === "memória") && isGroup) {
+  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "memória") && isGroup) {
     const participants = await getCommandParticipants()
     if (participants.length < 3) {
       await sock.sendMessage(from, { text: "São necessários pelo menos 3 participantes para iniciar a Memória por comando." })
@@ -1016,7 +1019,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if (((cmdName === prefix + "começa" || cmdName === prefix + "comeca") && normalizeUnifiedGameType(cmdArg1) === "reação") && isGroup) {
+  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "reação") && isGroup) {
     const participants = await getCommandParticipants()
 
     if (participants.length < 3) {
@@ -1035,7 +1038,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if (((cmdName === prefix + "começa" || cmdName === prefix + "comeca") && normalizeUnifiedGameType(cmdArg1) === "comando") && isGroup) {
+  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "comando") && isGroup) {
     const participants = await getCommandParticipants()
     if (participants.length < 3) {
       await sock.sendMessage(from, { text: "São necessários pelo menos 3 participantes para iniciar o Comando por comando." })

@@ -132,7 +132,12 @@ async function videoToSticker(buffer){
 // INICIAR BOT
 // =========================
 async function startBot(){
-  const authDir = path.join(__dirname, "data", "auth")
+  const authDir = process.env.BOT_AUTH_DIR
+    ? path.resolve(process.env.BOT_AUTH_DIR)
+    : path.join(__dirname, ".data", "auth")
+  if (!fs.existsSync(authDir)) {
+    fs.mkdirSync(authDir, { recursive: true })
+  }
   const { state, saveCreds } = await useMultiFileAuthState(authDir)
   const { version } = await fetchLatestBaileysVersion()
 
@@ -207,11 +212,12 @@ async function startBot(){
     // =========================
     let senderIsAdmin = false
     if (isGroup && isCommand) {
+      const delegatedAdmin = storage.isDelegatedAdmin(from, sender)
       const metadata = await sock.groupMetadata(from)
       const admins = (metadata?.participants || [])
         .filter((p) => p.admin)
         .map((p) => jidNormalizedUser(p.id))
-      senderIsAdmin = admins.includes(sender)
+      senderIsAdmin = delegatedAdmin || admins.includes(sender)
     }
 
     // =========================
@@ -487,29 +493,44 @@ async function startBot(){
         return { playerId, multiplier }
       })
 
-      const highestMultiplier = playerMultipliers.reduce((max, entry) => Math.max(max, entry.multiplier), 1)
-      const selectedPlayers = playerMultipliers
-        .filter((entry) => entry.multiplier === highestMultiplier)
-        .map((entry) => entry.playerId)
-      if (selectedPlayers.length === 0) return
+      const totalWeight = playerMultipliers.reduce((sum, entry) => sum + entry.multiplier, 0)
+      if (totalWeight <= 0) return
 
-      const weightedPool = safePool * highestMultiplier
-      const each = Math.floor(weightedPool / selectedPlayers.length)
-      const remainder = weightedPool % selectedPlayers.length
-      if (each <= 0 && remainder <= 0) return
+      const weightShares = playerMultipliers.map((entry) => {
+        const exact = (safePool * entry.multiplier) / totalWeight
+        return {
+          playerId: entry.playerId,
+          multiplier: entry.multiplier,
+          baseAmount: Math.floor(exact),
+          fractional: exact - Math.floor(exact),
+        }
+      })
 
-      for (let i = 0; i < selectedPlayers.length; i++) {
-        const playerId = selectedPlayers[i]
-        const amount = each + (i < remainder ? 1 : 0)
+      let distributed = weightShares.reduce((sum, entry) => sum + entry.baseAmount, 0)
+      let remainder = safePool - distributed
+      weightShares.sort((a, b) => b.fractional - a.fractional)
+      for (let i = 0; i < weightShares.length && remainder > 0; i++) {
+        weightShares[i].baseAmount += 1
+        remainder -= 1
+      }
+
+      for (const share of weightShares) {
+        const playerId = share.playerId
+        const amount = share.baseAmount
         if (amount <= 0) continue
         economyService.creditCoins(playerId, amount, {
           type: "game-buyin-payout",
-          details: `Partilha de entrada (${gameLabel}) com multiplicador ${highestMultiplier}x`,
-          meta: { game: gameLabel.toLowerCase(), poolAmount: safePool, weightedPool, multiplier: highestMultiplier },
+          details: `Partilha de entrada (${gameLabel})`,
+          meta: {
+            game: gameLabel.toLowerCase(),
+            poolAmount: safePool,
+            totalWeight,
+            playerMultiplier: share.multiplier,
+          },
         })
         incrementUserStat(playerId, "moneyGameWon", amount)
         await sock.sendMessage(from, {
-          text: `🏦 @${playerId.split("@")[0]} recebeu *${amount}* Epsteincoins da pool (${gameLabel}, ${highestMultiplier}x).`,
+          text: `🏦 @${playerId.split("@")[0]} recebeu *${amount}* Epsteincoins da pool (${gameLabel}, peso ${share.multiplier}x).`,
           mentions: [playerId],
         })
       }
