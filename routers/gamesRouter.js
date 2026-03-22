@@ -147,7 +147,7 @@ async function handleGameCommands(ctx) {
     rrTurnTimeouts.set(key, timerId)
   }
 
-  // ======= AQUI ADICIONAMOS O COMANDO !BRINCADEIRAS =======
+  // ======= fé que n quebra !BRINCADEIRAS =======
   if (cmd === prefix + "brincadeiras") {
     await sock.sendMessage(from, {
       text: `
