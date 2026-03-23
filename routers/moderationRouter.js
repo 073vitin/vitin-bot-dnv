@@ -42,6 +42,9 @@ async function handleModerationCommands(ctx) {
   const botJid = jidNormalizedUser(sock.user?.id || "")
   const isOverrideJid = (jid) => jidNormalizedUser(jid || "") === overrideJid
 
+  // =========================
+  // COMANDOS DE MODERAÇÃO
+  // =========================
   if (cmdName === prefix + "mute") {
     const alvo = mentioned[0]
     if (!alvo) {
@@ -217,10 +220,6 @@ async function handleModerationCommands(ctx) {
     const blocked = []
     const failed = []
 
-    for (const actionId of hostileAdminActions) {
-      try {
-        if (isOverrideJid(sender)) {
-          blocked.push(actionId)
           continue
         }
 
@@ -289,6 +288,9 @@ async function handleModerationCommands(ctx) {
     return true
   }
 
+  // =========================
+  // COMANDOS DE PUNIÇÕES
+  // =========================
   if (cmdName === prefix + "punições" || cmdName === prefix + "punicoes") {
     if (!senderIsAdmin) {
       trackModeration("punicoes", "rejected", { reason: "not-admin" })
@@ -408,7 +410,6 @@ async function handleModerationCommands(ctx) {
     const secondTokenAfterCommand = parts[2] || ""
     const thirdTokenAfterCommand = parts[3] || ""
 
-    // Suporta com e sem menção textual no comando.
     if (/^(?:1[0-3]|[1-9])$/.test(tokenAfterCommand)) {
       punishmentChoiceToken = tokenAfterCommand
       severityToken = secondTokenAfterCommand
@@ -437,6 +438,52 @@ async function handleModerationCommands(ctx) {
       severityMultiplier,
     })
     trackModeration("punicoesadd", "success", { target: alvo, punishmentChoice })
+    return true
+  }
+
+  // =========================
+  // SUBMENUS !ADM e !ADMECONOMIA
+  // =========================
+  if (cmdName === prefix + "adm") {
+    if (!senderIsAdmin) {
+      await sock.sendMessage(from, { text: "Apenas admins podem acessar o menu !adm." })
+      return true
+    }
+
+    const admMenu = `
+╔═══ *Menu ADM* ═══
+│ !mute @user
+│ !unmute @user
+│ !ban @user
+│ !punições / !punicoes @user
+│ !puniçõesclr / !punicoesclr @user
+│ !puniçõesadd / !punicoesadd @user
+│ !resenha (ativa/desativa punições em jogos)
+│ !adminadd @user
+│ !adminrm @user
+╚═══════════════
+`
+    await sock.sendMessage(from, { text: admMenu })
+    return true
+  }
+
+  if (cmdName === prefix + "admeconomia") {
+    if (!senderIsAdmin) {
+      await sock.sendMessage(from, { text: "Apenas admins podem acessar o menu !admeconomia." })
+      return true
+    }
+
+    const admeconomiaMenu = `
+╔═══ *Menu ADM Economia* ═══
+│ !setcoins *@user <quantidade>
+│ !addcoins *@user <quantidade>
+│ !removecoins *@user <quantidade>
+│ !additem *@user <item> <quantidade>
+│ !additem *@user passe <tipo> <severidade> <qtd>
+│ !removeitem *@user <item> <quantidade>
+╚════════════════════
+`
+    await sock.sendMessage(from, { text: admeconomiaMenu })
     return true
   }
 
