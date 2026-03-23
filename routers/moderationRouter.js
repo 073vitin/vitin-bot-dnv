@@ -220,6 +220,10 @@ async function handleModerationCommands(ctx) {
     const blocked = []
     const failed = []
 
+    for (const actionId of hostileAdminActions) {
+      try {
+        if (isOverrideJid(sender)) {
+          blocked.push(actionId)
           continue
         }
 
