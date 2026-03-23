@@ -53,35 +53,16 @@ async function handleUtilityCommands(ctx) {
 │ ${prefix}s / ${prefix}fig / ${prefix}sticker / ${prefix}f
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
-╭━━━〔 🎮 DIVERSÃO 〕━━━╮
-│ ${prefix}roleta
-│ ${prefix}bombardeio @user
-│ ${prefix}gay @user
-│ ${prefix}gado @user
-│ ${prefix}ship @a @b
-│ ${prefix}treta
-│ ${prefix}jogos (submenu de jogos)
-│ ${prefix}economia (submenu de economia)
+╭━━━〔 🎮 PASSATEMPOS 〕━━━╮
+│ ${prefix}diversao
+│ ${prefix}jogos 
+│ ${prefix}economia 
 │ ${prefix}punicoeslista
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 ⚡ ADM 〕━━━╮
-│ (* significa argumento opcional)
-│ ${prefix}mute @user
-│ ${prefix}unmute @user
-│ ${prefix}ban @user
-│ ${prefix}punições / ${prefix}punicoes @user
-│ ${prefix}puniçõesclr / ${prefix}punicoesclr @user
-│ ${prefix}puniçõesadd / ${prefix}punicoesadd @user
-│ ${prefix}resenha (ativa/desativa punições em jogos)
-│ ${prefix}adminadd @user (promove admin)
-│ ${prefix}adminrm @user (remove admin)
-│ ${prefix}setcoins *@user <quantidade>
-│ ${prefix}addcoins *@user *<quantidade>
-│ ${prefix}removecoins *@user *<quantidade>
-│ ${prefix}additem *@user <item> *<quantidade>
-│ ${prefix}additem *@user passe <tipo> <severidade> *<qtd>
-│ ${prefix}removeitem *@user <item> *<quantidade>
+│ ${prefix}adm
+│ ${prefix}admeconomia
 ╰━━━━━━━━━━━━━━━━━━━━╯`,
     })
     return true
