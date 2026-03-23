@@ -54,7 +54,7 @@ async function handleUtilityCommands(ctx) {
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 🎮 PASSATEMPOS 〕━━━╮
-│ ${prefix}diversao
+│ ${prefix}brincadeiras
 │ ${prefix}jogos 
 │ ${prefix}economia 
 │ ${prefix}punicoeslista
