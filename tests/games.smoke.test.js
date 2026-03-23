@@ -4,6 +4,31 @@ const assert = require("node:assert/strict")
 const adivinhacao = require("../games/adivinhacao")
 const dueloDados = require("../games/dueloDados")
 const roletaRussa = require("../games/roletaRussa")
+const caraOuCoroa = require("../games/caraOuCoroa")
+const storage = require("../storage")
+
+function createSockCapture() {
+  const sent = []
+  return {
+    sock: {
+      async sendMessage(to, payload) {
+        sent.push({ to, payload })
+      },
+    },
+    sent,
+  }
+}
+
+function setCoinRound(groupId, senderId, resultado) {
+  const coinGames = storage.getCoinGames()
+  if (!coinGames[groupId]) coinGames[groupId] = {}
+  coinGames[groupId][senderId] = {
+    player: senderId,
+    resultado,
+    createdAt: Date.now(),
+  }
+  storage.setCoinGames(coinGames)
+}
 
 test("adivinhacao resolves with closest players and punishments", () => {
   const players = ["a@s.whatsapp.net", "b@s.whatsapp.net", "c@s.whatsapp.net"]
@@ -105,4 +130,117 @@ test("roletaRussa chamber selection hits on expected shot index", () => {
     assert.equal(state.shotsFired, chamber + 1)
     assert.equal(Boolean(outcome?.guaranteed), chamber === 5)
   }
+})
+
+test("dobro ou nada resets cycle at 2 and rewards every cycle", async () => {
+  const groupId = `__dobro_cycle_${Date.now()}@g.us`
+  const sender = "winner@s.whatsapp.net"
+  const { sock } = createSockCapture()
+  let rewards = 0
+  let rewardMultiplierSum = 0
+
+  caraOuCoroa.startDobroOuNada(groupId, sender)
+
+  for (let round = 1; round <= 4; round++) {
+    setCoinRound(groupId, sender, "cara")
+    const handled = await caraOuCoroa.handleCoinGuess({
+      sock,
+      from: groupId,
+      sender,
+      cmd: "cara",
+      isGroup: true,
+      overrideJid: "",
+      overridePhoneNumber: "",
+      overrideIdentifiers: [],
+      getPunishmentMenuText: () => "",
+      getRandomPunishmentChoice: () => "1",
+      getPunishmentNameById: () => "teste",
+      applyPunishment: async () => {},
+      clearPendingPunishment: () => {},
+      rewardWinner: async (_winnerId, rewardMultiplier = 1) => {
+        rewards += 1
+        rewardMultiplierSum += Number(rewardMultiplier) || 0
+      },
+      chargeLoser: async () => {},
+    })
+    assert.equal(handled, true)
+  }
+
+  const state = caraOuCoroa.getDobroState(groupId)
+  assert.equal(rewards, 2)
+  assert.equal(rewardMultiplierSum, 4)
+  assert.equal(state.activeStreak, 0)
+  assert.equal(state.streakPlayer, sender)
+})
+
+test("override coin guess uses player guess as resolved result", async () => {
+  const groupId = `__override_guess_${Date.now()}@g.us`
+  const sender = "override@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+  let rewardCalls = 0
+
+  setCoinRound(groupId, sender, "coroa")
+
+  const handled = await caraOuCoroa.handleCoinGuess({
+    sock,
+    from: groupId,
+    sender,
+    cmd: "cara",
+    isGroup: true,
+    overrideChecksEnabled: true,
+    overrideJid: "",
+    overridePhoneNumber: "",
+    overrideIdentifiers: [sender],
+    getPunishmentMenuText: () => "",
+    getRandomPunishmentChoice: () => "1",
+    getPunishmentNameById: () => "teste",
+    applyPunishment: async () => {},
+    clearPendingPunishment: () => {},
+    rewardWinner: async () => {
+      rewardCalls += 1
+    },
+    chargeLoser: async () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(rewardCalls, 1)
+  assert.ok(sent.some((m) => String(m.payload?.text || "").includes("A moeda caiu em *cara*")))
+})
+
+test("disabled override uses actual toss result", async () => {
+  const groupId = `__override_disabled_${Date.now()}@g.us`
+  const sender = "override@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+  let rewardCalls = 0
+  let lossCalls = 0
+
+  setCoinRound(groupId, sender, "coroa")
+
+  const handled = await caraOuCoroa.handleCoinGuess({
+    sock,
+    from: groupId,
+    sender,
+    cmd: "cara",
+    isGroup: true,
+    overrideChecksEnabled: false,
+    overrideJid: "",
+    overridePhoneNumber: "",
+    overrideIdentifiers: [sender],
+    getPunishmentMenuText: () => "",
+    getRandomPunishmentChoice: () => "1",
+    getPunishmentNameById: () => "teste",
+    applyPunishment: async () => {},
+    clearPendingPunishment: () => {},
+    rewardWinner: async () => {
+      rewardCalls += 1
+    },
+    chargeLoser: async () => {
+      lossCalls += 1
+    },
+  })
+
+  assert.equal(handled, true)
+  assert.equal(rewardCalls, 0)
+  assert.equal(lossCalls, 1)
+  assert.ok(sent.some((m) => String(m.payload?.text || "").includes("A moeda caiu em *coroa*")))
 })

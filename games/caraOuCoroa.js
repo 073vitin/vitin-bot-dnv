@@ -70,9 +70,13 @@ function registerDobroWin(groupId, winnerId, result) {
   }
 
   const wasDoubled = !!state.doubledEnabled
+  let objectiveReachedNow = false
   if (state.activeStreak >= 2) {
+    objectiveReachedNow = true
     state.doubledEnabled = true
     if (!state.activeSince) state.activeSince = Date.now()
+    // Ao atingir o objetivo, reinicia o ciclo para permitir nova recompensa em 2 vitórias.
+    state.activeStreak = 0
   }
 
   state.lastResult = result
@@ -85,7 +89,7 @@ function registerDobroWin(groupId, winnerId, result) {
     active: true,
     state,
     doubledJustActivated: !wasDoubled && state.doubledEnabled,
-    objectiveReachedNow: !wasDoubled && state.doubledEnabled,
+    objectiveReachedNow,
   }
 }
 
@@ -153,6 +157,7 @@ async function handleCoinGuess({
   sender,
   cmd,
   isGroup,
+  overrideChecksEnabled = true,
   overrideJid,
   overridePhoneNumber,
   overrideIdentifiers,
@@ -185,13 +190,15 @@ async function handleCoinGuess({
   )
   const normalizedSender = String(sender || "").trim().toLowerCase().split(":")[0]
   const senderUserPart = normalizedSender.split("@")[0]
-  const isOverride = overrideIdentitySet.has(normalizedSender) || overrideIdentitySet.has(senderUserPart)
-  const acertou = isOverride || (cmd === game.resultado)
+  const isOverride = Boolean(overrideChecksEnabled) &&
+    (overrideIdentitySet.has(normalizedSender) || overrideIdentitySet.has(senderUserPart))
+  const resolvedResult = isOverride ? cmd : game.resultado
+  const acertou = (cmd === resolvedResult)
 
   if (!coinStreaks[from]) coinStreaks[from] = {}
 
   if (acertou && resenhaAveriguada[from]) {
-    const dobroOutcome = registerDobroWin(from, sender, game.resultado)
+    const dobroOutcome = registerDobroWin(from, sender, resolvedResult)
     const rewardMultiplier = dobroOutcome.objectiveReachedNow ? 2 : 1
 
     coinStreaks[from][sender] = (coinStreaks[from][sender] || 0) + 1
@@ -211,7 +218,7 @@ async function handleCoinGuess({
     }
 
     let winText =
-      `Você acertou! A moeda caiu em *${game.resultado}*.\n` +
+      `Você acertou! A moeda caiu em *${resolvedResult}*.\n` +
       `Streak: *${streak}*`
 
     if (dobroOutcome.active) {
@@ -255,7 +262,7 @@ async function handleCoinGuess({
   }
 
   if (acertou) {
-    const dobroOutcome = registerDobroWin(from, sender, game.resultado)
+    const dobroOutcome = registerDobroWin(from, sender, resolvedResult)
     const rewardMultiplier = dobroOutcome.objectiveReachedNow ? 2 : 1
 
     coinStreaks[from][sender] = (coinStreaks[from][sender] || 0) + 1
@@ -274,7 +281,7 @@ async function handleCoinGuess({
       await rewardWinner(sender, rewardMultiplier)
     }
 
-    let winText = `Você acertou! A moeda caiu em *${game.resultado}*.\n🔥 Streak: *${streak}*`
+    let winText = `Você acertou! A moeda caiu em *${resolvedResult}*.\n🔥 Streak: *${streak}*`
     if (dobroOutcome.active) {
       winText += `\nDobro ou Nada: ${dobroOutcome.state.activeStreak}/2`
       if (dobroOutcome.doubledJustActivated && resenhaAveriguada[from]) {
@@ -290,7 +297,7 @@ async function handleCoinGuess({
     return true
   }
 
-  const dobroOutcome = registerDobroLoss(from, sender, game.resultado)
+  const dobroOutcome = registerDobroLoss(from, sender, resolvedResult)
 
   delete coinStreaks[from][sender]
   if (Object.keys(coinStreaks[from]).length === 0) delete coinStreaks[from]
@@ -305,7 +312,7 @@ async function handleCoinGuess({
     ? "💥 Sua streak foi resetada.\n⚠️ DOBRO OU NADA DISPAROU."
     : "💥 Sua streak foi resetada."
   await sock.sendMessage(from, {
-    text: `A moeda caiu em *${game.resultado}*.\nSe fudeu.\n${lossLabel}`,
+    text: `A moeda caiu em *${resolvedResult}*.\nSe fudeu.\n${lossLabel}`,
     mentions: [sender]
   })
 

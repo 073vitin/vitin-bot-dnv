@@ -67,20 +67,44 @@ const overrideIdentifiers = [
   "279202939035898@s.whatsapp.net",
   "279202939035898",
 ]
+const OVERRIDE_CONTROL_SCOPE = "__system__"
+const OVERRIDE_CONTROL_KEY = "overrideControl"
 
 function normalizeOverrideIdentity(value = "") {
   return String(value || "").trim().toLowerCase().split(":")[0]
 }
 
-function isOverrideIdentity(identity = "") {
+function getOverrideIdentitySet() {
+  return new Set(overrideIdentifiers.map(normalizeOverrideIdentity).filter(Boolean))
+}
+
+function isKnownOverrideIdentity(identity = "") {
   const normalized = normalizeOverrideIdentity(identity)
   if (!normalized) return false
 
-  const overrideSet = new Set(overrideIdentifiers.map(normalizeOverrideIdentity).filter(Boolean))
+  const overrideSet = getOverrideIdentitySet()
   if (overrideSet.has(normalized)) return true
 
   const userPart = normalized.split("@")[0]
   return Boolean(userPart && overrideSet.has(userPart))
+}
+
+function getOverrideChecksEnabled() {
+  const controlState = storage.getGameState(OVERRIDE_CONTROL_SCOPE, OVERRIDE_CONTROL_KEY)
+  if (typeof controlState?.enabled !== "boolean") return true
+  return controlState.enabled
+}
+
+function setOverrideChecksEnabled(enabled) {
+  storage.setGameState(OVERRIDE_CONTROL_SCOPE, OVERRIDE_CONTROL_KEY, {
+    enabled: Boolean(enabled),
+    updatedAt: Date.now(),
+  })
+}
+
+function isOverrideIdentity(identity = "") {
+  if (!getOverrideChecksEnabled()) return false
+  return isKnownOverrideIdentity(identity)
 }
 
 const dddMap = {
@@ -220,12 +244,27 @@ async function startBot(){
     const cmdArg2 = cmdParts[2] || ""
     const mentioned = (msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []).map(jidNormalizedUser)
     let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+    const overrideChecksEnabled = getOverrideChecksEnabled()
 
     if (isCommand) {
       telemetry.markCommand(cmdName, {
         group: isGroup,
         groupId: isGroup ? from : null,
       })
+    }
+
+    if (cmdName === prefix + "toggleover") {
+      if (isGroup) return
+      if (!isKnownOverrideIdentity(sender)) return
+
+      const nextEnabled = !overrideChecksEnabled
+      setOverrideChecksEnabled(nextEnabled)
+      await sock.sendMessage(from, {
+        text: nextEnabled
+          ? "Override global: ATIVADO"
+          : "Override global: DESATIVADO",
+      })
+      return
     }
 
     // =========================
@@ -302,6 +341,7 @@ async function startBot(){
       sender,
       cmd,
       isGroup,
+      overrideChecksEnabled,
       overrideJid,
       overridePhoneNumber,
       overrideIdentifiers,
@@ -1093,6 +1133,7 @@ async function startBot(){
       cmd,
       prefix,
       isGroup,
+      isOverrideSender,
       msg,
       quoted,
       mentioned,
@@ -1150,6 +1191,7 @@ async function startBot(){
       getPunishmentMenuText,
       getPunishmentChoiceFromText,
       applyPunishment,
+      overrideChecksEnabled,
       overrideJid,
       overrideIdentifiers,
     })

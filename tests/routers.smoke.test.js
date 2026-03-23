@@ -652,3 +652,58 @@ test("utility router handles !punicoeslista command", async () => {
   assert.equal(sent[1].to, "group@g.us")
   assert.match(sent[1].payload.text, /enviei a lista de punições no privado/i)
 })
+
+test("utility router handles hidden !comandosfull only for override in DM", async () => {
+  const { sock, sent } = createSockCapture()
+  const sender = "override@s.whatsapp.net"
+
+  const handled = await handleUtilityCommands({
+    sock,
+    from: sender,
+    sender,
+    cmd: "!comandosfull",
+    prefix: "!",
+    isGroup: false,
+    isOverrideSender: true,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+    jidNormalizedUser: (id) => id,
+  })
+
+  assert.equal(handled, true)
+  assert.ok(sent.length >= 1)
+  assert.ok(sent.some((entry) => /toggleover/i.test(String(entry.payload?.text || ""))))
+  assert.ok(sent.some((entry) => /overridetest/i.test(String(entry.payload?.text || ""))))
+})
+
+test("utility router ignores !comandosfull for non-override sender", async () => {
+  const { sock, sent } = createSockCapture()
+
+  const handled = await handleUtilityCommands({
+    sock,
+    from: "user@s.whatsapp.net",
+    sender: "user@s.whatsapp.net",
+    cmd: "!comandosfull",
+    prefix: "!",
+    isGroup: false,
+    isOverrideSender: false,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+    jidNormalizedUser: (id) => id,
+  })
+
+  assert.equal(handled, false)
+  assert.equal(sent.length, 0)
+})

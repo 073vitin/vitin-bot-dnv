@@ -20,6 +20,7 @@ async function handleModerationCommands(ctx) {
     getPunishmentMenuText,
     getPunishmentChoiceFromText,
     applyPunishment,
+    overrideChecksEnabled,
     overrideJid,
     overrideIdentifiers,
   } = ctx
@@ -47,18 +48,23 @@ async function handleModerationCommands(ctx) {
       .filter(Boolean)
   )
   const isOverrideJid = (jid) => {
+    if (!overrideChecksEnabled) return false
     const normalized = String(jidNormalizedUser(jid || "") || "").trim().toLowerCase().split(":")[0]
     if (!normalized) return false
     if (overrideIdentitySet.has(normalized)) return true
     const userPart = normalized.split("@")[0]
     return Boolean(userPart && overrideIdentitySet.has(userPart))
   }
+  const resolveAdminTarget = () => {
+    if (mentioned[0]) return mentioned[0]
+    return senderIsAdmin ? sender : ""
+  }
 
   // =========================
   // COMANDOS DE MODERAÇÃO
   // =========================
   if (cmdName === prefix + "mute") {
-    const alvo = mentioned[0]
+    const alvo = resolveAdminTarget()
     if (!alvo) {
       trackModeration("mute", "rejected", { reason: "missing-target" })
       await sock.sendMessage(from, { text: "Marque alguém para mutar!" })
@@ -89,7 +95,7 @@ async function handleModerationCommands(ctx) {
   }
 
   if (cmdName === prefix + "unmute") {
-    const alvo = mentioned[0]
+    const alvo = resolveAdminTarget()
     if (!alvo) {
       trackModeration("unmute", "rejected", { reason: "missing-target" })
       await sock.sendMessage(from, { text: "Marque alguém para desmutar!" })
@@ -117,7 +123,7 @@ async function handleModerationCommands(ctx) {
   }
 
   if (cmdName === prefix + "ban") {
-    const alvo = mentioned[0]
+    const alvo = resolveAdminTarget()
     if (!alvo) {
       trackModeration("ban", "rejected", { reason: "missing-target" })
       await sock.sendMessage(from, { text: "Marque alguém para banir!" })
@@ -313,7 +319,7 @@ async function handleModerationCommands(ctx) {
       await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
       return true
     }
-    const alvo = mentioned[0]
+    const alvo = resolveAdminTarget()
     if (!alvo) {
       trackModeration("punicoes", "rejected", { reason: "missing-target" })
       await sock.sendMessage(from, { text: "Marque alguém para listar as punições." })
@@ -367,7 +373,7 @@ async function handleModerationCommands(ctx) {
       await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
       return true
     }
-    const alvo = mentioned[0]
+    const alvo = resolveAdminTarget()
     if (!alvo) {
       trackModeration("punicoesclr", "rejected", { reason: "missing-target" })
       await sock.sendMessage(from, { text: "Marque alguém para limpar as punições." })
@@ -407,7 +413,7 @@ async function handleModerationCommands(ctx) {
       await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
       return true
     }
-    const alvo = mentioned[0]
+    const alvo = resolveAdminTarget()
     if (!alvo) {
       trackModeration("punicoesadd", "rejected", { reason: "missing-target" })
       await sock.sendMessage(from, { text: "Marque alguém para aplicar punição." })
@@ -491,12 +497,12 @@ async function handleModerationCommands(ctx) {
 
     const admeconomiaMenu = `
 ╔═══ *Menu ADM Economia* ═══
-│ !setcoins *@user <quantidade>
-│ !addcoins *@user <quantidade>
-│ !removecoins *@user <quantidade>
-│ !additem *@user <item> <quantidade>
-│ !additem *@user passe <tipo> <severidade> <qtd>
-│ !removeitem *@user <item> <quantidade>
+  │ !setcoins *[@user] <quantidade>
+  │ !addcoins *[@user] <quantidade>
+  │ !removecoins *[@user] <quantidade>
+  │ !additem *[@user] <item> <quantidade>
+  │ !additem *[@user] passe <tipo> <severidade> <qtd>
+  │ !removeitem *[@user] <item> <quantidade>
 ╚════════════════════
 `
     await sock.sendMessage(from, { text: admeconomiaMenu })
