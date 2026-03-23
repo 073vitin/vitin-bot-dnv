@@ -245,7 +245,8 @@ async function handleUtilityCommands(ctx) {
       `  Uso: ${prefix}punicoesclr [@usuario]\n` +
       `  Faz: limpa punições ativas e pendências do alvo.\n` +
       `- ${prefix}puniçõesadd / ${prefix}punicoesadd\n` +
-      `  Uso: ${prefix}punicoesadd [@usuario] <1-13> [multiplicador]\n` +
+      `  Uso: ${prefix}punicoesadd [@usuario] <1-13> [severidade]\n` +
+      `  Ex.: ${prefix}punicoesadd @usuario 7 3\n` +
       `  Faz: aplica punição manual por ID no alvo.\n` +
       `- ${prefix}resenha\n` +
       `  Uso: ${prefix}resenha\n` +

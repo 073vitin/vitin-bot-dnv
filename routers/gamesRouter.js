@@ -510,7 +510,7 @@ module.exports = { handleGamesCommand };
     const betRaw = Number.parseInt(String(betToken || ""), 10)
     if (!Number.isFinite(betRaw) || betRaw < 1 || betRaw > 10) {
       await sock.sendMessage(from, {
-        text: "Use: !aposta <1-10> ou !aposta <LobbyID> <1-10>",
+        text: "Use: !aposta <LobbyID> <1-10>",
       })
       return true
     }
@@ -580,7 +580,7 @@ module.exports = { handleGamesCommand };
         text:
           `⏳ Lobby *${lobbyId}* entra em período de aposta por 15s.\n` +
           `Cada jogador pode definir bet de *1x a 10x* para multiplicar o buy-in.\n` +
-          `Use: *!aposta <1-10>* (ou *!aposta ${lobbyId} <1-10>*).\n` +
+          `Use: *!aposta ${lobbyId} <1-10>*).\n` +
           `Se não escolher, fica em *1x*.`,
         mentions: session.players || [],
       })

@@ -426,22 +426,14 @@ async function handleModerationCommands(ctx) {
     }
 
     const parts = text.trim().split(/\s+/)
-    let punishmentChoiceToken = ""
-    let severityToken = ""
-    const tokenAfterCommand = parts[1] || ""
-    const secondTokenAfterCommand = parts[2] || ""
-    const thirdTokenAfterCommand = parts[3] || ""
-
-    if (/^(?:1[0-3]|[1-9])$/.test(tokenAfterCommand)) {
-      punishmentChoiceToken = tokenAfterCommand
-      severityToken = secondTokenAfterCommand
-    } else if (/^(?:1[0-3]|[1-9])$/.test(secondTokenAfterCommand)) {
-      punishmentChoiceToken = secondTokenAfterCommand
-      severityToken = thirdTokenAfterCommand
-    } else {
-      punishmentChoiceToken = getPunishmentChoiceFromText(text) || ""
-      severityToken = secondTokenAfterCommand || thirdTokenAfterCommand || ""
-    }
+    const args = parts.slice(1)
+    const punishmentArgIndex = args.findIndex((token) => /^(?:1[0-3]|[1-9])$/.test(token))
+    const punishmentChoiceToken = punishmentArgIndex >= 0
+      ? args[punishmentArgIndex]
+      : getPunishmentChoiceFromText(text) || ""
+    const severityToken = punishmentArgIndex >= 0
+      ? args[punishmentArgIndex + 1] || ""
+      : ""
 
     const punishmentChoice = getPunishmentChoiceFromText(punishmentChoiceToken)
     const parsedSeverity = Number.parseInt(String(severityToken || "1"), 10)
@@ -449,7 +441,7 @@ async function handleModerationCommands(ctx) {
     if (!punishmentChoice) {
       trackModeration("punicoesadd", "rejected", { reason: "invalid-choice" })
       await sock.sendMessage(from, {
-        text: "Use: !puniçõesadd @user <1-13> [multiplicador]\n" + getPunishmentMenuText(),
+        text: "Use: !puniçõesadd [@user] <1-13> [severidade]\nEx.: !punicoesadd @user 7 3\n" + getPunishmentMenuText(),
         mentions: [alvo],
       })
       return true
@@ -479,7 +471,7 @@ async function handleModerationCommands(ctx) {
 │ !ban @user
 │ !punições / !punicoes @user
 │ !puniçõesclr / !punicoesclr @user
-│ !puniçõesadd / !punicoesadd @user
+│ !puniçõesadd / !punicoesadd [@user] <1-13> [severidade]
 │ !resenha (ativa/desativa punições em jogos)
 │ !adminadd @user
 │ !adminrm @user
