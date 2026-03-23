@@ -1247,7 +1247,7 @@ function openLootbox(userId, quantity = 1, groupMembers = []) {
   for (let i = 0; i < qty; i++) {
     const effect = selectRandomEffect()
     
-    // Decide if the effect goes to the user or another member
+    // Decide se o efeito vai para o usuário ou para outro membro
     let targetUser = userId
     const isNegativeEffect = effect.id.includes("loss") || effect.id.includes("punishment")
     incrementStat(userId, isNegativeEffect ? "lootboxNegativeRolls" : "lootboxPositiveRolls", 1)
@@ -1273,7 +1273,7 @@ function openLootbox(userId, quantity = 1, groupMembers = []) {
     const targetPrefix = targetIsOther ? `@${targetUser.split("@")[0]}: ` : "Você: "
     let punishment = null
     
-    // Apply the effect
+    // Aplica o efeito
     switch (effect.id) {
       case "coins_1000_gain":
         creditCoins(targetUser, 1000, { type: "lootbox", details: "Efeito: +1000 coins" })

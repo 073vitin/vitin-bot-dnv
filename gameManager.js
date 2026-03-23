@@ -127,8 +127,8 @@ const gameManager = {
 
     const counter = gameManager.messageCounters[groupId]
     const now = Date.now()
-    const windowMs = 20 * 60 * 1000 // 20 minutes
-    const burstMs = 30 * 1000 // 30 seconds
+    const windowMs = 20 * 60 * 1000 // 20 minutos
+    const burstMs = 30 * 1000 // 30 segundos
 
     // Reinicia janela global (cota de ativação)
     if (now - counter.windowStartedAt > windowMs) {

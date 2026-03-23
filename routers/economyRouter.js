@@ -447,7 +447,7 @@ async function handleEconomyCommands(ctx) {
       return true
     }
 
-    // Get group members for lootbox effects
+    // pega membros do grupo para os efeitos da lootbox
     const metadata = await sock.groupMetadata(from)
     const groupMembers = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
 
