@@ -26,6 +26,17 @@ async function handleEconomyCommands(ctx) {
     applyPunishment,
   } = ctx
 
+  const limits = typeof economyService.getOperationLimits === "function"
+    ? economyService.getOperationLimits()
+    : {
+      maxCoinsBalance: 2_000_000_000,
+      maxCoinOperation: 50_000_000,
+      maxItemStack: 100_000,
+      maxItemOperation: 10_000,
+      maxLootboxOpenPerCall: 100,
+      maxForgeQuantity: 1_000,
+    }
+
   if (cmdName === prefix + "perfil" && cmdArg1 === "stats") {
     const profile = economyService.getProfile(sender)
     await sock.sendMessage(from, {
@@ -146,9 +157,13 @@ async function handleEconomyCommands(ctx) {
       await sock.sendMessage(from, {
         text: bought.reason === "insufficient-funds"
           ? `Saldo insuficiente para essa compra. Custo: ${bought.totalCost} ${CURRENCY_LABEL}.`
-          : (bought.reason === "not-for-sale"
-            ? "Esse item não pode ser comprado diretamente na loja."
-            : "Item/índice inválido. Use !loja para ver o índice."),
+          : (bought.reason === "quantity-too-large"
+            ? `Quantidade muito alta. Limite por operação: ${bought.maxQuantity}.`
+            : (bought.reason === "stack-limit"
+              ? `Limite de pilha atingido para esse item. Máximo por item: ${bought.maxStack}.`
+              : (bought.reason === "not-for-sale"
+                ? "Esse item não pode ser comprado diretamente na loja."
+                : "Item/índice inválido. Use !loja para ver o índice."))),
       })
       return true
     }
@@ -178,9 +193,13 @@ async function handleEconomyCommands(ctx) {
       await sock.sendMessage(from, {
         text: bought.reason === "insufficient-funds"
           ? `Saldo insuficiente. Custo: ${bought.totalCost} ${CURRENCY_LABEL}.`
-          : (bought.reason === "not-for-sale"
-            ? "Esse item não pode ser comprado diretamente na loja."
-            : "Item inválido. Use !loja."),
+          : (bought.reason === "quantity-too-large"
+            ? `Quantidade muito alta. Limite por operação: ${bought.maxQuantity}.`
+            : (bought.reason === "stack-limit"
+              ? `Limite de pilha do alvo atingido. Máximo por item: ${bought.maxStack}.`
+              : (bought.reason === "not-for-sale"
+                ? "Esse item não pode ser comprado diretamente na loja."
+                : "Item inválido. Use !loja."))),
       })
       return true
     }
@@ -201,7 +220,9 @@ async function handleEconomyCommands(ctx) {
       await sock.sendMessage(from, {
         text: sold.reason === "insufficient-items"
           ? `Você não tem quantidade suficiente desse item. Disponível: ${sold.available}.`
-          : "Item inválido para venda.",
+          : (sold.reason === "quantity-too-large"
+            ? `Quantidade muito alta. Limite por operação: ${sold.maxQuantity}.`
+            : "Item inválido para venda."),
       })
       return true
     }
@@ -221,7 +242,13 @@ async function handleEconomyCommands(ctx) {
 
     const transferred = economyService.transferCoins(sender, target, quantity)
     if (!transferred.ok) {
-      await sock.sendMessage(from, { text: "Saldo insuficiente para doação." })
+      await sock.sendMessage(from, {
+        text: transferred.reason === "amount-too-large"
+          ? `Quantidade muito alta. Limite por operação: ${transferred.maxAmount}.`
+          : (transferred.reason === "receiver-max-balance"
+            ? `A carteira do alvo está no limite máximo (${limits.maxCoinsBalance} ${CURRENCY_LABEL}).`
+            : "Saldo insuficiente para doação."),
+      })
       return true
     }
 
@@ -246,7 +273,11 @@ async function handleEconomyCommands(ctx) {
       await sock.sendMessage(from, {
         text: transferred.reason === "insufficient-items"
           ? `Você não tem esse item nessa quantidade (disponível: ${transferred.available}).`
-          : "Item inválido.",
+          : (transferred.reason === "quantity-too-large"
+            ? `Quantidade muito alta. Limite por operação: ${transferred.maxQuantity}.`
+            : (transferred.reason === "stack-limit"
+              ? `O alvo já está no limite desse item (${transferred.maxStack}).`
+              : "Item inválido.")),
       })
       return true
     }
@@ -262,6 +293,16 @@ async function handleEconomyCommands(ctx) {
     const target = mentioned[0]
     if (!target) {
       await sock.sendMessage(from, { text: "Use: !roubar @user" })
+      return true
+    }
+
+    const STEAL_COOLDOWN_MS = 30 * 60_000
+    const lastStealAt = economyService.getStealCooldown(sender)
+    const stealRemaining = (lastStealAt + STEAL_COOLDOWN_MS) - Date.now()
+    if (stealRemaining > 0) {
+      await sock.sendMessage(from, {
+        text: `⏰ Você pode tentar roubar novamente em ${formatDuration(stealRemaining)}.`,
+      })
       return true
     }
 
@@ -282,6 +323,8 @@ async function handleEconomyCommands(ctx) {
       })
       return true
     }
+
+    economyService.setStealCooldown(sender, Date.now())
 
     economyService.incrementStat(sender, "steals", 1)
 
@@ -404,7 +447,7 @@ async function handleEconomyCommands(ctx) {
       return true
     }
 
-    // Get group members for lootbox effects
+    // pega membros do grupo para os efeitos da lootbox
     const metadata = await sock.groupMetadata(from)
     const groupMembers = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
 
@@ -414,7 +457,9 @@ async function handleEconomyCommands(ctx) {
       await sock.sendMessage(from, {
         text: result.reason === "insufficient-items"
           ? `Você não tem quantidade suficiente de lootboxes. Disponível: ${available}.`
-          : "Erro ao abrir lootbox.",
+          : (result.reason === "quantity-too-large"
+            ? `Quantidade muito alta. Limite por abertura: ${result.maxQuantity}.`
+            : "Erro ao abrir lootbox."),
       })
       return true
     }
@@ -439,8 +484,14 @@ async function handleEconomyCommands(ctx) {
     }
     mentions.unshift(sender)
 
+    const redirected = result.results.filter((r) => r.targetIsOther)
+    const redirectedPrefix = redirected.length > 0
+      ? `\n⚠️ ATENÇÃO: *${redirected.length}* efeito(s) foram redirecionados para outras pessoas do grupo.\n` +
+        `${redirected.map((r) => `- ${r.effect} -> @${r.targetUser.split("@")[0]}`).join("\n")}\n`
+      : ""
+
     await sock.sendMessage(from, {
-      text: `🎉 ${sender.split("@")[0]} abriu *${quantity}x* Lootbox!${resultLines}`,
+      text: `🎉 ${sender.split("@")[0]} abriu *${quantity}x* Lootbox!${redirectedPrefix}${resultLines}`,
       mentions,
     })
     return true
@@ -476,6 +527,12 @@ async function handleEconomyCommands(ctx) {
       if (forged.reason === "insufficient-items") {
         await sock.sendMessage(from, {
           text: `Você não possui passes suficientes desse tipo/severidade. Disponível: ${forged.available}.`,
+        })
+        return true
+      }
+      if (forged.reason === "quantity-too-large") {
+        await sock.sendMessage(from, {
+          text: `Quantidade muito alta para falsificação. Limite por operação: ${forged.maxQuantity}.`,
         })
         return true
       }
@@ -667,7 +724,7 @@ async function handleEconomyCommands(ctx) {
 
     if (cmdName === prefix + "setcoins") {
       const amount = Number.parseInt(cmdParts[argOffset], 10)
-      if (!Number.isFinite(amount) || amount < 0) {
+      if (!Number.isFinite(amount) || amount < 0 || amount > limits.maxCoinsBalance) {
         return sock.sendMessage(from, { text: "Use: !setcoins [@user] <quantidade>" })
       }
       const result = economyService.setCoins(target, amount, {
@@ -684,7 +741,9 @@ async function handleEconomyCommands(ctx) {
 
     if (cmdName === prefix + "addcoins") {
       const amount = parseQuantity(cmdParts[argOffset], 1)
-      if (amount <= 0) return sock.sendMessage(from, { text: "Use: !addcoins [@user] [quantidade]" })
+      if (amount <= 0 || amount > limits.maxCoinOperation) {
+        return sock.sendMessage(from, { text: `Use: !addcoins [@user] [quantidade] (máx: ${limits.maxCoinOperation})` })
+      }
       economyService.creditCoins(target, amount, {
         type: "admin-credit",
         details: `Admin adicionou ${amount}`,
@@ -696,7 +755,9 @@ async function handleEconomyCommands(ctx) {
 
     if (cmdName === prefix + "removecoins") {
       const amount = parseQuantity(cmdParts[argOffset], 1)
-      if (amount <= 0) return sock.sendMessage(from, { text: "Use: !removecoins [@user] [quantidade]" })
+      if (amount <= 0 || amount > limits.maxCoinOperation) {
+        return sock.sendMessage(from, { text: `Use: !removecoins [@user] [quantidade] (máx: ${limits.maxCoinOperation})` })
+      }
       const removed = economyService.debitCoinsFlexible(target, amount, {
         type: "admin-debit",
         details: `Admin removeu ${amount}`,
@@ -720,7 +781,7 @@ async function handleEconomyCommands(ctx) {
         const passType = parseQuantity(cmdParts[argOffset + 1], 0)
         const passSeverity = parseQuantity(cmdParts[argOffset + 2], 1)
         qty = parseQuantity(cmdParts[argOffset + 3], 1)
-        if (passType < 1 || passType > 13 || passSeverity <= 0 || qty <= 0) {
+        if (passType < 1 || passType > 13 || passSeverity <= 0 || qty <= 0 || qty > limits.maxItemOperation) {
           return sock.sendMessage(from, {
             text: "Use: !additem [@user] passe <tipo 1-13> <severidade> [quantidade]",
           })
@@ -730,6 +791,10 @@ async function handleEconomyCommands(ctx) {
           return sock.sendMessage(from, { text: "Tipo ou severidade de passe inválido." })
         }
         effectiveItem = passKey
+      }
+
+      if (qty <= 0 || qty > limits.maxItemOperation) {
+        return sock.sendMessage(from, { text: `Quantidade inválida. Máximo por operação: ${limits.maxItemOperation}.` })
       }
 
       const next = economyService.addItem(target, effectiveItem, qty)
@@ -754,7 +819,7 @@ async function handleEconomyCommands(ctx) {
       const item = cmdParts[argOffset]
       const qtyInput = cmdParts[argOffset + 1]
       const qty = parseQuantity(qtyInput, 0)
-      if (!item || !qtyInput || qty <= 0) {
+      if (!item || !qtyInput || qty <= 0 || qty > limits.maxItemOperation) {
         return sock.sendMessage(from, { text: "Use: !removeitem [@user] <tipo> <quantidade>" })
       }
       economyService.removeItem(target, item, qty)
