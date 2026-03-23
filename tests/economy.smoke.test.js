@@ -104,3 +104,24 @@ test("steal cooldown setter/getter works", () => {
   economy.setStealCooldown(a, stamp)
   assert.equal(economy.getStealCooldown(a), Math.floor(stamp))
 })
+
+test("coin transfer rejects oversized amount", () => {
+  cleanupTestUsers()
+  const a = TEST_USERS[0]
+  const b = TEST_USERS[1]
+  economy.creditCoins(a, 1_000_000, { type: "test-credit" })
+
+  const tooLarge = economy.transferCoins(a, b, 999_999_999)
+  assert.equal(tooLarge.ok, false)
+  assert.equal(tooLarge.reason, "amount-too-large")
+})
+
+test("lootbox open rejects oversized quantity", () => {
+  cleanupTestUsers()
+  const a = TEST_USERS[0]
+  economy.addItem(a, "lootbox", 1000)
+
+  const result = economy.openLootbox(a, 9999, [a])
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, "quantity-too-large")
+})

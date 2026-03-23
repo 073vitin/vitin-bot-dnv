@@ -6,6 +6,12 @@ const DATA_DIR = path.join(__dirname, ".data")
 const ECONOMY_FILE = path.join(DATA_DIR, "economy.json")
 const DEFAULT_COINS = 0
 const DAY_MS = 24 * 60 * 60 * 1000
+const MAX_COINS_BALANCE = 2_000_000_000
+const MAX_COIN_OPERATION = 50_000_000
+const MAX_ITEM_STACK = 100_000
+const MAX_ITEM_OPERATION = 10_000
+const MAX_LOOTBOX_OPEN_PER_CALL = 100
+const MAX_FORGE_QUANTITY = 1_000
 
 const PUNISHMENT_TYPE_NAMES = {
   1: "max. 5 caracteres",
@@ -197,6 +203,23 @@ function normalizeUserId(userId = "") {
   return String(userId || "").trim().toLowerCase()
 }
 
+function capPositiveInt(value, cap, fallback = 0) {
+  const parsed = Math.floor(Number(value) || 0)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.min(parsed, Math.max(1, Math.floor(Number(cap) || 1)))
+}
+
+function getOperationLimits() {
+  return {
+    maxCoinsBalance: MAX_COINS_BALANCE,
+    maxCoinOperation: MAX_COIN_OPERATION,
+    maxItemStack: MAX_ITEM_STACK,
+    maxItemOperation: MAX_ITEM_OPERATION,
+    maxLootboxOpenPerCall: MAX_LOOTBOX_OPEN_PER_CALL,
+    maxForgeQuantity: MAX_FORGE_QUANTITY,
+  }
+}
+
 function loadEconomy() {
   try {
     if (!fs.existsSync(ECONOMY_FILE)) return
@@ -385,7 +408,7 @@ function setCoins(userId, amount, transaction = null) {
   if (!user) return { ok: false, balance: 0, delta: 0 }
 
   const previous = getCoins(userId)
-  const next = Math.max(0, Math.floor(Number(amount) || 0))
+  const next = Math.min(MAX_COINS_BALANCE, Math.max(0, Math.floor(Number(amount) || 0)))
   user.coins = next
   touchUser(user)
   saveEconomy()
@@ -403,27 +426,32 @@ function setCoins(userId, amount, transaction = null) {
 
 function creditCoins(userId, amount, transaction = null) {
   const user = ensureUser(userId)
-  const parsedAmount = Math.floor(Number(amount) || 0)
+  const parsedAmount = capPositiveInt(amount, MAX_COIN_OPERATION, 0)
   if (!user || parsedAmount <= 0) return 0
 
-  user.coins = Math.max(0, getCoins(userId) + parsedAmount)
-  user.stats.coinsLifetimeEarned = Math.max(0, Math.floor(Number(user.stats.coinsLifetimeEarned) || 0) + parsedAmount)
+  const current = getCoins(userId)
+  const room = Math.max(0, MAX_COINS_BALANCE - current)
+  const applied = Math.min(parsedAmount, room)
+  if (applied <= 0) return 0
+
+  user.coins = Math.max(0, current + applied)
+  user.stats.coinsLifetimeEarned = Math.max(0, Math.floor(Number(user.stats.coinsLifetimeEarned) || 0) + applied)
   touchUser(user)
   saveEconomy()
   if (transaction) {
     pushTransaction(userId, {
       ...transaction,
-      deltaCoins: parsedAmount,
+      deltaCoins: applied,
     })
   }
   const txType = transaction?.type || "unspecified"
-  telemetry.incrementCounter("economy.minted", parsedAmount, { source: txType })
+  telemetry.incrementCounter("economy.minted", applied, { source: txType })
   telemetry.appendEvent("economy.credit", {
     userId: normalizeUserId(userId),
-    amount: parsedAmount,
+    amount: applied,
     source: txType,
   })
-  return parsedAmount
+  return applied
 }
 
 function debitCoins(userId, amount, transaction = null) {
@@ -583,21 +611,23 @@ function removeKronosDuration(userId, itemKey = "kronosQuebrada", quantity = 1) 
 
 function addItem(userId, itemKey, quantity = 1) {
   const key = normalizeItemKey(itemKey)
-  const qty = Math.floor(Number(quantity) || 0)
+  const qty = capPositiveInt(quantity, MAX_ITEM_OPERATION, 0)
   if (!key || qty <= 0) return 0
   const current = getItemQuantity(userId, key)
-  const next = setItemQuantity(userId, key, current + qty)
+  const next = setItemQuantity(userId, key, Math.min(MAX_ITEM_STACK, current + qty))
   if (key === "kronosQuebrada") {
-    grantKronosBenefits(userId, "kronosQuebrada", qty)
+    const applied = Math.max(0, next - current)
+    if (applied > 0) grantKronosBenefits(userId, "kronosQuebrada", applied)
   } else if (key === "kronosVerdadeira") {
-    grantKronosBenefits(userId, "kronosVerdadeira", qty)
+    const applied = Math.max(0, next - current)
+    if (applied > 0) grantKronosBenefits(userId, "kronosVerdadeira", applied)
   }
   return next
 }
 
 function removeItem(userId, itemKey, quantity = 1) {
   const key = normalizeItemKey(itemKey)
-  const qty = Math.floor(Number(quantity) || 0)
+  const qty = capPositiveInt(quantity, MAX_ITEM_OPERATION, 0)
   if (!key || qty <= 0) return 0
   const current = getItemQuantity(userId, key)
   const next = Math.max(0, current - qty)
@@ -753,6 +783,20 @@ function buyItem(buyerId, itemKey, quantity = 1, recipientId = buyerId) {
     return { ok: false, reason: "invalid-item" }
   }
 
+  if (qty > MAX_ITEM_OPERATION) {
+    return { ok: false, reason: "quantity-too-large", maxQuantity: MAX_ITEM_OPERATION }
+  }
+
+  const recipientCurrent = getItemQuantity(recipientId, item.key)
+  if (recipientCurrent + qty > MAX_ITEM_STACK) {
+    return {
+      ok: false,
+      reason: "stack-limit",
+      maxStack: MAX_ITEM_STACK,
+      current: recipientCurrent,
+    }
+  }
+
   if (item.buyable === false) {
     return { ok: false, reason: "not-for-sale" }
   }
@@ -794,6 +838,10 @@ function sellItem(userId, itemKey, quantity = 1) {
   const qty = Math.floor(Number(quantity) || 0)
   if (!item || qty <= 0) return { ok: false, reason: "invalid-item" }
 
+  if (qty > MAX_ITEM_OPERATION) {
+    return { ok: false, reason: "quantity-too-large", maxQuantity: MAX_ITEM_OPERATION }
+  }
+
   const available = getItemQuantity(userId, item.key)
   if (available < qty) return { ok: false, reason: "insufficient-items", available }
 
@@ -820,29 +868,58 @@ function sellItem(userId, itemKey, quantity = 1) {
 function transferCoins(fromUserId, toUserId, amount) {
   const parsedAmount = Math.floor(Number(amount) || 0)
   if (parsedAmount <= 0) return { ok: false, reason: "invalid-amount" }
-  if (!debitCoins(fromUserId, parsedAmount, {
+  if (parsedAmount > MAX_COIN_OPERATION) {
+    return { ok: false, reason: "amount-too-large", maxAmount: MAX_COIN_OPERATION }
+  }
+
+  const receiverCoins = getCoins(toUserId)
+  const room = Math.max(0, MAX_COINS_BALANCE - receiverCoins)
+  if (room <= 0) {
+    return { ok: false, reason: "receiver-max-balance", maxBalance: MAX_COINS_BALANCE }
+  }
+
+  const effectiveAmount = Math.min(parsedAmount, room)
+  if (effectiveAmount <= 0) {
+    return { ok: false, reason: "receiver-max-balance", maxBalance: MAX_COINS_BALANCE }
+  }
+
+  if (!debitCoins(fromUserId, effectiveAmount, {
     type: "donate-out",
     details: `Doação para ${normalizeUserId(toUserId)}`,
     meta: { to: normalizeUserId(toUserId) },
   })) return { ok: false, reason: "insufficient-funds" }
-  creditCoins(toUserId, parsedAmount, {
+  creditCoins(toUserId, effectiveAmount, {
     type: "donate-in",
     details: `Recebido de ${normalizeUserId(fromUserId)}`,
     meta: { from: normalizeUserId(fromUserId) },
   })
-  telemetry.incrementCounter("economy.coins.transfer", parsedAmount)
+  telemetry.incrementCounter("economy.coins.transfer", effectiveAmount)
   telemetry.appendEvent("economy.coins.transfer", {
     fromUserId: normalizeUserId(fromUserId),
     toUserId: normalizeUserId(toUserId),
-    amount: parsedAmount,
+    amount: effectiveAmount,
   })
-  return { ok: true, amount: parsedAmount }
+  return { ok: true, amount: effectiveAmount }
 }
 
 function transferItem(fromUserId, toUserId, itemKey, quantity = 1) {
   const item = getItemDefinition(itemKey)
   const qty = Math.floor(Number(quantity) || 0)
   if (!item || qty <= 0) return { ok: false, reason: "invalid-item" }
+
+  if (qty > MAX_ITEM_OPERATION) {
+    return { ok: false, reason: "quantity-too-large", maxQuantity: MAX_ITEM_OPERATION }
+  }
+
+  const receiverCurrent = getItemQuantity(toUserId, item.key)
+  if (receiverCurrent + qty > MAX_ITEM_STACK) {
+    return {
+      ok: false,
+      reason: "stack-limit",
+      maxStack: MAX_ITEM_STACK,
+      current: receiverCurrent,
+    }
+  }
 
   const available = getItemQuantity(fromUserId, item.key)
   if (available < qty) return { ok: false, reason: "insufficient-items", available }
@@ -1140,6 +1217,14 @@ function openLootbox(userId, quantity = 1, groupMembers = []) {
   const qty = Math.max(1, Math.floor(Number(quantity) || 1))
   const user = ensureUser(userId)
   if (!user) return { ok: false, reason: "invalid-user" }
+
+  if (qty > MAX_LOOTBOX_OPEN_PER_CALL) {
+    return {
+      ok: false,
+      reason: "quantity-too-large",
+      maxQuantity: MAX_LOOTBOX_OPEN_PER_CALL,
+    }
+  }
   
   const available = getItemQuantity(userId, "lootbox")
   if (available < qty) {
@@ -1338,6 +1423,9 @@ function forgePunishmentPass(userId, punishmentType, severity = 1, quantity = 1)
   const safeSeverity = normalizePassSeverity(severity, 1)
   const qty = Math.floor(Number(quantity) || 0)
   if (qty <= 0) return { ok: false, reason: "invalid-quantity" }
+  if (qty > MAX_FORGE_QUANTITY) {
+    return { ok: false, reason: "quantity-too-large", maxQuantity: MAX_FORGE_QUANTITY }
+  }
 
   const selectedKey = buildPunishmentPassKey(punishmentType, safeSeverity)
   const available = getItemQuantity(userId, selectedKey)
@@ -1469,4 +1557,5 @@ module.exports = {
   openLootbox,
   forgePunishmentPass,
   createPunishmentPassKey,
+  getOperationLimits,
 }
