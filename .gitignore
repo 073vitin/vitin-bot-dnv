@@ -5,3 +5,5 @@ auth/
 data/auth/
 .data/
 /plans
+.codelineignore
+.github

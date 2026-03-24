@@ -1,5 +1,6 @@
 const crypto = require("crypto")
 const storage = require("../storage")
+const economyService = require("../economyService")
 
 const DOBRO_STATE_KEY = "dobroOuNada"
 
@@ -151,6 +152,13 @@ function isCoinGuessCommand(cmd) {
   return cmd === "cara" || cmd === "coroa"
 }
 
+function isDobroChoiceCommand(cmd) {
+  const normalized = String(cmd || "").toLowerCase().trim()
+  return normalized === "!moeda continua" || normalized === "!moeda sair" ||
+         normalized === "continua" || normalized === "sair" ||
+         normalized === "sim" || normalized === "nao" || normalized === "não"
+}
+
 async function handleCoinGuess({
   sock,
   from,
@@ -168,6 +176,7 @@ async function handleCoinGuess({
   clearPendingPunishment,
   rewardWinner,
   chargeLoser,
+  minPunishmentBet = 4,
 }) {
   const coinGames = storage.getCoinGames()
   const coinStreaks = storage.getCoinStreaks()
@@ -194,10 +203,12 @@ async function handleCoinGuess({
     (overrideIdentitySet.has(normalizedSender) || overrideIdentitySet.has(senderUserPart))
   const resolvedResult = isOverride ? cmd : game.resultado
   const acertou = (cmd === resolvedResult)
+  const wagerMultiplier = Math.max(1, Math.floor(Number(game?.betMultiplier) || 1))
+  const canTriggerPunishment = Boolean(resenhaAveriguada[from]) && wagerMultiplier >= minPunishmentBet
 
   if (!coinStreaks[from]) coinStreaks[from] = {}
 
-  if (acertou && resenhaAveriguada[from]) {
+  if (acertou && canTriggerPunishment) {
     const dobroOutcome = registerDobroWin(from, sender, resolvedResult)
     const rewardMultiplier = dobroOutcome.objectiveReachedNow ? 2 : 1
 
@@ -229,6 +240,7 @@ async function handleCoinGuess({
       } else {
         winText += "Sem recompensa ainda: atinja o objetivo para receber no Dobro ou Nada.\n"
       }
+      winText += "\n💬 *Continua ou sai?* Digite: !moeda continua (para mais!) ou !moeda sair (para ficar com seus ganhos)"
     }
 
     await sock.sendMessage(from, { text: winText, mentions: [sender] })
@@ -248,6 +260,9 @@ async function handleCoinGuess({
       target: null,
       createdAt: Date.now(),
       origin: "game",
+      punishmentEligible: true,
+      minPunishmentBet,
+      roundBet: wagerMultiplier,
     }
     storage.setCoinPunishmentPending(coinPunishmentPending)
 
@@ -290,6 +305,7 @@ async function handleCoinGuess({
       } else if (!dobroOutcome.objectiveReachedNow) {
         winText += "\nSem recompensa ainda: atinja o objetivo para receber no Dobro ou Nada."
       }
+      winText += "\n💬 *Continua ou sai?* Digite: !moeda continua (para mais!) ou !moeda sair (para ficar com seus ganhos)"
     }
 
     await sock.sendMessage(from, { text: winText })
@@ -317,6 +333,16 @@ async function handleCoinGuess({
   })
 
   if (resenhaAveriguada[from]) {
+    if (!canTriggerPunishment) {
+      await sock.sendMessage(from, {
+        text:
+          `⚖️ Aposta de *${wagerMultiplier}x* abaixo do mínimo de *${minPunishmentBet}x* para punições no Cara ou Coroa.\n` +
+          `Sem punição nesta rodada.`,
+        mentions: [sender],
+      })
+      return true
+    }
+
     const randomPunishment = getRandomPunishmentChoice()
     const punishmentPrefix = dobroTriggered ? "Dobro ou Nada ativo: punição com duração dobrada.\n" : ""
     await sock.sendMessage(from, {
@@ -339,8 +365,80 @@ async function handleCoinGuess({
   return true
 }
 
+// Rate limiting: Track coin toss plays per player
+const RATE_LIMIT_WINDOW_MS = 30 * 60 * 1000 // 30 minutes
+const RATE_LIMIT_MAX_PLAYS = 5
+
+function checkCoinRateLimit(groupId, playerId) {
+  const limits = storage.getCoinRateLimits(groupId) || {}
+  const playerPlays = limits[playerId] || []
+  const now = Date.now()
+  const recentPlays = playerPlays.filter(ts => now - ts < RATE_LIMIT_WINDOW_MS)
+  return {
+    allowed: recentPlays.length < RATE_LIMIT_MAX_PLAYS,
+    playsUsed: recentPlays.length,
+    playsRemaining: Math.max(0, RATE_LIMIT_MAX_PLAYS - recentPlays.length),
+    recentPlays,
+  }
+}
+
+function recordCoinPlay(groupId, playerId) {
+  const limits = storage.getCoinRateLimits(groupId) || {}
+  if (!limits[playerId]) limits[playerId] = []
+  const now = Date.now()
+  const recentPlays = limits[playerId].filter(ts => now - ts < RATE_LIMIT_WINDOW_MS)
+  limits[playerId] = [...recentPlays, now]
+  storage.setCoinRateLimits(groupId, limits)
+}
+
 async function startCoinRound({ sock, from, sender, cmd, prefix, isGroup }) {
-  if (!(cmd === prefix + "moeda" && isGroup)) return false
+  if (!isGroup) return false
+
+  const normalizedCmd = String(cmd || "").trim().toLowerCase()
+  const coinMatch = normalizedCmd.match(/^!moeda(?:\s+(\d+))?$/)
+  if (!coinMatch) return false
+
+  const rawBet = coinMatch[1]
+  const betMultiplier = rawBet ? Number.parseInt(rawBet, 10) : 2
+  if (!Number.isFinite(betMultiplier) || betMultiplier < 2 || betMultiplier > 10) {
+    await sock.sendMessage(from, {
+      text: "Use: !moeda [2-10]",
+    })
+    return true
+  }
+
+  // Coin balance check & buy-in deduction
+  const buyInAmount = betMultiplier * 10
+  const profile = economyService.getProfile(sender)
+  if (profile.coins < buyInAmount) {
+    await sock.sendMessage(from, {
+      text: `Você precisa de pelo menos *${buyInAmount}* moedas para fazer uma aposta de *${betMultiplier}x*. Saldo atual: ${profile.coins}`,
+    })
+    return true
+  }
+
+  // Rate limit check: 5 plays per 30 minutes
+  const rateCheck = checkCoinRateLimit(from, sender)
+  if (!rateCheck.allowed) {
+    await sock.sendMessage(from, {
+      text: `Você atingiu o limite de *${RATE_LIMIT_MAX_PLAYS}* jogadas em 30 minutos. Tente novamente mais tarde.`,
+    })
+    return true
+  }
+
+  // Deduct buy-in from player
+  const debitSuccess = economyService.debitCoins(sender, buyInAmount, {
+    type: "coin_toss_buyin",
+    group: from,
+    betMultiplier,
+  })
+  if (!debitSuccess) {
+    await sock.sendMessage(from, {
+      text: `Erro ao descontar a aposta. Tente novamente.`,
+    })
+    return true
+  }
+
   const resenhaOn = storage.isResenhaEnabled(from)
   const dobroState = getDobroState(from)
   const dobroToggleActive = Boolean(dobroState?.enabled)
@@ -370,14 +468,18 @@ async function startCoinRound({ sock, from, sender, cmd, prefix, isGroup }) {
   coinGames[from][sender] = {
     player: sender,
     resultado,
+    betMultiplier,
     createdAt: Date.now()
   }
   storage.setCoinGames(coinGames)
 
+  // Record the play in rate limit tracking
+  recordCoinPlay(from, sender)
+
   await sock.sendMessage(from, {
     text: dobroToggleActive
-      ? "Cara ou Coroa, ladrão?\n⚠️ Dobro ou Nada está ATIVO para esta rodada de !moeda."
-      : "Cara ou Coroa, ladrão?"
+      ? `Cara ou Coroa, ladrão?\nAposta: *${betMultiplier}x*\n⚠️ Dobro ou Nada está ATIVO para esta rodada de !moeda.`
+      : `Cara ou Coroa, ladrão?\nAposta: *${betMultiplier}x*\nPunições só disparam a partir de *4x* em modo resenha.`
   })
 
   setTimeout(() => {

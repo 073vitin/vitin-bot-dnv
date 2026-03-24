@@ -3,6 +3,19 @@ const telemetry = require("../telemetryService")
 const RR_TURN_TIMEOUT_MS = 60_000
 const RR_TURN_TIMEOUT_SECONDS = Math.floor(RR_TURN_TIMEOUT_MS / 1000)
 const LOBBY_BET_GRACE_MS = 15_000
+const GAME_XP_REWARDS = {
+  lobbyStart: 6,
+  batataWin: 24,
+  batataLoss: 10,
+  guessExact: 35,
+  guessClosest: 20,
+  guessLoss: 8,
+  dadosWin: 28,
+  dadosLoss: 10,
+  rrSurviveShot: 6,
+  rrWin: 30,
+  rrLoss: 12,
+}
 const rrTurnTimeouts = new Map()
 
 function rrTurnTimerKey(groupId, lobbyId) {
@@ -96,6 +109,126 @@ async function handleGameCommands(ctx) {
   function sanitizeLobbyBet(value, fallback = 1) {
     const parsed = parsePositiveInt(value, fallback)
     return Math.max(1, Math.min(10, parsed))
+  }
+
+  function resolvePunishmentSeverityFromLoserBet(state, playerId, fallbackSeverity = 1) {
+    const nativeSeverity = sanitizeLobbyBet(fallbackSeverity, 1)
+    const betByPlayer = state?.playerBetByPlayer
+    if (!betByPlayer || typeof betByPlayer !== "object") return nativeSeverity
+    if (!Object.prototype.hasOwnProperty.call(betByPlayer, playerId)) return nativeSeverity
+    return sanitizeLobbyBet(betByPlayer[playerId], nativeSeverity)
+  }
+
+  function parseDifficulty(value, fallback = 3) {
+    const parsed = parsePositiveInt(value, fallback)
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 10) return null
+    return parsed
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value))
+  }
+
+  function getTeamMembersFromStorage(teamId) {
+    const team = typeof storage.getTeam === "function" ? storage.getTeam(teamId) : null
+    if (!team || !Array.isArray(team.members)) return []
+    return [...new Set(team.members.filter(Boolean))]
+  }
+
+  function getUserLevel(userId) {
+    const profile = typeof economyService.getProfile === "function" ? economyService.getProfile(userId) : null
+    const level = Number(profile?.progression?.level) || 1
+    return Math.max(1, Math.floor(level))
+  }
+
+  function getActiveTeamParticipants(teamMembers = [], presentParticipants = []) {
+    const presentSet = new Set((presentParticipants || []).filter(Boolean))
+    return (teamMembers || []).filter((memberId) => presentSet.has(memberId))
+  }
+
+  function getContributionWeightMap(participants = []) {
+    const map = {}
+    for (const userId of participants) {
+      map[userId] = 1 + (getUserLevel(userId) / 10)
+    }
+    return map
+  }
+
+  function getTeamPower(participants = [], difficulty = 3) {
+    if (!Array.isArray(participants) || participants.length === 0) return 0
+    const levelAvg = participants.reduce((sum, userId) => sum + getUserLevel(userId), 0) / participants.length
+    const teamEfficiencyUnits = Math.sqrt(participants.length)
+    const levelFactor = 1 + (levelAvg / 30)
+    const difficultyTax = clamp(1 - (difficulty * 0.03), 0.55, 0.97)
+    return teamEfficiencyUnits * levelFactor * difficultyTax
+  }
+
+  function distributeSharedRewards(participants = [], totalCoins = 0, xpEach = 0, options = {}) {
+    const safeParticipants = [...new Set((participants || []).filter(Boolean))]
+    if (safeParticipants.length === 0) {
+      return { distributedCoins: 0, perUser: {}, teamPoolBonus: 0 }
+    }
+
+    const participantBaseSharePct = clamp(Number(options.participantBaseSharePct) || 0.45, 0.25, 0.7)
+    const teamPoolSharePct = clamp(Number(options.teamPoolSharePct) || 0.1, 0, 0.35)
+    const total = Math.max(0, Math.floor(Number(totalCoins) || 0))
+    const teamPoolBonus = Math.floor(total * teamPoolSharePct)
+    const distributable = Math.max(0, total - teamPoolBonus)
+
+    const basePool = Math.floor(distributable * participantBaseSharePct)
+    const weightedPool = Math.max(0, distributable - basePool)
+    const basePerUser = Math.floor(basePool / safeParticipants.length)
+
+    const weights = getContributionWeightMap(safeParticipants)
+    const totalWeight = safeParticipants.reduce((sum, userId) => sum + (weights[userId] || 1), 0)
+
+    const perUser = {}
+    let distributed = 0
+    for (const userId of safeParticipants) {
+      const weight = weights[userId] || 1
+      const weightedShare = totalWeight > 0
+        ? Math.floor((weightedPool * weight) / totalWeight)
+        : 0
+      const amount = Math.max(0, basePerUser + weightedShare)
+      if (amount > 0 && typeof economyService.creditCoins === "function") {
+        economyService.creditCoins(userId, amount, {
+          type: "game-win",
+          details: options.details || "Vitória em modo cooperativo",
+          meta: {
+            mode: options.mode || "coop",
+            groupId: from,
+          },
+        })
+      }
+      if (xpEach > 0) {
+        grantGameXp(userId, xpEach, options.xpSource || "team-mode", {
+          mode: options.mode || "coop",
+          ...options.xpMeta,
+        })
+      }
+      perUser[userId] = amount
+      distributed += amount
+    }
+
+    return {
+      distributedCoins: distributed,
+      perUser,
+      teamPoolBonus,
+    }
+  }
+
+  function formatParticipantList(participants = []) {
+    return (participants || []).map((userId) => `@${String(userId).split("@")[0]}`).join(" ")
+  }
+
+  function grantGameXp(userId, xpAmount, source = "game", meta = {}) {
+    const safeXp = Math.max(0, Math.floor(Number(xpAmount) || 0))
+    if (!safeXp) return
+    if (typeof economyService?.addXp !== "function") return
+    economyService.addXp(userId, safeXp, {
+      source,
+      ...meta,
+    })
   }
 
   function getGraceStates() {
@@ -282,6 +415,8 @@ module.exports = { handleGamesCommand };
 │ - moeda
 │ - moeda dobro / moeda dobroounada
 │ - streak / streakranking
+│ - coop <dificuldade 1-10>
+│ - teamduelo @usuario <dificuldade 1-10>
 │
 │ Jogos rápidos:
 │ - embaralhado
@@ -298,7 +433,310 @@ module.exports = { handleGamesCommand };
 │ ${prefix}começar <LobbyID> (ou ${prefix}comecar / ${prefix}start)
 │ ${prefix}começar <embaralhado|memória|reação|comando>
 │ ${prefix}comecar <embaralhado|memoria|reacao|comando>
+│ ${prefix}coop <1-10>
+│ ${prefix}teamduelo @usuario <1-10>
 ╰━━━━━━━━━━━━━━━━━━━━╯`,
+    })
+    return true
+  }
+
+  if (cmdName === prefix + "coop" && isGroup) {
+    const difficulty = parseDifficulty(cmdArg1 || "3", 3)
+    if (!difficulty) {
+      await sock.sendMessage(from, { text: `Use: ${prefix}coop <dificuldade 1-10>` })
+      return true
+    }
+
+    const teamId = typeof storage.getUserTeamId === "function" ? storage.getUserTeamId(sender) : null
+    if (!teamId) {
+      await sock.sendMessage(from, { text: "Você precisa estar em um time para usar o modo coop." })
+      return true
+    }
+
+    const team = typeof storage.getTeam === "function" ? storage.getTeam(teamId) : null
+    const teamMembers = getTeamMembersFromStorage(teamId)
+    if (!team || teamMembers.length < 2) {
+      await sock.sendMessage(from, { text: "Seu time precisa ter pelo menos 2 membros para jogar coop." })
+      return true
+    }
+
+    const participantsInGroup = await getCommandParticipants()
+    const activeMembers = getActiveTeamParticipants(teamMembers, participantsInGroup)
+    const qualificationThreshold = Math.max(2, Math.ceil(teamMembers.length * 0.4))
+    if (activeMembers.length < qualificationThreshold) {
+      await sock.sendMessage(from, {
+        text:
+          `Participação insuficiente do time *${team.name || teamId}*.
+Membros do time no grupo: *${activeMembers.length}* | mínimo exigido: *${qualificationThreshold}* (40% do time, mínimo 2).`,
+      })
+      return true
+    }
+
+    const entryCostPerPlayer = 12 * difficulty
+    const qualifiedMembers = activeMembers.filter((userId) => {
+      if (typeof economyService.getCoins !== "function") return true
+      return economyService.getCoins(userId) >= entryCostPerPlayer
+    })
+    if (qualifiedMembers.length < qualificationThreshold) {
+      await sock.sendMessage(from, {
+        text:
+          `Saldo insuficiente para iniciar coop.
+Cada participante precisa de *${entryCostPerPlayer}* coins.
+Elegíveis: *${qualifiedMembers.length}* | mínimo: *${qualificationThreshold}*`,
+      })
+      return true
+    }
+
+    let entryPool = 0
+    for (const userId of qualifiedMembers) {
+      const debited = typeof economyService.debitCoins === "function"
+        ? economyService.debitCoins(userId, entryCostPerPlayer, {
+            type: "game-buyin",
+            details: `Entrada modo coop (dificuldade ${difficulty})`,
+            meta: { game: "coop", difficulty, teamId },
+          })
+        : true
+      if (debited) {
+        entryPool += entryCostPerPlayer
+        incrementUserStat(userId, "moneyGameLost", entryCostPerPlayer)
+      }
+    }
+
+    const teamPower = getTeamPower(qualifiedMembers, difficulty)
+    const successChance = clamp(0.28 + (teamPower * 0.07) - (difficulty * 0.03), 0.12, 0.9)
+    const success = Math.random() < successChance
+
+    if (success) {
+      const mintedBonus = Math.floor((difficulty * 45) * Math.sqrt(qualifiedMembers.length))
+      const totalReward = entryPool + mintedBonus
+      const xpEach = 12 + (difficulty * 4)
+      const rewards = distributeSharedRewards(qualifiedMembers, totalReward, xpEach, {
+        mode: "coop",
+        details: `Vitória no modo coop (${difficulty})`,
+        xpSource: "coop-win",
+        xpMeta: { difficulty },
+      })
+
+      if (rewards.teamPoolBonus > 0 && typeof storage.addTeamPoolCoins === "function") {
+        storage.addTeamPoolCoins(teamId, rewards.teamPoolBonus)
+      }
+
+      qualifiedMembers.forEach((userId) => incrementUserStat(userId, "gameComandoWin", 1))
+
+      telemetry.incrementCounter("game.coop.completed", 1, { result: "win", difficulty })
+      telemetry.appendEvent("game.coop.completed", {
+        groupId: from,
+        teamId,
+        teamName: team.name || teamId,
+        participants: qualifiedMembers,
+        difficulty,
+        successChance,
+        result: "win",
+        entryPool,
+        totalReward,
+        distributedCoins: rewards.distributedCoins,
+        teamPoolBonus: rewards.teamPoolBonus,
+      })
+
+      await sock.sendMessage(from, {
+        text:
+          `🤝 MISSÃO COOP COMPLETA (${difficulty}/10)
+Time: *${team.name || teamId}*
+Participantes: ${formatParticipantList(qualifiedMembers)}
+Chance de sucesso: *${Math.round(successChance * 100)}%*
+✅ Recompensa distribuída: *${rewards.distributedCoins}* coins
+🏦 Bônus no cofre do time: *${rewards.teamPoolBonus}* coins`,
+        mentions: qualifiedMembers,
+      })
+      return true
+    }
+
+    const consolationXp = Math.max(4, Math.floor(difficulty * 2))
+    qualifiedMembers.forEach((userId) => {
+      incrementUserStat(userId, "gameComandoLoss", 1)
+      grantGameXp(userId, consolationXp, "coop-loss", { difficulty })
+    })
+
+    telemetry.incrementCounter("game.coop.completed", 1, { result: "loss", difficulty })
+    telemetry.appendEvent("game.coop.completed", {
+      groupId: from,
+      teamId,
+      teamName: team.name || teamId,
+      participants: qualifiedMembers,
+      difficulty,
+      successChance,
+      result: "loss",
+      entryPool,
+    })
+
+    await sock.sendMessage(from, {
+      text:
+        `🤝 MISSÃO COOP FALHOU (${difficulty}/10)
+Time: *${team.name || teamId}*
+Participantes: ${formatParticipantList(qualifiedMembers)}
+Chance estimada: *${Math.round(successChance * 100)}%*
+💥 Entrada consumida: *${entryPool}* coins
+📘 Consolação: +${consolationXp} XP por participante`,
+      mentions: qualifiedMembers,
+    })
+    return true
+  }
+
+  if (cmdName === prefix + "teamduelo" && isGroup) {
+    const opponentAnchor = mentioned[0]
+    const difficulty = parseDifficulty(cmdArg2 || cmdArg1 || "3", 3)
+    if (!opponentAnchor || !difficulty) {
+      await sock.sendMessage(from, { text: `Use: ${prefix}teamduelo @usuario <dificuldade 1-10>` })
+      return true
+    }
+
+    const teamAId = typeof storage.getUserTeamId === "function" ? storage.getUserTeamId(sender) : null
+    const teamBId = typeof storage.getUserTeamId === "function" ? storage.getUserTeamId(opponentAnchor) : null
+    if (!teamAId || !teamBId || teamAId === teamBId) {
+      await sock.sendMessage(from, {
+        text: "Você e o alvo devem estar em times diferentes para iniciar teamduelo.",
+      })
+      return true
+    }
+
+    const teamA = typeof storage.getTeam === "function" ? storage.getTeam(teamAId) : null
+    const teamB = typeof storage.getTeam === "function" ? storage.getTeam(teamBId) : null
+    if (!teamA || !teamB) {
+      await sock.sendMessage(from, { text: "Não foi possível carregar os dois times para o duelo." })
+      return true
+    }
+
+    const groupParticipants = await getCommandParticipants()
+    const teamAMembers = getTeamMembersFromStorage(teamAId)
+    const teamBMembers = getTeamMembersFromStorage(teamBId)
+    const activeA = getActiveTeamParticipants(teamAMembers, groupParticipants)
+    const activeB = getActiveTeamParticipants(teamBMembers, groupParticipants)
+    const thresholdA = Math.max(2, Math.ceil(teamAMembers.length * 0.4))
+    const thresholdB = Math.max(2, Math.ceil(teamBMembers.length * 0.4))
+
+    if (activeA.length < thresholdA || activeB.length < thresholdB) {
+      await sock.sendMessage(from, {
+        text:
+          `Participação insuficiente para teamduelo.
+${teamA.name || teamAId}: ${activeA.length}/${thresholdA}
+${teamB.name || teamBId}: ${activeB.length}/${thresholdB}`,
+      })
+      return true
+    }
+
+    const entryCost = 10 * difficulty
+    const eligibleA = activeA.filter((userId) => {
+      if (typeof economyService.getCoins !== "function") return true
+      return economyService.getCoins(userId) >= entryCost
+    })
+    const eligibleB = activeB.filter((userId) => {
+      if (typeof economyService.getCoins !== "function") return true
+      return economyService.getCoins(userId) >= entryCost
+    })
+
+    if (eligibleA.length < thresholdA || eligibleB.length < thresholdB) {
+      await sock.sendMessage(from, {
+        text:
+          `Saldo insuficiente para entrada do duelo (*${entryCost}* por membro).
+${teamA.name || teamAId}: elegíveis ${eligibleA.length}/${thresholdA}
+${teamB.name || teamBId}: elegíveis ${eligibleB.length}/${thresholdB}`,
+      })
+      return true
+    }
+
+    let poolA = 0
+    let poolB = 0
+    for (const userId of eligibleA) {
+      const ok = typeof economyService.debitCoins === "function"
+        ? economyService.debitCoins(userId, entryCost, {
+            type: "game-buyin",
+            details: `Entrada teamduelo (${difficulty})`,
+            meta: { game: "teamduelo", side: "A", teamId: teamAId, difficulty },
+          })
+        : true
+      if (ok) {
+        poolA += entryCost
+        incrementUserStat(userId, "moneyGameLost", entryCost)
+      }
+    }
+    for (const userId of eligibleB) {
+      const ok = typeof economyService.debitCoins === "function"
+        ? economyService.debitCoins(userId, entryCost, {
+            type: "game-buyin",
+            details: `Entrada teamduelo (${difficulty})`,
+            meta: { game: "teamduelo", side: "B", teamId: teamBId, difficulty },
+          })
+        : true
+      if (ok) {
+        poolB += entryCost
+        incrementUserStat(userId, "moneyGameLost", entryCost)
+      }
+    }
+
+    const powerA = getTeamPower(eligibleA, difficulty) + (Math.random() * 0.6)
+    const powerB = getTeamPower(eligibleB, difficulty) + (Math.random() * 0.6)
+    const winnerSide = powerA >= powerB ? "A" : "B"
+
+    const winnerTeamId = winnerSide === "A" ? teamAId : teamBId
+    const winnerTeam = winnerSide === "A" ? teamA : teamB
+    const winnerMembers = winnerSide === "A" ? eligibleA : eligibleB
+    const loserMembers = winnerSide === "A" ? eligibleB : eligibleA
+    const totalPool = poolA + poolB
+    const mintedBonus = Math.floor((difficulty * 35) * Math.sqrt(Math.max(2, winnerMembers.length)))
+    const totalReward = totalPool + mintedBonus
+    const winnerXp = 10 + (difficulty * 3)
+    const loserXp = Math.max(4, difficulty)
+
+    const rewards = distributeSharedRewards(winnerMembers, totalReward, winnerXp, {
+      mode: "teamduelo",
+      details: `Vitória em teamduelo (${difficulty})`,
+      xpSource: "teamduelo-win",
+      xpMeta: { difficulty },
+      teamPoolSharePct: 0.12,
+    })
+
+    loserMembers.forEach((userId) => grantGameXp(userId, loserXp, "teamduelo-loss", { difficulty }))
+
+    if (rewards.teamPoolBonus > 0 && typeof storage.addTeamPoolCoins === "function") {
+      storage.addTeamPoolCoins(winnerTeamId, rewards.teamPoolBonus)
+    }
+
+    winnerMembers.forEach((userId) => incrementUserStat(userId, "gameDadosWin", 1))
+    loserMembers.forEach((userId) => incrementUserStat(userId, "gameDadosLoss", 1))
+
+    telemetry.incrementCounter("game.teamduelo.completed", 1, {
+      difficulty,
+      winnerSide,
+    })
+    telemetry.appendEvent("game.teamduelo.completed", {
+      groupId: from,
+      difficulty,
+      teamAId,
+      teamBId,
+      teamAName: teamA.name || teamAId,
+      teamBName: teamB.name || teamBId,
+      powerA,
+      powerB,
+      winnerSide,
+      winnerTeamId,
+      entryPool: totalPool,
+      mintedBonus,
+      distributedCoins: rewards.distributedCoins,
+      teamPoolBonus: rewards.teamPoolBonus,
+      participantsA: eligibleA,
+      participantsB: eligibleB,
+    })
+
+    await sock.sendMessage(from, {
+      text:
+        `⚔️ TEAMDUELO (${difficulty}/10)
+${teamA.name || teamAId} vs ${teamB.name || teamBId}
+Poder: *${powerA.toFixed(2)}* vs *${powerB.toFixed(2)}*
+🏆 Vencedor: *${winnerTeam.name || winnerTeamId}*
+💰 Recompensa distribuída: *${rewards.distributedCoins}* coins
+🏦 Bônus no cofre vencedor: *${rewards.teamPoolBonus}* coins
+📘 XP: vencedores +${winnerXp}, derrotados +${loserXp}`,
+      mentions: [...winnerMembers, ...loserMembers],
     })
     return true
   }
@@ -644,6 +1082,10 @@ module.exports = { handleGamesCommand };
     storage.clearGameState(from, graceStateKey)
 
     incrementUserStat(sender, "lobbiesStarted", 1)
+    grantGameXp(sender, GAME_XP_REWARDS.lobbyStart, "lobby-start", {
+      gameType: session.gameType,
+      lobbyId,
+    })
     telemetry.incrementCounter("game.lobby.started", 1, { gameType: session.gameType })
     telemetry.appendEvent("game.lobby.started", {
       groupId: from,
@@ -753,6 +1195,8 @@ module.exports = { handleGamesCommand };
           const winners = (finalState.players || []).filter((playerId) => playerId !== loser)
           winners.forEach((playerId) => incrementUserStat(playerId, "gameBatataWin", 1))
           incrementUserStat(loser, "gameBatataLoss", 1)
+          winners.forEach((playerId) => grantGameXp(playerId, GAME_XP_REWARDS.batataWin, "batata-win", { lobbyId }))
+          grantGameXp(loser, GAME_XP_REWARDS.batataLoss, "batata-loss", { lobbyId })
           telemetry.incrementCounter("game.batata.completed", 1, {
             result: "timeout",
           })
@@ -765,7 +1209,9 @@ module.exports = { handleGamesCommand };
           })
           await distributeLobbyBuyInPool(winners, finalState.buyInPool, "Batata Quente", getLobbyPayoutOptions(finalState))
 
-          await applyRandomGamePunishment(loser)
+          await applyRandomGamePunishment(loser, {
+            severityMultiplier: resolvePunishmentSeverityFromLoserBet(finalState, loser, 1),
+          })
           storage.clearGameState(from, stateKey)
         }
       }, 15000)
@@ -901,6 +1347,7 @@ module.exports = { handleGamesCommand };
 
       if (Array.isArray(results.punishments) && results.punishments.length > 0) {
         results.punishments.forEach((entry) => incrementUserStat(entry.playerId, "gameGuessLoss", 1))
+        results.punishments.forEach((entry) => grantGameXp(entry.playerId, GAME_XP_REWARDS.guessLoss, "guess-loss", { lobbyId }))
       }
 
       const resenhaOn = isResenhaModeEnabled()
@@ -919,12 +1366,15 @@ module.exports = { handleGamesCommand };
 
       if (results.chooser) {
         incrementUserStat(results.chooser, "gameGuessExact", 1)
+        grantGameXp(results.chooser, GAME_XP_REWARDS.guessExact, "guess-exact", { lobbyId })
         await distributeLobbyBuyInPool([results.chooser], state.buyInPool, "Adivinhação", getLobbyPayoutOptions(state))
       } else if (Array.isArray(results.closestPlayers) && results.closestPlayers.length > 0 && state.players.length > 1) {
         results.closestPlayers.forEach((playerId) => incrementUserStat(playerId, "gameGuessClosest", 1))
+        results.closestPlayers.forEach((playerId) => grantGameXp(playerId, GAME_XP_REWARDS.guessClosest, "guess-closest", { lobbyId }))
         await distributeLobbyBuyInPool(results.closestPlayers, state.buyInPool, "Adivinhação", getLobbyPayoutOptions(state))
       } else if (state.players.length === 1) {
         incrementUserStat(state.players[0], "gameGuessLoss", 1)
+        grantGameXp(state.players[0], GAME_XP_REWARDS.guessLoss, "guess-solo-miss", { lobbyId })
         await sock.sendMessage(from, {
           text: "Adivinhação solo: só recebe recompensa em acerto exato.",
         })
@@ -934,7 +1384,7 @@ module.exports = { handleGamesCommand };
         if (resenhaOn) {
           for (const entry of results.punishments) {
             await applyRandomGamePunishment(entry.playerId, {
-              severityMultiplier: entry.severity || 1,
+              severityMultiplier: resolvePunishmentSeverityFromLoserBet(state, entry.playerId, entry.severity || 1),
             })
           }
         }
@@ -1041,23 +1491,26 @@ module.exports = { handleGamesCommand };
 
       if (results.winner) {
         incrementUserStat(results.winner, "gameDadosWin", 1)
+        grantGameXp(results.winner, GAME_XP_REWARDS.dadosWin, "dados-win", { lobbyId })
         await distributeLobbyBuyInPool([results.winner], state.buyInPool, "Duelo de Dados", getLobbyPayoutOptions(state))
       }
 
       if (results.punish && results.punish.length > 0) {
         results.punish.forEach((playerId) => incrementUserStat(playerId, "gameDadosLoss", 1))
+        results.punish.forEach((playerId) => grantGameXp(playerId, GAME_XP_REWARDS.dadosLoss, "dados-loss", { lobbyId }))
         if (resenhaOn) {
           for (const playerId of results.punish) {
             await applyRandomGamePunishment(playerId, {
-              severityMultiplier: results.severity || 1,
+              severityMultiplier: resolvePunishmentSeverityFromLoserBet(state, playerId, results.severity || 1),
             })
           }
         }
       } else if (results.loser) {
         incrementUserStat(results.loser, "gameDadosLoss", 1)
+        grantGameXp(results.loser, GAME_XP_REWARDS.dadosLoss, "dados-loss", { lobbyId })
         if (resenhaOn) {
           await applyRandomGamePunishment(results.loser, {
-            severityMultiplier: results.severity || 1,
+            severityMultiplier: resolvePunishmentSeverityFromLoserBet(state, results.loser, results.severity || 1),
           })
         }
       }
@@ -1107,6 +1560,10 @@ module.exports = { handleGamesCommand };
     clearRrTurnTimeout(from, lobbyId)
     const result = roletaRussa.takeShotAt(state)
     incrementUserStat(sender, "gameRrTrigger", 1)
+    grantGameXp(sender, GAME_XP_REWARDS.rrSurviveShot, "rr-shot", {
+      lobbyId,
+      hit: Boolean(result.hit),
+    })
     storage.setGameState(from, stateKey, state)
     const betMultiplier = parsePositiveInt(state.betMultiplier, 1)
     const betValueRaw = Number.parseInt(String(state.betValue), 10)
@@ -1121,7 +1578,11 @@ module.exports = { handleGamesCommand };
       winners.forEach((playerId) => {
         incrementUserStat(playerId, "gameRrWin", 1)
         incrementUserStat(playerId, "gameRrBetWin", 1)
+        grantGameXp(playerId, GAME_XP_REWARDS.rrWin, "rr-win", { lobbyId, mode: "auto-win" })
       })
+      if (state.players.length === 1) {
+        await rewardPlayer(sender, GAME_REWARDS.ROLETA_WIN, rrCoinMultiplier, "Roleta Russa (solo)")
+      }
       await distributeLobbyBuyInPool(winners, state.buyInPool, "Roleta Russa", getLobbyPayoutOptions(state))
       await sock.sendMessage(from, {
         text:
@@ -1158,6 +1619,7 @@ module.exports = { handleGamesCommand };
         winners.forEach((playerId) => {
           incrementUserStat(playerId, "gameRrWin", 1)
           incrementUserStat(playerId, "gameRrBetWin", 1)
+          grantGameXp(playerId, GAME_XP_REWARDS.rrWin, "rr-win", { lobbyId, mode: "all-win" })
         })
         if (winners.length > 0) {
           await distributeLobbyBuyInPool(winners, state.buyInPool, "Roleta Russa", getLobbyPayoutOptions(state))
@@ -1213,11 +1675,15 @@ module.exports = { handleGamesCommand };
       }
 
       incrementUserStat(result.loser, "gameRrShotLoss", 1)
-      await applyRandomGamePunishment(result.loser, { severityMultiplier: betMultiplier })
+      grantGameXp(result.loser, GAME_XP_REWARDS.rrLoss, "rr-loss", { lobbyId, guaranteed: Boolean(result.guaranteed) })
+      await applyRandomGamePunishment(result.loser, {
+        severityMultiplier: resolvePunishmentSeverityFromLoserBet(state, result.loser, betMultiplier),
+      })
       const winners = (state.players || []).filter((playerId) => playerId !== result.loser)
       winners.forEach((playerId) => {
         incrementUserStat(playerId, "gameRrWin", 1)
         incrementUserStat(playerId, "gameRrBetWin", 1)
+        grantGameXp(playerId, GAME_XP_REWARDS.rrWin, "rr-win", { lobbyId, mode: "hit" })
       })
       await distributeLobbyBuyInPool(winners, state.buyInPool, "Roleta Russa", getLobbyPayoutOptions(state))
       telemetry.incrementCounter("game.rr.completed", 1, {

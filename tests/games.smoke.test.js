@@ -5,6 +5,7 @@ const adivinhacao = require("../games/adivinhacao")
 const dueloDados = require("../games/dueloDados")
 const roletaRussa = require("../games/roletaRussa")
 const caraOuCoroa = require("../games/caraOuCoroa")
+const punishmentService = require("../punishmentService")
 const storage = require("../storage")
 
 function createSockCapture() {
@@ -19,16 +20,227 @@ function createSockCapture() {
   }
 }
 
-function setCoinRound(groupId, senderId, resultado) {
+function setCoinRound(groupId, senderId, resultado, betMultiplier = 1) {
   const coinGames = storage.getCoinGames()
   if (!coinGames[groupId]) coinGames[groupId] = {}
   coinGames[groupId][senderId] = {
     player: senderId,
     resultado,
+    betMultiplier,
     createdAt: Date.now(),
   }
   storage.setCoinGames(coinGames)
 }
+
+test("startCoinRound accepts explicit !moeda bet multiplier", async () => {
+  const economyService = require("../economyService")
+  const groupId = `__coin_round_bet_${Date.now()}@g.us`
+  const sender = "bettor@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+
+  // Credit sender with coins for buy-in (7x bet = 70 coins)
+  economyService.creditCoins(sender, 100, { type: "test-credit" })
+
+  const handled = await caraOuCoroa.startCoinRound({
+    sock,
+    from: groupId,
+    sender,
+    cmd: "!moeda 7",
+    prefix: "!",
+    isGroup: true,
+  })
+
+  assert.equal(handled, true)
+  const coinGames = storage.getCoinGames()
+  assert.equal(coinGames[groupId]?.[sender]?.betMultiplier, 7)
+  assert.ok(sent.some((m) => /Aposta: \*7x\*/.test(String(m.payload?.text || ""))))
+})
+
+test("startCoinRound rejects bet when player has insufficient coins", async () => {
+  const economyService = require("../economyService")
+  const groupId = `__coin_round_insufficient_${Date.now()}@g.us`
+  const sender = "broke@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+
+  // Don't credit coins - player starts with 0
+
+  const handled = await caraOuCoroa.startCoinRound({
+    sock,
+    from: groupId,
+    sender,
+    cmd: "!moeda 5",
+    prefix: "!",
+    isGroup: true,
+  })
+
+  assert.equal(handled, true)
+  const coinGames = storage.getCoinGames()
+  assert.equal(coinGames[groupId]?.[sender], undefined)
+  assert.ok(sent.some((m) => /precisa de pelo menos/.test(String(m.payload?.text || ""))))
+})
+
+test("startCoinRound rejects bet below minimum of 2", async () => {
+  const economyService = require("../economyService")
+  const groupId = `__coin_round_minimum_${Date.now()}@g.us`
+  const sender = "lowballer@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+
+  const handled = await caraOuCoroa.startCoinRound({
+    sock,
+    from: groupId,
+    sender,
+    cmd: "!moeda 1",
+    prefix: "!",
+    isGroup: true,
+  })
+
+  assert.equal(handled, true)
+  assert.ok(sent.some((m) => /Use: !moeda \[2-10\]/.test(String(m.payload?.text || ""))))
+})
+
+test("startCoinRound enforces rate limit of 5 plays per 30 minutes", async () => {
+  const economyService = require("../economyService")
+  const groupId = `__coin_rate_limit_${Date.now()}@g.us`
+  const sender = "spammer@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+
+  // Credit sender with enough coins for 6 plays at 2x bet
+  economyService.creditCoins(sender, 1000, { type: "test-credit" })
+
+  // Manually set rate limit to 4 plays (to test the 5th play is rejected)
+  const limits = storage.getCoinRateLimits(groupId) || {}
+  limits[sender] = [Date.now(), Date.now() - 1000, Date.now() - 2000, Date.now() - 3000, Date.now() - 4000]
+  storage.setCoinRateLimits(groupId, limits)
+
+  // 6th play should be rejected
+  const handled = await caraOuCoroa.startCoinRound({
+    sock,
+    from: groupId,
+    sender,
+    cmd: "!moeda 2",
+    prefix: "!",
+    isGroup: true,
+  })
+
+  assert.equal(handled, true)
+  const coinGames = storage.getCoinGames()
+  assert.equal(coinGames[groupId]?.[sender], undefined)
+  assert.ok(sent.some((m) => /atingiu o limite/.test(String(m.payload?.text || ""))))
+})
+
+test("coin guess does not apply punishment when bet is below threshold", async () => {
+  const groupId = `__coin_threshold_${Date.now()}@g.us`
+  const sender = "loser@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+  let punishmentCalls = 0
+
+  const resenha = storage.getResenhaAveriguada()
+  resenha[groupId] = true
+  storage.setResenhaAveriguada(resenha)
+
+  setCoinRound(groupId, sender, "cara", 3)
+
+  const handled = await caraOuCoroa.handleCoinGuess({
+    sock,
+    from: groupId,
+    sender,
+    cmd: "coroa",
+    isGroup: true,
+    overrideChecksEnabled: false,
+    overrideJid: "",
+    overridePhoneNumber: "",
+    overrideIdentifiers: [],
+    getPunishmentMenuText: () => "",
+    getRandomPunishmentChoice: () => "1",
+    getPunishmentNameById: () => "teste",
+    applyPunishment: async () => {
+      punishmentCalls += 1
+    },
+    clearPendingPunishment: () => {},
+    rewardWinner: async () => {},
+    chargeLoser: async () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(punishmentCalls, 0)
+  assert.ok(sent.some((m) => /abaixo do m[ií]nimo/i.test(String(m.payload?.text || ""))))
+})
+
+test("coin guess applies punishment when bet reaches default threshold", async () => {
+  const groupId = `__coin_threshold_hit_${Date.now()}@g.us`
+  const sender = "loser@s.whatsapp.net"
+  const { sock } = createSockCapture()
+  let punishmentCalls = 0
+
+  const resenha = storage.getResenhaAveriguada()
+  resenha[groupId] = true
+  storage.setResenhaAveriguada(resenha)
+
+  setCoinRound(groupId, sender, "cara", 4)
+
+  const handled = await caraOuCoroa.handleCoinGuess({
+    sock,
+    from: groupId,
+    sender,
+    cmd: "coroa",
+    isGroup: true,
+    overrideChecksEnabled: false,
+    overrideJid: "",
+    overridePhoneNumber: "",
+    overrideIdentifiers: [],
+    getPunishmentMenuText: () => "",
+    getRandomPunishmentChoice: () => "1",
+    getPunishmentNameById: () => "teste",
+    applyPunishment: async () => {
+      punishmentCalls += 1
+    },
+    clearPendingPunishment: () => {},
+    rewardWinner: async () => {},
+    chargeLoser: async () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(punishmentCalls, 1)
+})
+
+test("pending punishment choice is rejected when eligibility metadata is invalid", async () => {
+  const groupId = `__pending_threshold_guard_${Date.now()}@g.us`
+  const sender = "winner@s.whatsapp.net"
+  const target = "target@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+
+  const resenha = storage.getResenhaAveriguada()
+  resenha[groupId] = true
+  storage.setResenhaAveriguada(resenha)
+
+  const pending = storage.getCoinPunishmentPending()
+  if (!pending[groupId]) pending[groupId] = {}
+  pending[groupId][sender] = {
+    mode: "target",
+    target,
+    createdAt: Date.now(),
+    origin: "game",
+    punishmentEligible: false,
+    minPunishmentBet: 4,
+    roundBet: 2,
+  }
+  storage.setCoinPunishmentPending(pending)
+
+  const handled = await punishmentService.handlePendingPunishmentChoice({
+    sock,
+    from: groupId,
+    sender,
+    text: "1",
+    mentioned: [],
+    isGroup: true,
+    senderIsAdmin: false,
+    isCommand: false,
+  })
+
+  assert.equal(handled, true)
+  assert.equal(Boolean(storage.getCoinPunishmentPending()[groupId]?.[sender]), false)
+  assert.ok(sent.some((m) => /expirou por elegibilidade de aposta/i.test(String(m.payload?.text || ""))))
+})
 
 test("adivinhacao resolves with closest players and punishments", () => {
   const players = ["a@s.whatsapp.net", "b@s.whatsapp.net", "c@s.whatsapp.net"]

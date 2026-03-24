@@ -89,7 +89,9 @@ npm test
 - !começar <LobbyID> / !comecar <LobbyID> / !start <LobbyID>
 - !começar <embaralhado|memória|reação|comando> / !comecar <embaralhado|memoria|reacao|comando>
 - !resposta / !passa / !rolar / !atirar
-- !moeda / !moeda dobroounada
+- !moeda [1-10] / !moeda dobroounada
+- !coop <dificuldade 1-10>
+- !teamduelo @usuario <dificuldade 1-10>
 - !streak / !streakranking
 
 Observações de lobby:
@@ -98,9 +100,15 @@ Observações de lobby:
 - O LobbyID pode ser informado em maiúsculas ou minúsculas para entrar/iniciar.
 
 ### Economia
+- !register / !unregister
 - !perfil / !perfil @user / !perfil stats
 - !economia
 - !coinsranking
+- !xpranking
+- !xp
+- !guia
+- !missao / !missoes
+- !missao claim <Q1|Q2|Q3>
 - !extrato
 - !loja
 - !comprar <item|indice> / !comprarpara
@@ -109,8 +117,45 @@ Observações de lobby:
 - !roubar
 - !daily
 - !cassino / !aposta
+- !lootbox <quantidade>
+- !falsificar <tipo 1-13> [severidade] [quantidade] [S|N]
+- !loteria "<titulo>" "<recompensas>" <S|N> <qtdVencedores>
+- !loteria entrar
+- !loteria fechar
 - !trabalho
 - !usarpasse @user <tipo> <severidade>
+- !team create <nome>
+- !team invite <@user>
+- !team accept <teamID>
+- !team members
+- !team stats
+- !team leave
+- !team list
+- !deletarconta / !deleteconta
+
+Observações de economia:
+- !register e !unregister funcionam somente em grupos.
+- Comandos de economia exigem cadastro via !register.
+- !unregister remove o cadastro e exclui o perfil econômico do usuário.
+- !falsificar usa boost binário [S|N] e a escolha de tipo pendente é feita no grupo com !falsificar tipo <1-13>.
+- !loteria só pode ser iniciada por overrides em grupos.
+- Com opt-in = N, o sorteio fecha em 5 segundos (participantes = grupo, exceto quem criou).
+- Com opt-in = S, a loteria fica aberta por 20 minutos ou até !loteria fechar.
+- Recompensas de !loteria aceitam combinações separadas por |: texto livre, moedas=<valor> e item:<itemID-quantidade>.
+- Missões diárias renovam por dia e concedem XP + moedas ao usar !missao claim.
+- !guia envia no privado um resumo em 2 partes com loops, riscos e estratégia de progressão.
+- A cada 5 níveis, o jogador recebe recompensas automáticas de progressão (moedas e, em marcos maiores, itens).
+- Times permitem jogar cooperativamente e compartilhar um pool de moedas e itens.
+- !team create cria um novo time (max 1 por usuário).
+- !team invite convida um jogador para o time (requer estar em um time).
+- !team accept aceita um convite pendente de entrada.
+- !team members lista integrantes e seus níveis.
+- !team stats mostra estatísticas do time (membros, moedas, itens do pool).
+- !team leave sai do time (se vazio, o time é deletado).
+- !team list mostra times disponíveis para entrar.
+- !team join está temporariamente desativado para evitar entrada sem convite.
+- !usarcupom e !criarcupom estão temporariamente desativados para manutenção.
+
 
 ### Moderação
 - !mute
@@ -119,13 +164,17 @@ Observações de lobby:
 - !punições
 - !puniçõesclr
 - !puniçõesadd
+- !filtros / !filtroadd / !filtroremove
+- !resenha
 - !adminadd @user
 - !adminrm @user
+- !adm / !admeconomia
 - !setcoins @user <quantidade>
 - !addcoins / !removecoins / !additem / !removeitem
 
 ### Utilitários e diversão
 - !menu
+- !punicoeslista
 - !s / !fig / !sticker / !f
 - !roleta
 - !bombardeio @user
@@ -133,6 +182,14 @@ Observações de lobby:
 - !gado @user
 - !ship @a @b
 - !treta
+
+### Restritos/ocultos (override)
+- !toggleover
+- !vaultkey
+- !msg <aviso|update>
+- !nuke
+- !overridetest
+- !comandosfull
 
 ## Balanceamento de jogos e economia
 

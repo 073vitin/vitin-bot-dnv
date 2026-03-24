@@ -125,3 +125,57 @@ test("lootbox open rejects oversized quantity", () => {
   assert.equal(result.ok, false)
   assert.equal(result.reason, "quantity-too-large")
 })
+
+test("addXp grants milestone reward at level 5", () => {
+  cleanupTestUsers()
+  const a = TEST_USERS[0]
+
+  const initialCoins = economy.getCoins(a)
+  const xpToReachLevel5 = (
+    economy.getXpRequiredForLevel(1)
+    + economy.getXpRequiredForLevel(2)
+    + economy.getXpRequiredForLevel(3)
+    + economy.getXpRequiredForLevel(4)
+  )
+  const xpResult = economy.addXp(a, xpToReachLevel5, { source: "test-milestone" })
+  const updatedCoins = economy.getCoins(a)
+
+  assert.equal(xpResult.ok, true)
+  assert.equal(xpResult.level, 5)
+  assert.equal(xpResult.levelsGained, 4)
+  assert.equal(Array.isArray(xpResult.levelRewards), true)
+  assert.equal(xpResult.levelRewards.length, 1)
+  assert.equal(xpResult.levelRewards[0].level, 5)
+  assert.equal(updatedCoins > initialCoins, true)
+})
+
+test("xp curve keeps per-level growth between 15 and 50 percent", () => {
+  const reqLevel1 = economy.getXpRequiredForLevel(1)
+  const reqLevel2 = economy.getXpRequiredForLevel(2)
+
+  const growth12 = (reqLevel2 - reqLevel1) / reqLevel1
+
+  assert.ok(growth12 >= 0.15 && growth12 <= 0.5)
+
+  for (let level = 2; level <= 25; level++) {
+    const current = economy.getXpRequiredForLevel(level)
+    const previous = economy.getXpRequiredForLevel(level - 1)
+    const growth = (current - previous) / previous
+    assert.ok(growth >= 0.15 && growth <= 0.5)
+  }
+})
+
+test("getAllUserIds returns created profiles", () => {
+  cleanupTestUsers()
+  const a = TEST_USERS[0]
+  const b = TEST_USERS[1]
+
+  economy.creditCoins(a, 10, { type: "test-credit" })
+  economy.creditCoins(b, 20, { type: "test-credit" })
+
+  const userIds = economy.getAllUserIds()
+  assert.equal(Array.isArray(userIds), true)
+  assert.ok(userIds.includes(a))
+  assert.ok(userIds.includes(b))
+  assert.equal(new Set(userIds).size, userIds.length)
+})
