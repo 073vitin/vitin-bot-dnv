@@ -248,6 +248,15 @@ function renderMetricRow(label, bucket) {
   return `<tr><td>${label}</td><td>${summary.count}</td><td>${formatMs(summary.last)}</td><td>${formatMs(summary.avg)}</td><td>${formatMs(summary.p95)}</td><td>${formatMs(summary.max)}</td></tr>`
 }
 
+function escapeHtmlServer(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+}
+
 function renderPerfPanelHtml() {
   const now = Date.now()
   const uptime = formatElapsed(now - perfStats.bootAt)
@@ -267,7 +276,7 @@ function renderPerfPanelHtml() {
       <p style="margin:4px 0">Autenticado em: <b>${formatDateTime(perfStats.authenticatedAt)}</b> | Conectado em: <b>${formatDateTime(perfStats.connectedAt)}</b></p>
       <p style="margin:4px 0">Mensagens recebidas: <b>${perfStats.messagesReceived}</b> | Erros: <b>${perfStats.messagesErrored}</b> | Ignoradas (sem conteúdo): <b>${perfStats.ignoredNoMessage}</b> | Ignoradas (fromMe): <b>${perfStats.ignoredFromMe}</b></p>
       <p style="margin:4px 0">Último comando: <b>${perfStats.lastCommand || "-"}</b> | Último processamento: <b>${formatDateTime(perfStats.lastProcessedAt)}</b> | Reconexões: <b>${perfStats.reconnects}</b></p>
-      <p style="margin:4px 0">Memória: heap <b>${mem.heapUsed} MB</b> | rss <b>${mem.rss} MB</b></p>
+      <p style="margin:4px 0">Memória: heap <b>${mem.heapUsed} MB</b> | rss <b>${mem.rss} MB</b> | Registrados <b>${registrationService.getRegisteredCount()}</b></p>
       <table style="width:100%;margin-top:12px;border-collapse:collapse;font-family:monospace;font-size:12px">
         <thead>
           <tr>
@@ -1132,162 +1141,66 @@ app.get("/download-data", async (req, res) => {
 })
 
 app.get("/", (req,res)=>{
-  res.send(`<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Vitin Bot Profiler</title>
-  <style>
-    body{font-family:Segoe UI,Arial,sans-serif;background:#f3f6fa;margin:0;padding:16px;color:#111}
-    .card{background:#fff;border:1px solid #d7dce3;border-radius:10px;padding:12px;margin-bottom:12px}
-    .hidden{display:none}
-    table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
-    th,td{border-bottom:1px solid #e5e7eb;padding:4px;font-family:Consolas,monospace}
-    .left{text-align:left}
-    .right{text-align:right}
-    pre{max-height:260px;overflow:auto;background:#0d1117;color:#c9d1d9;padding:10px;border-radius:8px;font-size:12px}
-    input{padding:6px;border:1px solid #cbd5e1;border-radius:6px;width:260px}
-    button{padding:7px 10px;border:0;border-radius:6px;background:#0f766e;color:white;cursor:pointer}
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h2 id="statusTitle">Conectando...</h2>
-    <img id="qr" alt="QR" style="max-width:320px;width:100%;height:auto" />
-  </div>
+  const authReady = Boolean(perfStats.authenticatedAt)
+  const qrBlock = qrImage
+    ? `<h2>Escaneie o QR Code</h2><img src="${qrImage}" style="max-width:320px;width:100%;height:auto">`
+    : "<h2>Bot conectado</h2>"
+  const perfBlock = authReady ? renderPerfPanelHtml() : ""
+  const snapshot = authReady ? getProfilerSnapshot() : null
 
-  <div id="profiler" class="hidden">
-    <div class="card">
-      <h3>Resumo</h3>
-      <div id="summary"></div>
-    </div>
-    <div class="card">
-      <h3>Métricas</h3>
-      <table>
-        <thead><tr><th class="left">Métrica</th><th class="right">Count</th><th class="right">Last</th><th class="right">Avg</th><th class="right">P95</th><th class="right">Max</th></tr></thead>
-        <tbody id="metricRows"></tbody>
+  const commandRows = (snapshot?.commandHistory || []).slice(-10).map((entry) => {
+    const at = formatDateTime(entry?.at)
+    const cmd = escapeHtmlServer(entry?.command || "-")
+    const sender = escapeHtmlServer(entry?.senderName || "-")
+    const group = escapeHtmlServer(entry?.groupName || "-")
+    return `<tr><td style="padding:4px;border-bottom:1px solid #ccc">${at}</td><td style="padding:4px;border-bottom:1px solid #ccc">${cmd}</td><td style="padding:4px;border-bottom:1px solid #ccc">${sender}</td><td style="padding:4px;border-bottom:1px solid #ccc">${group}</td></tr>`
+  }).join("")
+
+  const commandBlock = authReady
+    ? `
+    <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
+      <h3 style="margin:0 0 10px 0">Últimos 10 comandos</h3>
+      <table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:12px">
+        <thead>
+          <tr>
+            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Quando</th>
+            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Comando</th>
+            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Usuário</th>
+            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Grupo</th>
+          </tr>
+        </thead>
+        <tbody>${commandRows || '<tr><td colspan="4" style="padding:6px">Sem comandos registrados.</td></tr>'}</tbody>
       </table>
-    </div>
-    <div class="card">
-      <h3>Últimos 10 comandos</h3>
-      <table>
-        <thead><tr><th class="left">Quando</th><th class="left">Comando</th><th class="left">Usuário</th><th class="left">Grupo</th></tr></thead>
-        <tbody id="commandRows"></tbody>
-      </table>
-    </div>
-    <div class="card">
-      <h3>Terminal (somente leitura)</h3>
-      <pre id="terminal">Aguardando saída...</pre>
-    </div>
-    <div class="card">
-      <h3>Download de dados</h3>
-      <button id="downloadBtn">Baixar .data</button>
-      <div id="downloadMsg" style="margin-top:8px"></div>
-    </div>
-  </div>
+    </section>
+    `
+    : ""
 
-  <script>
-    function escapeHtml(value) {
-      return String(value || "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/\"/g, "&quot;")
-        .replace(/'/g, "&#39;")
-    }
+  const terminalLines = (snapshot?.terminalLines || []).map((line) => {
+    const at = formatDateTime(line?.at)
+    const source = escapeHtmlServer(line?.source || "log")
+    const text = escapeHtmlServer(line?.line || "")
+    return `[${at}] ${source}: ${text}`
+  }).join("\n") || "Sem saída capturada ainda."
 
+  const terminalBlock = authReady
+    ? `
+    <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
+      <h3 style="margin:0 0 10px 0">Terminal (somente leitura)</h3>
+      <pre style="max-height:260px;overflow:auto;background:#0d1117;color:#c9d1d9;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap">${terminalLines}</pre>
+    </section>
+    `
+    : ""
 
+  const downloadBlock = `
+    <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
+      <h3 style="margin:0 0 10px 0">Download de dados</h3>
+      <a href="/download-data" style="display:inline-block;padding:8px 12px;background:#0f766e;color:white;border-radius:6px;text-decoration:none">Baixar .data</a>
+    </section>
+  `
 
-    const qrEl = document.getElementById("qr")
-    const titleEl = document.getElementById("statusTitle")
-    const profilerEl = document.getElementById("profiler")
-    const summaryEl = document.getElementById("summary")
-    const metricRowsEl = document.getElementById("metricRows")
-    const commandRowsEl = document.getElementById("commandRows")
-    const terminalEl = document.getElementById("terminal")
-    const downloadBtn = document.getElementById("downloadBtn")
-    const downloadMsg = document.getElementById("downloadMsg")
-
-    function fmtMs(v){ return (Number(v||0)).toFixed(1) + " ms" }
-    function fmtElapsed(ms){
-      const total = Math.max(0, Math.floor(Number(ms||0) / 1000))
-      const h = Math.floor(total / 3600)
-      const m = Math.floor((total % 3600) / 60)
-      const s = total % 60
-      return h + "h " + m + "m " + s + "s"
-    }
-    function fmtUtcMinus3(ts){
-      if (!ts) return "-"
-      const d = new Date(Number(ts) - 3 * 60 * 60 * 1000)
-      return d.toISOString().replace("T"," ").slice(0,19) + " (UTC-3)"
-    }
-
-    function metricRow(label, m){
-      return "<tr><td class=\"left\">"+escapeHtml(label)+"</td><td class=\"right\">"+escapeHtml((m&&m.count)||0)+"</td><td class=\"right\">"+escapeHtml(fmtMs((m&&m.lastMs)))+"</td><td class=\"right\">"+escapeHtml(fmtMs((m&&m.avgMs)))+"</td><td class=\"right\">"+escapeHtml(fmtMs((m&&m.p95Ms)))+"</td><td class=\"right\">"+escapeHtml(fmtMs((m&&m.maxMs)))+"</td></tr>"
-    }
-
-    async function refresh(){
-      try{
-        const res = await fetch("/profiler-data", { cache: "no-store" })
-        const data = await res.json()
-        if (data.qrImage) {
-          qrEl.src = data.qrImage
-          qrEl.style.display = "block"
-          titleEl.textContent = "Escaneie o QR Code"
-        } else {
-          qrEl.style.display = "none"
-          titleEl.textContent = "Bot conectado"
-        }
-
-        if (!data.authReady || !data.snapshot) {
-          profilerEl.classList.add("hidden")
-          return
-        }
-
-        profilerEl.classList.remove("hidden")
-        const s = data.snapshot
-        summaryEl.innerHTML =
-          "<p>Conexão: <b>"+escapeHtml(s.connectionState)+"</b> | Reconexões: <b>"+escapeHtml(s.reconnects)+"</b></p>" +
-          "<p>Uptime: <b>"+escapeHtml(fmtElapsed(s.uptimeMs))+"</b> | Desde auth: <b>"+escapeHtml(fmtElapsed(s.authUptimeMs))+"</b></p>" +
-          "<p>Autenticado em: <b>"+escapeHtml(fmtUtcMinus3(s.authenticatedAt))+"</b> | Conectado em: <b>"+escapeHtml(fmtUtcMinus3(s.connectedAt))+"</b></p>" +
-          "<p>Mensagens: <b>"+escapeHtml(s.messagesReceived)+"</b> | Erros: <b>"+escapeHtml(s.messagesErrored)+"</b> | Ignoradas sem conteúdo: <b>"+escapeHtml(s.ignoredNoMessage)+"</b> | fromMe: <b>"+escapeHtml(s.ignoredFromMe)+"</b></p>" +
-          "<p>Último comando: <b>"+escapeHtml(s.lastCommand||"-")+"</b> | Último processamento: <b>"+escapeHtml(fmtUtcMinus3(s.lastProcessedAt))+"</b></p>" +
-          "<p>Memória: heap <b>"+escapeHtml(s.memory.heapUsed)+" MB</b> | rss <b>"+escapeHtml(s.memory.rss)+" MB</b> | Registrados <b>"+escapeHtml(s.registeredUsers)+"</b></p>"
-
-        let metricsHtml = ""
-        metricsHtml += metricRow("message.processing", s.metrics.processing)
-        metricsHtml += metricRow("message.queueDelay", s.metrics.queueDelay)
-        metricsHtml += metricRow("sock.sendMessage", s.metrics.sendMessage)
-        metricsHtml += metricRow("sock.groupMetadata", s.metrics.groupMetadata)
-        metricsHtml += metricRow("eventLoop.lag", s.metrics.eventLoopLag)
-        for (const stage of (s.metrics.stages || [])) {
-          metricsHtml += metricRow("stage:" + stage.name, stage)
-        }
-        metricRowsEl.innerHTML = metricsHtml
-
-        commandRowsEl.innerHTML = (s.commandHistory || []).map((entry) =>
-          "<tr><td class=\"left\">"+escapeHtml(fmtUtcMinus3(entry.at))+"</td><td class=\"left\">"+escapeHtml(entry.command||"-")+"</td><td class=\"left\">"+escapeHtml(entry.senderName||"-")+"</td><td class=\"left\">"+escapeHtml(entry.groupName||"-")+"</td></tr>"
-        ).join("")
-
-        terminalEl.textContent = (s.terminalLines || []).map((line) =>
-          "[" + fmtUtcMinus3(line.at) + "] " + (line.source || "log") + ": " + (line.line || "")
-        ).join("\n") || "Sem saída capturada ainda."
-      } catch (err) {
-        titleEl.textContent = "Falha ao carregar profiler"
-      }
-    }
-
-    downloadBtn.addEventListener("click", () => {
-      downloadMsg.textContent = "Gerando pacote..."
-      window.location.href = "/download-data"
-      setTimeout(() => { downloadMsg.textContent = "Download iniciado." }, 1000)
-    })
-
-    refresh()
-    setInterval(refresh, 500)
-  </script>
-</body>
-</html>`)
+  res.send(
+    `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>Vitin Bot</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:16px">${qrBlock}${perfBlock}${commandBlock}${terminalBlock}${downloadBlock}</body></html>`
+  )
 })
 
 const PORT = process.env.PORT || 3000
