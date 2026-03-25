@@ -1094,10 +1094,6 @@ function getProfilerSnapshot() {
 }
 
 app.get("/profiler-data", (req, res) => {
-  if (!isProfilerAuthorized(req)) {
-    res.status(403).json({ ok: false, error: "forbidden" })
-    return
-  }
   const authReady = Boolean(perfStats.authenticatedAt)
   res.json({
     authReady,
@@ -1107,12 +1103,6 @@ app.get("/profiler-data", (req, res) => {
 })
 
 app.get("/download-data", async (req, res) => {
-  const password = String(req.query?.password || "")
-  if (!password || password !== DATA_EXPORT_PASSWORD) {
-    res.status(403).json({ ok: false, error: "forbidden" })
-    return
-  }
-
   const dataDir = path.join(__dirname, ".data")
   if (!fs.existsSync(dataDir)) {
     res.status(404).json({ ok: false, error: "data-folder-not-found" })
@@ -1142,10 +1132,6 @@ app.get("/download-data", async (req, res) => {
 })
 
 app.get("/", (req,res)=>{
-  if (!isProfilerAuthorized(req)) {
-    res.status(403).send("forbidden")
-    return
-  }
   res.send(`<!doctype html>
 <html>
 <head>
@@ -1195,8 +1181,6 @@ app.get("/", (req,res)=>{
     </div>
     <div class="card">
       <h3>Download de dados</h3>
-      <p>Informe a senha de exportação para baixar a pasta .data.</p>
-      <input id="downloadPwd" type="password" placeholder="Senha de exportação" />
       <button id="downloadBtn">Baixar .data</button>
       <div id="downloadMsg" style="margin-top:8px"></div>
     </div>
@@ -1212,17 +1196,7 @@ app.get("/", (req,res)=>{
         .replace(/'/g, "&#39;")
     }
 
-    function getProfilerPassword() {
-      const params = new URLSearchParams(window.location.search)
-      return String(params.get("password") || "").trim()
-    }
 
-    function withProfilerAuth(urlPath) {
-      const pwd = getProfilerPassword()
-      if (!pwd) return urlPath
-      const joiner = urlPath.includes("?") ? "&" : "?"
-      return urlPath + joiner + "password=" + encodeURIComponent(pwd)
-    }
 
     const qrEl = document.getElementById("qr")
     const titleEl = document.getElementById("statusTitle")
@@ -1232,7 +1206,6 @@ app.get("/", (req,res)=>{
     const commandRowsEl = document.getElementById("commandRows")
     const terminalEl = document.getElementById("terminal")
     const downloadBtn = document.getElementById("downloadBtn")
-    const downloadPwd = document.getElementById("downloadPwd")
     const downloadMsg = document.getElementById("downloadMsg")
 
     function fmtMs(v){ return (Number(v||0)).toFixed(1) + " ms" }
@@ -1255,7 +1228,7 @@ app.get("/", (req,res)=>{
 
     async function refresh(){
       try{
-        const res = await fetch(withProfilerAuth("/profiler-data"), { cache: "no-store" })
+        const res = await fetch("/profiler-data", { cache: "no-store" })
         const data = await res.json()
         if (data.qrImage) {
           qrEl.src = data.qrImage
@@ -1305,14 +1278,9 @@ app.get("/", (req,res)=>{
     }
 
     downloadBtn.addEventListener("click", () => {
-      const pwd = String(downloadPwd.value || "").trim()
-      if (!pwd) {
-        downloadMsg.textContent = "Informe a senha primeiro."
-        return
-      }
       downloadMsg.textContent = "Gerando pacote..."
-      window.location.href = "/download-data?password=" + encodeURIComponent(pwd)
-      setTimeout(() => { downloadMsg.textContent = "Se a senha estiver correta, o download deve iniciar." }, 700)
+      window.location.href = "/download-data"
+      setTimeout(() => { downloadMsg.textContent = "Download iniciado." }, 1000)
     })
 
     refresh()
