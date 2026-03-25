@@ -1,10 +1,14 @@
 const telemetry = require("../telemetryService")
 
+const pendingPrivateFeedbackBySender = new Map()
+
 async function handleUtilityCommands(ctx) {
   const {
     sock,
     from,
     sender,
+    rawText,
+    isCommand,
     cmd,
     prefix,
     isGroup,
@@ -19,6 +23,7 @@ async function handleUtilityCommands(ctx) {
     jidNormalizedUser,
     getPunishmentDetailsText,
     isOverrideSender,
+    overrideJid,
     registrationService,
     botHasGroupAdminPrivileges,
   } = ctx
@@ -35,6 +40,8 @@ async function handleUtilityCommands(ctx) {
 
     const sections = {
       menu: [
+        { cmd: `${prefix}feedback`, usage: `${prefix}feedback`, effect: "links para feedback e report de bugs", badges: ["GERAL"] },
+        { cmd: `${prefix}feedbackpriv`, usage: `${prefix}feedbackpriv`, effect: "captura a proxima mensagem e envia feedback no privado para override", badges: ["GERAL"] },
         { cmd: `${prefix}menu`, usage: `${prefix}menu`, effect: "abre o menu principal", badges: ["GERAL"] },
         { cmd: `${prefix}ping`, usage: `${prefix}ping`, effect: "mede latencia", badges: ["GERAL"] },
         { cmd: `${prefix}s`, aliases: [`${prefix}fig`, `${prefix}sticker`, `${prefix}f`], usage: `${prefix}s (com midia)`, effect: "converte em figurinha", badges: ["GERAL"] },
@@ -211,6 +218,11 @@ async function handleUtilityCommands(ctx) {
 │ ⚙️ Sistema: Baileys
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
+╭━━━〔 🛠️ FEEDBACK 〕━━━╮
+│ ${prefix}feedback
+│ ${prefix}feedbackpriv
+╰━━━━━━━━━━━━━━━━━━━━╯
+
 ╭━━━〔 🎨 FIGURINHAS 〕━━━╮
 │ ${prefix}s / ${prefix}fig / ${prefix}sticker / ${prefix}f
 ╰━━━━━━━━━━━━━━━━━━━━╯
@@ -231,6 +243,77 @@ async function handleUtilityCommands(ctx) {
 │ ${prefix}adm
 │ ${prefix}admeconomia
 ╰━━━━━━━━━━━━━━━━━━━━╯`,
+    })
+    return true
+  }
+
+  if (cmd === prefix + "feedback") {
+    trackUtility("feedback", "success")
+    await sock.sendMessage(from, {
+      text:
+`📣 Feedback e reporte de problemas
+
+Se algo não estiver funcionando direito, envie feedback para:
+- Jessé: wa.me/+5521995409899
+- Vitin: wa.me/+557398579450`,
+    })
+    return true
+  }
+
+  if (cmd === prefix + "feedbackpriv") {
+    pendingPrivateFeedbackBySender.set(sender, {
+      createdAt: Date.now(),
+      sourceIsGroup: Boolean(isGroup),
+    })
+    trackUtility("feedbackpriv", "armed", { sourceIsGroup: Boolean(isGroup) })
+    await sock.sendMessage(from, {
+      text:
+`✅ Modo feedback privado ativado.
+
+Envie seu feedback e eu vou encaminhar para um dos donos no privado.
+Somente a próxima mensagem é capturada nesse fluxo.`,
+    })
+    return true
+  }
+
+  const pendingPrivateFeedback = pendingPrivateFeedbackBySender.get(sender)
+  if (pendingPrivateFeedback && cmd !== prefix + "feedbackpriv") {
+    pendingPrivateFeedbackBySender.delete(sender)
+
+    const feedbackText = String(rawText || "").trim()
+    if (!feedbackText) {
+      trackUtility("feedbackpriv", "rejected", { reason: "empty-message" })
+      await sock.sendMessage(from, {
+        text: "Não recebi texto para encaminhar no feedback privado.",
+      })
+      return true
+    }
+
+    const overrideTarget = String(overrideJid || "").trim()
+    if (!overrideTarget) {
+      trackUtility("feedbackpriv", "error", { reason: "missing-override-jid" })
+      await sock.sendMessage(from, {
+        text: "Feedback privado indisponível no momento: não pude encontrar o destino.",
+      })
+      return true
+    }
+
+    const sourceLabel = pendingPrivateFeedback.sourceIsGroup ? "grupo" : "privado"
+    const commandLabel = isCommand ? "S" : "N"
+    await sock.sendMessage(overrideTarget, {
+      text:
+`📩 FEEDBACK PRIVADO
+Origem: ${sourceLabel}
+Comando: ${commandLabel}
+
+${feedbackText}`,
+    })
+    await sock.sendMessage(from, {
+      text: "Feedback privado enviado com sucesso.",
+    })
+    trackUtility("feedbackpriv", "success", {
+      sourceIsGroup: pendingPrivateFeedback.sourceIsGroup,
+      feedbackLength: feedbackText.length,
     })
     return true
   }
@@ -555,4 +638,7 @@ async function handleUtilityCommands(ctx) {
 
 module.exports = {
   handleUtilityCommands,
+  __resetUtilityRouterStateForTests: () => {
+    pendingPrivateFeedbackBySender.clear()
+  },
 }

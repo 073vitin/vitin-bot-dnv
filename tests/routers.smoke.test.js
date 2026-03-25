@@ -4,7 +4,10 @@ const assert = require("node:assert/strict")
 const { handleEconomyCommands, cleanupUserLinkedState } = require("../routers/economyRouter")
 const { handleGameCommands, handleGameMessageFlow } = require("../routers/gamesRouter")
 const { handleModerationCommands } = require("../routers/moderationRouter")
-const { handleUtilityCommands } = require("../routers/utilityRouter")
+const {
+  handleUtilityCommands,
+  __resetUtilityRouterStateForTests,
+} = require("../routers/utilityRouter")
 
 function createSockCapture() {
   const sent = []
@@ -2794,6 +2797,105 @@ test("economy router no longer handles !jogos", async () => {
   assert.equal(sent.length, 0)
 })
 
+test("economy router does not show nickname warning for non-economy commands", async () => {
+  const { sock, sent } = createSockCapture()
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "user@s.whatsapp.net",
+    cmd: "!jogos",
+    cmdName: "!jogos",
+    cmdArg1: "",
+    cmdArg2: "",
+    cmdParts: ["!jogos"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    economyService: {
+      isMentionOptIn: () => false,
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "" },
+      }),
+      getStatement: () => [],
+      getGroupRanking: () => [],
+      getShopIndexText: () => "shop",
+    },
+    registrationService: {
+      isRegistered: () => true,
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, false)
+  assert.equal(sent.length, 0)
+})
+
+test("economy router shows registration message for unregistered sender", async () => {
+  const { sock, sent } = createSockCapture()
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "user@s.whatsapp.net",
+    cmd: "!extrato",
+    cmdName: "!extrato",
+    cmdArg1: "",
+    cmdArg2: "",
+    cmdParts: ["!extrato"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    economyService: {
+      isMentionOptIn: () => false,
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "" },
+      }),
+      getStatement: () => [],
+      getGroupRanking: () => [],
+      getShopIndexText: () => "shop",
+    },
+    registrationService: {
+      isRegistered: () => false,
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.ok(sent.length > 0)
+  assert.match(String(sent[0].payload?.text || ""), /exige cadastro/i)
+  assert.match(String(sent[0].payload?.text || ""), /!register/i)
+  assert.ok(!/apelido/i.test(String(sent[0].payload?.text || "")))
+})
+
 test("economy router applies lootbox punishment effects", async () => {
   const { sock, sent } = createSockCapture()
   const punishCalls = []
@@ -2939,6 +3041,167 @@ test("utility router handles !menu command", async () => {
   assert.equal(handled, true)
   assert.equal(sent.length, 1)
   assert.match(sent[0].payload.text, /VITIN BOT/)
+  assert.match(sent[0].payload.text, /feedback/i)
+})
+
+test("utility router handles !feedback command", async () => {
+  const { sock, sent } = createSockCapture()
+
+  const handled = await handleUtilityCommands({
+    sock,
+    from: "group@g.us",
+    sender: "user@s.whatsapp.net",
+    cmd: "!feedback",
+    prefix: "!",
+    isGroup: true,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(sent.length, 1)
+  assert.match(String(sent[0].payload?.text || ""), /wa\.me\/\+5521995409899/i)
+  assert.match(String(sent[0].payload?.text || ""), /wa\.me\/\+557398579450/i)
+})
+
+test("utility router handles !feedbackpriv and forwards next group message to override DM once", async () => {
+  __resetUtilityRouterStateForTests()
+  const { sock, sent } = createSockCapture()
+  const override = "override@s.whatsapp.net"
+
+  const armed = await handleUtilityCommands({
+    sock,
+    from: "group@g.us",
+    sender: "user@s.whatsapp.net",
+    rawText: "!feedbackpriv",
+    isCommand: true,
+    cmd: "!feedbackpriv",
+    prefix: "!",
+    isGroup: true,
+    overrideJid: override,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  const forwarded = await handleUtilityCommands({
+    sock,
+    from: "group@g.us",
+    sender: "user@s.whatsapp.net",
+    rawText: "Meu feedback privado",
+    isCommand: false,
+    cmd: "meu feedback privado",
+    prefix: "!",
+    isGroup: true,
+    overrideJid: override,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  const afterOneShot = await handleUtilityCommands({
+    sock,
+    from: "group@g.us",
+    sender: "user@s.whatsapp.net",
+    rawText: "Mensagem normal",
+    isCommand: false,
+    cmd: "mensagem normal",
+    prefix: "!",
+    isGroup: true,
+    overrideJid: override,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  assert.equal(armed, true)
+  assert.equal(forwarded, true)
+  assert.equal(afterOneShot, false)
+  assert.equal(sent.length, 3)
+  assert.match(String(sent[0].payload?.text || ""), /Modo feedback privado ativado/i)
+  assert.equal(sent[1].to, override)
+  assert.match(String(sent[1].payload?.text || ""), /FEEDBACK PRIVADO/i)
+  assert.match(String(sent[1].payload?.text || ""), /Origem: grupo/i)
+  assert.match(String(sent[1].payload?.text || ""), /Meu feedback privado/i)
+  assert.equal(sent[2].to, "group@g.us")
+  assert.match(String(sent[2].payload?.text || ""), /enviado com sucesso/i)
+})
+
+test("utility router handles !feedbackpriv in DM and forwards command-like next message", async () => {
+  __resetUtilityRouterStateForTests()
+  const { sock, sent } = createSockCapture()
+  const override = "override@s.whatsapp.net"
+  const sender = "user@s.whatsapp.net"
+
+  const armed = await handleUtilityCommands({
+    sock,
+    from: sender,
+    sender,
+    rawText: "!feedbackpriv",
+    isCommand: true,
+    cmd: "!feedbackpriv",
+    prefix: "!",
+    isGroup: false,
+    overrideJid: override,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  const forwarded = await handleUtilityCommands({
+    sock,
+    from: sender,
+    sender,
+    rawText: "!quero reportar bug no saldo",
+    isCommand: true,
+    cmd: "!quero reportar bug no saldo",
+    prefix: "!",
+    isGroup: false,
+    overrideJid: override,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  assert.equal(armed, true)
+  assert.equal(forwarded, true)
+  assert.equal(sent.length, 3)
+  assert.equal(sent[1].to, override)
+  assert.match(String(sent[1].payload?.text || ""), /Origem: privado/i)
+  assert.match(String(sent[1].payload?.text || ""), /Comando: S/i)
+  assert.match(String(sent[1].payload?.text || ""), /!quero reportar bug no saldo/i)
+  assert.equal(sent[2].to, sender)
 })
 
 test("utility router handles hidden !jid only in DM", async () => {

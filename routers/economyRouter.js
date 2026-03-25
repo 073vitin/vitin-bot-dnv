@@ -476,6 +476,49 @@ async function handleEconomyCommands(ctx) {
     registrationService,
   } = ctx
 
+  const normalizedCmdName = String(cmdName || "").trim().toLowerCase()
+  const commandPrefix = String(prefix || "")
+  const economyCommandNames = new Set([
+    `${commandPrefix}economia`,
+    `${commandPrefix}perfil`,
+    `${commandPrefix}xp`,
+    `${commandPrefix}missao`,
+    `${commandPrefix}missoes`,
+    `${commandPrefix}missaosemanal`,
+    `${commandPrefix}missoesemanais`,
+    `${commandPrefix}guia`,
+    `${commandPrefix}coinsranking`,
+    `${commandPrefix}xpranking`,
+    `${commandPrefix}extrato`,
+    `${commandPrefix}loja`,
+    `${commandPrefix}comprar`,
+    `${commandPrefix}comprarpara`,
+    `${commandPrefix}vender`,
+    `${commandPrefix}doarcoins`,
+    `${commandPrefix}doaritem`,
+    `${commandPrefix}roubar`,
+    `${commandPrefix}daily`,
+    `${commandPrefix}carepackage`,
+    `${commandPrefix}cassino`,
+    `${commandPrefix}aposta`,
+    `${commandPrefix}lootbox`,
+    `${commandPrefix}falsificar`,
+    `${commandPrefix}usarpasse`,
+    `${commandPrefix}trabalho`,
+    `${commandPrefix}setcoins`,
+    `${commandPrefix}addcoins`,
+    `${commandPrefix}removecoins`,
+    `${commandPrefix}additem`,
+    `${commandPrefix}removeitem`,
+    `${commandPrefix}trade`,
+    `${commandPrefix}team`,
+    `${commandPrefix}time`,
+    `${commandPrefix}cupom`,
+    `${commandPrefix}loteria`,
+    `${commandPrefix}deletarconta ou ${commandPrefix}deleteconta`
+  ].map((entry) => String(entry || "").toLowerCase()))
+  const isEconomyCommandInvocation = economyCommandNames.has(normalizedCmdName)
+
   const limits = typeof economyService.getOperationLimits === "function"
     ? economyService.getOperationLimits()
     : {
@@ -1462,6 +1505,9 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
   }
 
   const hasMentionPreferenceApi = typeof economyService.isMentionOptIn === "function"
+  const senderIsRegistered = typeof registrationService?.isRegistered === "function"
+    ? registrationService.isRegistered(sender)
+    : true
   const senderProfile = typeof economyService.getProfile === "function"
     ? economyService.getProfile(sender)
     : null
@@ -1469,7 +1515,17 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
   const senderMentionOptIn = hasMentionPreferenceApi
     ? economyService.isMentionOptIn(sender)
     : true
-  const mustSetNicknameBeforeEconomy = hasMentionPreferenceApi && !senderMentionOptIn && !senderCustomLabel
+  const mustRegisterBeforeEconomy = isEconomyCommandInvocation && !senderIsRegistered
+  if (mustRegisterBeforeEconomy) {
+    await sock.sendMessage(from, {
+      text:
+        "⚠️ Este comando de economia exige cadastro.\n" +
+        "Use *!register* para se registrar e tente novamente."
+    })
+    return true
+  }
+
+  const mustSetNicknameBeforeEconomy = isEconomyCommandInvocation && hasMentionPreferenceApi && !senderMentionOptIn && !senderCustomLabel
   if (mustSetNicknameBeforeEconomy) {
     await sock.sendMessage(from, {
       text:
