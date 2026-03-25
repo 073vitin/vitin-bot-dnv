@@ -1,5 +1,5 @@
 const CURRENCY_LABEL = "Epsteincoins"
-const telemetry = require("../telemetryService")
+const telemetry = require("../services/telemetryService")
 
 const pendingForgeTypeByUser = new Map()
 const activeRafflesByGroup = new Map()
@@ -321,11 +321,11 @@ function getTradeBracketForOffer(offer = {}, economyService) {
 
 function getTradeFeeRateByBracket(bracket = 1) {
   const b = Math.max(1, Math.min(5, Math.floor(Number(bracket) || 1)))
-  if (b === 1) return 0.02
-  if (b === 2) return 0.05
-  if (b === 3) return 0.10
-  if (b === 4) return 0.15
-  return 0.20
+  if (b === 1) return 0.01
+  if (b === 2) return 0.025
+  if (b === 3) return 0.04
+  if (b === 4) return 0.065
+  return 0.09
 }
 
 function getTradeCooldownMsByBracket(bracket = 1) {
@@ -337,7 +337,7 @@ function getTradeCooldownMsByBracket(bracket = 1) {
   return 60 * 60 * 1000
 }
 
-function getLevelScaledAmount(base = 0, level = 1, percentPerLevel = 0.03) {
+function getLevelScaledAmount(base = 0, level = 1, percentPerLevel = 0.045) {
   const safeBase = Math.max(0, Math.floor(Number(base) || 0))
   const safeLevel = Math.max(1, Math.floor(Number(level) || 1))
   const multiplier = 1 + (percentPerLevel * (safeLevel - 1))
@@ -418,6 +418,28 @@ function getXpSnapshot(economyService, userId) {
     xpToNext: Math.max(1, Math.floor(Number(xp?.xpToNextLevel) || 1)),
     seasonPoints: Math.max(0, Math.floor(Number(xp?.seasonPoints) || 0)),
     globalPosition,
+  }
+}
+
+async function handleLevel100Milestone(sock, userId, xpResult) {
+  // Check if level 100 was reached in this XP grant
+  if (!xpResult || !Array.isArray(xpResult.levelRewards)) return
+
+  const level100Reward = xpResult.levelRewards.find(r => r.level === 100)
+  if (!level100Reward) return
+
+  // Send congratulatory DM to the user
+  const jidNormalized = String(userId || "").includes("@") ? userId : `${userId}@s.whatsapp.net`
+  try {
+    await sock.sendMessage(jidNormalized, {
+      text:
+        "🎉 *PARABÉNS!* 🎉\n\n" +
+        "Você atingiu o *nível 100*! 🏆\n\n" +
+        "Como presente, você recebeu uma *Coroa Kronos Verdadeira Permanente* ✨\n\n" +
+        "Esta é uma recompensa exclusiva por alcançar o máximo nível. Aproveite seus benefícios!",
+    })
+  } catch (err) {
+    // Silently fail DM sends if the user hasn't accepted DMs
   }
 }
 
@@ -569,6 +591,7 @@ async function handleEconomyCommands(ctx) {
     `${commandPrefix}aposta`,
     `${commandPrefix}lootbox`,
     `${commandPrefix}falsificar`,
+    `${commandPrefix}usaritem`,
     `${commandPrefix}usarpasse`,
     `${commandPrefix}trabalho`,
     `${commandPrefix}setcoins`,
@@ -861,6 +884,8 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
         return true
       }
 
+      const xpResult = claimed.xpResult || {}
+      await handleLevel100Milestone(sock, sender, xpResult)
       await sock.sendMessage(from, {
         text:
           `✅ Missão *${claimed.questId}* resgatada!\n` +
@@ -976,28 +1001,37 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
     const guidePart1 =
       `GUIA DE ECONOMIA (1/2)\n\n` +
       `Loop base para subir de forma consistente:\n` +
-      `1. Resgate *${prefix}daily* todo dia.\n` +
-      `2. Rode *${prefix}trabalho* para renda com risco moderado.\n` +
+      `1. Resgate *${prefix}daily* todo dia (160 moedas base).\n` +
+      `2. Rode *${prefix}trabalho* para renda: ifood, capinar, lavagem, aposta, minerar, ou bitcoin.\n` +
       `3. Use *${prefix}missao* e finalize Q1/Q2/Q3 para XP + moedas.\n` +
       `4. Use *${prefix}missaoweekly* para missões com maiores recompensas.\n` +
       `5. Consulte *${prefix}xp* e *${prefix}xpranking* para acompanhar progressao.\n\n` +
+      `Atinja *nível 100* para receber uma *Coroa Kronos Verdadeira Permanente* de presente!\n\n` +
       `Comandos-chave:\n` +
       `- Perfil e historico: ${prefix}perfil, ${prefix}extrato\n` +
       `- Loja e inventario: ${prefix}loja, ${prefix}comprar, ${prefix}vender\n` +
-      `- Interacao social: ${prefix}doarcoins, ${prefix}doaritem\n` +
+      `- Interacao social: ${prefix}doarcoins, ${prefix}doaritem, ${prefix}team\n` +
       `- Rotina diaria: ${prefix}daily, ${prefix}trabalho, ${prefix}missao claim <Q1|Q2|Q3>`
 
     const guidePart2 =
       `GUIA DE ECONOMIA (2/2)\n\n` +
+      `Tipos de trabalho (6 opções):\n` +
+      `- *ifood*: 55-145 moedas, 10% falha\n` +
+      `- *capinar*: 110 moedas fixas, 20% falha\n` +
+      `- *lavagem*: 320-620 moedas, 80% falha (~20% da carteira perdida)\n` +
+      `- *aposta*: Minigame! 50% → 2x payout, 50% → 0.5x payout\n` +
+      `- *minerar*: Minigame! 30% → 0 moedas, 70% → 180-330 moedas\n` +
+      `- *bitcoin*: 200-350 moedas, 15% falha\n\n` +
+      `💡 DICA: Jogos em grupo dão *+15%* de recompensa! Jogos solo recebem *-10%* de penalidade.\n\n` +
       `Rotas de risco:\n` +
-      `- Segura: daily + trabalho + missoes.\n` +
-      `- Balanceada: segura + cassino/aposta com valor controlado, além de participar em jogos de grupo.\n` +
-      `- Agressiva: incluir roubo, lootbox e trades com validacao cuidadosa.\n\n` +
+      `- Segura: daily + trabalho + missoes + jogos em grupo.\n` +
+      `- Balanceada: segura + cassino/aposta com valor controlado.\n` +
+      `- Agressiva: incluir roubo, lootbox, trades e jogos arriscados.\n\n` +
       `Dicas praticas:\n` +
       `- Nao comprometa todo saldo em uma unica jogada.\n` +
-      `- Use ${prefix}trade com revisao (${prefix}trade review) antes de aceitar.\n` +
-      `- Revise cooldowns e progresso com frequencia para manter eficiencia.\n` +
-      `- Cada 5 niveis ha recompensa automatica de progressao.`
+      `- Use ${prefix}trade com revisao antes de aceitar.\n` +
+      `- Priorize jogos em grupo para bônus de +15% em moedas.\n` +
+      `- Colecionadores: 50+ itens diferentes estão disponíveis na ${prefix}loja!`
 
     const guideTarget = isGroup ? sender : from
     await sock.sendMessage(guideTarget, { text: guidePart1 })
@@ -1489,7 +1523,12 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         return true
       }
 
-      if (!storage.addTeamPoolCoins(userTeamId, amount)) {
+      const teamContributionMultiplier = typeof economyService.getTeamContributionMultiplier === "function"
+        ? economyService.getTeamContributionMultiplier(sender)
+        : 1
+      const poolAmount = Math.max(1, Math.floor(amount * teamContributionMultiplier))
+
+      if (!storage.addTeamPoolCoins(userTeamId, poolAmount)) {
         economyService.creditCoins(sender, amount, {
           type: "team-pool-deposit-refund",
           details: `Estorno de deposito no pool ${userTeamId}`,
@@ -1508,7 +1547,9 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       })
 
       await sock.sendMessage(from, {
-        text: `✅ @${sender.split("@")[0]} depositou *${amount}* ${CURRENCY_LABEL} no pool do time.`,
+        text:
+          `✅ @${sender.split("@")[0]} depositou *${amount}* ${CURRENCY_LABEL} no pool do time.` +
+          (poolAmount !== amount ? `\n⚡ Multiplicador de contribuições ativo: pool recebeu *${poolAmount}*.` : ""),
         mentions: [sender],
       })
       return true
@@ -1541,7 +1582,11 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       }
 
       economyService.removeItem(sender, normalizedItem, quantity)
-      if (!storage.addTeamPoolItem(userTeamId, normalizedItem, quantity)) {
+      const teamContributionMultiplier = typeof economyService.getTeamContributionMultiplier === "function"
+        ? economyService.getTeamContributionMultiplier(sender)
+        : 1
+      const poolQuantity = Math.max(1, Math.floor(quantity * teamContributionMultiplier))
+      if (!storage.addTeamPoolItem(userTeamId, normalizedItem, poolQuantity)) {
         economyService.addItem(sender, normalizedItem, quantity)
         await sock.sendMessage(from, { text: "Falha ao depositar item no pool. Item estornado." })
         return true
@@ -1557,7 +1602,9 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       })
 
       await sock.sendMessage(from, {
-        text: `✅ @${sender.split("@")[0]} depositou *${quantity}x ${normalizedItem}* no pool do time.`,
+        text:
+          `✅ @${sender.split("@")[0]} depositou *${quantity}x ${normalizedItem}* no pool do time.` +
+          (poolQuantity !== quantity ? `\n⚡ Multiplicador de contribuições ativo: pool recebeu *${poolQuantity}x*.` : ""),
         mentions: [sender],
       })
       return true
@@ -1989,12 +2036,65 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  if (cmd === prefix + "economia") {
+  if (cmdName === prefix + "economia") {
+    const submenu = String(cmdArg1 || "").trim().toLowerCase()
+    if (submenu === "escambo") {
+      await sock.sendMessage(from, {
+        text:
+`╭━━━〔 💱 SUBMENU: ESCAMBO 〕━━━╮
+│ Escambo é o novo nome do sistema de trocas.
+│ Comandos principais:
+│ ${prefix}trade @user <coins> [item:quantidade...]
+│ ${prefix}trade respond <id> <coins> [item:quantidade...]
+│ ${prefix}trade review <id> | ${prefix}trade accept <id>
+│ ${prefix}trade counter <id> <coins> [item:quantidade...]
+│ ${prefix}trade reject <id> | ${prefix}trade cancel <id>
+│ ${prefix}trade list | ${prefix}trade info <id> | ${prefix}trade dispute <id>
+│ Dica: !troca continua como alias de !trade.
+╰━━━━━━━━━━━━━━━━━━━━╯`,
+      })
+      return true
+    }
+
+    if (submenu === "times") {
+      await sock.sendMessage(from, {
+        text:
+`╭━━━〔 👥 SUBMENU: TIMES 〕━━━╮
+│ Comandos de organização e pool de equipe:
+│ ${prefix}team info | ${prefix}team stats | ${prefix}team members
+│ ${prefix}team depositarcoins <qtd>
+│ ${prefix}team depositaritem <item> [qtd]
+│ ${prefix}team retirarcoins <qtd>
+│ ${prefix}team retiraritem <item> [qtd]
+│ Dica: contribuições de time entram no loop de progressão.
+╰━━━━━━━━━━━━━━━━━━━━╯`,
+      })
+      return true
+    }
+
+    if (submenu === "progressao" || submenu === "progressão") {
+      await sock.sendMessage(from, {
+        text:
+`╭━━━〔 📈 SUBMENU: PROGRESSÃO 〕━━━╮
+│ XP, níveis e rotas de ganho de coins:
+│ ${prefix}xp
+│ ${prefix}perfil stats
+│ ${prefix}xpranking | ${prefix}coinsranking
+│ ${prefix}missao | ${prefix}missaosemanal
+│ ${prefix}daily | ${prefix}trabalho
+│ ${prefix}guia
+│ Dica: combine daily + trabalho + missões para evolução estável.
+╰━━━━━━━━━━━━━━━━━━━━╯`,
+      })
+      return true
+    }
+
     await sock.sendMessage(from, {
       text:
 `╭━━━〔 💰 SUBMENU: ECONOMIA 〕━━━╮
 │ Comandos de economia (* significa argumento opcional)
 │ No privado: exige cadastro via ${prefix}register
+│ Submenus: ${prefix}economia escambo | ${prefix}economia times | ${prefix}economia progressao
 │ ${prefix}perfil stats
 │ ${prefix}perfil *@user
 │ ${prefix}coinsranking
@@ -2011,6 +2111,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 │ ${prefix}comprar <item|indice> *<quantidade>
 │ ${prefix}comprarpara @user <item> *<quantidade>
 │ ${prefix}vender <item> *<quantidade>
+│ ${prefix}usaritem <item>
 │ ${prefix}doarcoins @user *<quantidade>
 │ ${prefix}doaritem @user <item> *<quantidade>
 │ ${prefix}roubar @user
@@ -3038,6 +3139,53 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
+  if (cmdName === prefix + "usaritem") {
+    const item = String(cmdArg1 || "").trim()
+    if (!item) {
+      await sock.sendMessage(from, {
+        text: `Use: ${prefix}usaritem <item>`
+      })
+      return true
+    }
+
+    const used = economyService.useItem(sender, item)
+    if (!used.ok) {
+      await sock.sendMessage(from, {
+        text: used.reason === "insufficient-items"
+          ? "Você não possui esse item para uso."
+          : (used.reason === "item-not-usable-manually"
+            ? "Esse item não possui uso manual no momento."
+            : "Não foi possível usar esse item."),
+      })
+      return true
+    }
+
+    const effectText = (() => {
+      if (used.effect === "cooldown-reduced") {
+        const minutes = Math.max(1, Math.floor((Number(used.reductionMs) || 0) / 60000))
+        return `⏱️ Cooldowns reduzidos em *${minutes} min*.`
+      }
+      if (used.effect === "xp-booster") {
+        return "⭐ Booster de XP ativado: +15% XP por 24h."
+      }
+      if (used.effect === "quest-reward-multiplier") {
+        return `📜 Multiplicador de quests ativo para as próximas *${used.charges}* missões.`
+      }
+      if (used.effect === "claim-multiplier") {
+        return `💼 Multiplicador de rotina ativo. Cargas: *${used.charges}*.`
+      }
+      if (used.effect === "team-contrib-multiplier") {
+        return "👥 Multiplicador de contribuições ativo: *2x* em times por 24h."
+      }
+      return "✅ Item usado com sucesso."
+    })()
+
+    await sock.sendMessage(from, {
+      text: effectText,
+    })
+    return true
+  }
+
   if (cmdName === prefix + "doarcoins" && isGroup) {
     const target = mentioned[0]
     const quantity = parseQuantity(cmdParts[2], 1)
@@ -3135,9 +3283,20 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     economyService.incrementStat(sender, "steals", 1)
 
     if (!steal.success) {
+      if (steal.blockedByShield) {
+        await sock.sendMessage(from, {
+          text:
+            `🛡️ Roubo bloqueado! @${target.split("@")[0]} consumiu um escudo e você não ganhou nada.\n` +
+            "Sua tentativa e cooldown foram consumidos normalmente.",
+          mentions: [sender, target],
+        })
+        return true
+      }
+
       const xpResult = grantCommandXp(economyService, sender, XP_REWARDS.stealAttemptFail, "steal-fail", {
         target,
       })
+      await handleLevel100Milestone(sock, sender, xpResult)
       await sock.sendMessage(from, {
         text:
           `🚨 Roubo falhou! @${sender.split("@")[0]} perdeu *${steal.lost}* ${CURRENCY_LABEL}.\n` +
@@ -3152,10 +3311,11 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       target,
       gained: steal.gained,
     })
+    await handleLevel100Milestone(sock, sender, xpResult)
     await sock.sendMessage(from, {
       text:
         `🕵️ Roubo bem-sucedido! @${sender.split("@")[0]} roubou *${steal.stolenFromVictim}* de @${target.split("@")[0]} e recebeu *${steal.gained}* ${CURRENCY_LABEL}.\n` +
-        `Faixa base do roubo: 50 a 200 ${CURRENCY_LABEL} (antes de bônus da Coroa Kronos).\n` +
+        `Faixa base do roubo: 90 a 320 ${CURRENCY_LABEL} (antes de bônus da Coroa Kronos).\n` +
         `Chance de sucesso nesta tentativa: ${(steal.successChance * 100).toFixed(0)}%` +
         buildXpRewardText(xpResult, XP_REWARDS.stealAttemptSuccess),
       mentions: [sender, target],
@@ -3165,8 +3325,14 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
   if (cmd === prefix + "daily") {
     const level = Math.max(1, Math.floor(Number(economyService.getProfile(sender)?.progression?.level) || 1))
-    const scaledDailyCoins = getLevelScaledAmount(100, level, 0.03)
-    const scaledDailyXp = getLevelScaledAmount(XP_REWARDS.dailyClaim, level, 0.03)
+    let scaledDailyCoins = getLevelScaledAmount(160, level, 0.045)
+    const scaledDailyXp = getLevelScaledAmount(XP_REWARDS.dailyClaim, level, 0.045)
+    const claimBoost = typeof economyService.consumeClaimMultiplier === "function"
+      ? economyService.consumeClaimMultiplier(sender, "daily")
+      : { active: false, multiplier: 1 }
+    if (claimBoost.active) {
+      scaledDailyCoins = Math.max(1, Math.floor(scaledDailyCoins * claimBoost.multiplier))
+    }
     const daily = economyService.claimDaily(sender, scaledDailyCoins)
     if (!daily.ok) {
       await sock.sendMessage(from, {
@@ -3178,10 +3344,12 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     const xpResult = grantCommandXp(economyService, sender, scaledDailyXp, "daily-claim", {
       dayKey: daily.dayKey,
     })
+    await handleLevel100Milestone(sock, sender, xpResult)
     await sock.sendMessage(from, {
       text:
         `💰 Daily resgatado: *${daily.amount}* ${CURRENCY_LABEL}.` +
         (daily.kronosBonus ? " (bônus da Coroa Kronos aplicado)" : "") +
+        (claimBoost.active ? "\n✨ Multiplicador de rotina aplicado no daily." : "") +
         buildXpRewardText(xpResult, scaledDailyXp),
     })
     return true
@@ -3249,11 +3417,77 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     incrementUserStat(sender, "moneyCasinoLost", value)
 
     const emojis = ["🍒", "🍋", "🍇", "💎", "7️⃣", "⭐"]
-    const roll = () => emojis[Math.floor(Math.random() * emojis.length)]
-    const result = [roll(), roll(), roll(), roll(), roll()]
-    const counts = {}
-    result.forEach((e) => { counts[e] = (counts[e] || 0) + 1 })
-    const maxCount = Math.max(...Object.values(counts))
+    const pickEmoji = (excluded = new Set()) => {
+      const pool = emojis.filter((emoji) => !excluded.has(emoji))
+      const source = pool.length > 0 ? pool : emojis
+      return source[Math.floor(Math.random() * source.length)]
+    }
+
+    const buildResultWithMaxCount = (targetMaxCount) => {
+      if (targetMaxCount >= 5) {
+        const symbol = pickEmoji()
+        return [symbol, symbol, symbol, symbol, symbol]
+      }
+
+      if (targetMaxCount === 4) {
+        const symbol = pickEmoji()
+        const other = pickEmoji(new Set([symbol]))
+        const arr = [symbol, symbol, symbol, symbol, other]
+        for (let i = arr.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1))
+          const tmp = arr[i]
+          arr[i] = arr[j]
+          arr[j] = tmp
+        }
+        return arr
+      }
+
+      if (targetMaxCount === 3) {
+        const symbol = pickEmoji()
+        const others = new Set([symbol])
+        const second = pickEmoji(others)
+        others.add(second)
+        const third = pickEmoji(others)
+        others.add(third)
+        const fourth = pickEmoji(others)
+        const arr = [symbol, symbol, symbol, second, third === second ? fourth : third]
+        for (let i = arr.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1))
+          const tmp = arr[i]
+          arr[i] = arr[j]
+          arr[j] = tmp
+        }
+        return arr
+      }
+
+      // derrota: no máximo 2 iguais
+      const a = pickEmoji()
+      const b = pickEmoji(new Set([a]))
+      const c = pickEmoji(new Set([a, b]))
+      const d = pickEmoji(new Set([a, b, c]))
+      const e = Math.random() < 0.5 ? b : c
+      const arr = [a, b, c, d, e]
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        const tmp = arr[i]
+        arr[i] = arr[j]
+        arr[j] = tmp
+      }
+      return arr
+    }
+
+    // Meta de balanceamento: ~40% de rodadas vencedoras no cassino.
+    const isWin = Math.random() < 0.4
+    let maxCount = 0
+    if (isWin) {
+      const tierRoll = Math.random()
+      if (tierRoll < 0.85) maxCount = 3
+      else if (tierRoll < 0.98) maxCount = 4
+      else maxCount = 5
+    } else {
+      maxCount = 2
+    }
+    const result = buildResultWithMaxCount(maxCount)
 
     let payout = 0
     if (maxCount === 5) payout = value * 30
@@ -3268,6 +3502,14 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         meta: { payout, maxCount },
       })
       incrementUserStat(sender, "moneyCasinoWon", payout)
+    }
+
+    let salvage = { activated: false, refunded: 0 }
+    if (payout <= 0 && typeof economyService.applySalvageInsurance === "function") {
+      salvage = economyService.applySalvageInsurance(sender, value, {
+        betValue: value,
+        threshold: 4,
+      })
     }
 
     const casinoXp = payout > 0
@@ -3296,6 +3538,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         (payout > 0
           ? `Resultado: ganhou *${payout}* ${CURRENCY_LABEL}.`
           : `Resultado: perdeu *${value}* ${CURRENCY_LABEL}.`) +
+        (salvage.activated ? `\n🛟 Seguro Geral ativado: devolução de *${salvage.refunded}* ${CURRENCY_LABEL}.` : "") +
         buildXpRewardText(xpResult, casinoXp),
     })
     return true
@@ -3555,12 +3798,12 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     const level = Math.max(1, Math.floor(Number(economyService.getProfile(sender)?.progression?.level) || 1))
     if (!work) {
       await sock.sendMessage(from, {
-        text: "Use: !trabalho <ifood|capinar|lavagem>",
+        text: "Use: !trabalho <ifood|capinar|lavagem|aposta|minerar|bitcoin>",
       })
       return true
     }
 
-    const WORK_COOLDOWN_MS = 120 * 60_000
+    const WORK_COOLDOWN_MS = 90 * 60_000
     const lastWorkAt = economyService.getWorkCooldown(sender)
     const remaining = (lastWorkAt + WORK_COOLDOWN_MS) - Date.now()
     if (remaining > 0) {
@@ -3584,7 +3827,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         workStatus = "fail"
         xpReward = XP_REWARDS.workFail
       } else {
-        gain = Math.floor(Math.random() * 71) + 30
+        gain = Math.floor(Math.random() * 91) + 55
         message = `🍔 Delivery concluído! Você ganhou ${gain} ${CURRENCY_LABEL}.`
         workStatus = "win"
         xpReward = XP_REWARDS.workWin
@@ -3595,14 +3838,15 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         workStatus = "fail"
         xpReward = XP_REWARDS.workFail
       } else {
-        gain = 70
+        gain = 110
         message = `🌱 Serviço concluído! Você ganhou ${gain} ${CURRENCY_LABEL}.`
         workStatus = "win"
         xpReward = XP_REWARDS.workWin
       }
     } else if (work === "lavagem") {
       if (Math.random() < 0.8) {
-        const lost = economyService.debitCoinsFlexible(sender, Math.floor(economyService.getCoins(sender) * 0.4), {
+        const lossByPercent = Math.floor(economyService.getCoins(sender) * 0.2)
+        const lost = economyService.debitCoinsFlexible(sender, Math.min(lossByPercent, 1500), {
           type: "work-loss",
           details: "Falha no trabalho lavagem",
           meta: { work },
@@ -3611,24 +3855,74 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         workStatus = "loss"
         xpReward = XP_REWARDS.workFail
       } else {
-        gain = Math.floor(Math.random() * 201) + 200
+        gain = Math.floor(Math.random() * 301) + 320
         message = `💰 Lavagem concluída! Você ganhou ${gain} ${CURRENCY_LABEL}.`
         workStatus = "win"
         xpReward = XP_REWARDS.workWin
       }
+    } else if (work === "aposta") {
+      // Minigame work type: roll determines multiplier (50% floor - minimum 0.5x)
+      const roll = Math.random() * 100
+      const baseGain = 150
+      if (roll > 50) {
+        gain = Math.floor(baseGain * 2) // 2x payout branch
+        message = `🎲 Aposta vencida! Você ganhou ${gain} ${CURRENCY_LABEL} (2x multiplicador).`
+        workStatus = "win"
+        xpReward = XP_REWARDS.workWin
+      } else {
+        gain = Math.floor(baseGain * 0.5) // 0.5x payout branch (50% floor)
+        message = `🎲 Aposta parcial! Você ganhou ${gain} ${CURRENCY_LABEL} (0.5x multiplicador).`
+        workStatus = "win"
+        xpReward = XP_REWARDS.workWin
+      }
+    } else if (work === "minerar") {
+      // Minigame work type: roll determines outcome (0% chance - zero payout or normal)
+      const roll = Math.random() * 100
+      if (roll < 30) {
+        gain = 0
+        message = `⛏️ Mineração improdutiva. Você não encontrou minérios hoje, mas ganhou experiência.`
+        workStatus = "zero"
+        xpReward = XP_REWARDS.workFail
+      } else {
+        gain = Math.floor(Math.random() * 151) + 180
+        message = `⛏️ Mineração bem-sucedida! Você extraiu minérios e ganhou ${gain} ${CURRENCY_LABEL}.`
+        workStatus = "win"
+        xpReward = XP_REWARDS.workWin
+      }
+    } else if (work === "bitcoin") {
+      // Standard work type: moderate difficulty, good base reward
+      if (Math.random() < 0.15) {
+        message = `💰 Mineração de Bitcoin falhou! Sua GPU superaqueceu e você perdeu tempo valioso.`
+        workStatus = "fail"
+        xpReward = XP_REWARDS.workFail
+      } else {
+        gain = Math.floor(Math.random() * 151) + 200
+        message = `💰 Mineração de Bitcoin realizada! Você ganhou ${gain} ${CURRENCY_LABEL} em criptos.`
+        workStatus = "win"
+        xpReward = XP_REWARDS.workWin
+      }
     } else {
-      await sock.sendMessage(from, { text: "Trabalho inválido. Use: ifood, capinar ou lavagem." })
+      await sock.sendMessage(from, { text: "Trabalho inválido. Use: ifood, capinar, lavagem, aposta, minerar ou bitcoin." })
       return true
     }
 
     if (gain > 0) {
-      gain = getLevelScaledAmount(gain, level, 0.03)
+      const claimBoost = typeof economyService.consumeClaimMultiplier === "function"
+        ? economyService.consumeClaimMultiplier(sender, "work")
+        : { active: false, multiplier: 1 }
+      gain = getLevelScaledAmount(gain, level, 0.045)
+      if (claimBoost.active) {
+        gain = Math.max(1, Math.floor(gain * claimBoost.multiplier))
+      }
       gain = economyService.applyKronosGainMultiplier(sender, gain, "work")
       economyService.creditCoins(sender, gain, {
         type: "work-win",
         details: `Pagamento de trabalho ${work}`,
         meta: { work, gain },
       })
+      if (claimBoost.active) {
+        message += "\n✨ Multiplicador de rotina aplicado no trabalho."
+      }
     }
 
     telemetry.incrementCounter("economy.work.attempt", 1, {
@@ -3642,12 +3936,13 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       gain,
     })
 
-    const scaledWorkXp = getLevelScaledAmount(xpReward, level, 0.03)
+    const scaledWorkXp = getLevelScaledAmount(xpReward, level, 0.045)
     const xpResult = grantCommandXp(economyService, sender, scaledWorkXp, "work", {
       work,
       status: workStatus,
       gain,
     })
+    await handleLevel100Milestone(sock, sender, xpResult)
     await sock.sendMessage(from, {
       text: message + buildXpRewardText(xpResult, scaledWorkXp),
     })

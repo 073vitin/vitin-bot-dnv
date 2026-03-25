@@ -1,6 +1,6 @@
 const crypto = require("crypto")
 const { downloadMediaMessage } = require("@whiskeysockets/baileys")
-const storage = require("./storage")
+const storage = require("../storage")
 const economyService = require("./economyService")
 const telemetry = require("./telemetryService")
 

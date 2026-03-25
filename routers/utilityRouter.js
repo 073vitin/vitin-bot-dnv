@@ -1,4 +1,4 @@
-const telemetry = require("../telemetryService")
+const telemetry = require("../services/telemetryService")
 
 const pendingPrivateFeedbackBySender = new Map()
 
@@ -102,8 +102,6 @@ async function handleUtilityCommands(ctx) {
         { cmd: `${prefix}trade accept/counter/reject`, usage: `${prefix}trade accept|counter|reject <tradeId> ...`, effect: "decide trade", badges: ["GRUPO"] },
         { cmd: `${prefix}trade list/info`, usage: `${prefix}trade list | ${prefix}trade info <tradeId>`, effect: "consulta trades", badges: ["GRUPO"] },
         { cmd: `${prefix}team create/invite/accept/members/info/stats/leave/list`, usage: `${prefix}team <acao> ...`, effect: "gerencia times", badges: ["GRUPO"] },
-        { cmd: `${prefix}coop`, usage: `${prefix}coop <dificuldade 1-10>`, effect: "missao cooperativa", badges: ["GRUPO"] },
-        { cmd: `${prefix}teamduelo`, usage: `${prefix}teamduelo @usuario <dificuldade 1-10>`, effect: "duelo entre times", badges: ["GRUPO"] },
         { cmd: `${prefix}falsificar`, usage: `${prefix}falsificar <tipo 1-13> [sev] [qtd] [S|N]`, effect: "fabrica passe de punicao", badges: ["GRUPO"] },
         { cmd: `${prefix}lootbox`, usage: `${prefix}lootbox <qtd>`, effect: "abre lootboxes", badges: ["GRUPO"] },
         { cmd: `${prefix}loteria`, usage: `${prefix}loteria \"titulo\" \"recompensas\" <S|N> <vencedores>`, effect: "gerencia loteria", badges: ["GRUPO", "OVERRIDE"] },
@@ -120,6 +118,7 @@ async function handleUtilityCommands(ctx) {
       ],
       ocultos: [
         { cmd: `${prefix}comandosfull`, usage: `${prefix}comandosfull [secao|todos] [detalhes]`, effect: "manual completo", badges: ["DM", "OVERRIDE", "OCULTO"] },
+        { cmd: `${prefix}manutencao`, aliases: [`${prefix}manutenção`], usage: `${prefix}manutencao`, effect: "toggle de manutencao global por grupo de origem", badges: ["GRUPO", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}toggleover`, usage: `${prefix}toggleover`, effect: "liga/desliga checks de override", badges: ["DM", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}vaultkey`, usage: `${prefix}vaultkey`, effect: "senha para export de .data", badges: ["DM", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}msg`, usage: `${prefix}msg <aviso|update> <S|N>`, effect: "broadcast guiado", badges: ["OVERRIDE", "OCULTO"] },
