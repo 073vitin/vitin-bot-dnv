@@ -1,4 +1,4 @@
-﻿const fs = require("fs")
+const fs = require("fs")
 const path = require("path")
 const test = require("node:test")
 const assert = require("node:assert/strict")
@@ -98,4 +98,3 @@ test("marca de crescimento remains collectible and not manually activatable", ()
   assert.equal(used.ok, false)
   assert.equal(used.reason, "item-not-usable-manually")
 })
-

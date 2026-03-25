@@ -1,4 +1,4 @@
-﻿const fs = require("fs")
+const fs = require("fs")
 const path = require("path")
 const test = require("node:test")
 const assert = require("node:assert/strict")
@@ -74,4 +74,3 @@ test("streak saver consumes one item per protection", () => {
   assert.equal(economy.getItemQuantity(a, "streakSaver"), 0)
   assert.equal(economy.consumeStreakSaver(a), false)
 })
-

@@ -1,4 +1,4 @@
-﻿const crypto = require("crypto")
+const crypto = require("crypto")
 const storage = require("../storage")
 const economyService = require("../services/economyService")
 
@@ -45,16 +45,16 @@ function toggleDobroOuNada(groupId, playerId) {
 
 function formatDobroStatus(groupId, preloadedState = null) {
   const state = preloadedState || getDobroState(groupId)
-  if (!state?.enabled) return "Dobro ou Nada nÃ£o estÃ¡ ativo neste grupo."
-  if (!state.streakPlayer) return "Sem sequÃªncia ativa"
+  if (!state?.enabled) return "Dobro ou Nada não está ativo neste grupo."
+  if (!state.streakPlayer) return "Sem sequência ativa"
   const resenhaOn = storage.isResenhaEnabled(groupId)
 
-  let msg = `ï¿½xï¿½ SequÃªncia: ${state.activeStreak}/2 vitÃ³rias\n`
-  msg += `ï¿½x}ï¿½ Jogador: @${state.streakPlayer.split("@")[0]}\n`
+  let msg = `🔥 Sequência: ${state.activeStreak}/2 vitórias\n`
+  msg += `🎯 Jogador: @${state.streakPlayer.split("@")[0]}\n`
 
   if (state.doubledEnabled && resenhaOn) {
-    msg += "\nï¿½aï¿½ï¸ DOBRO OU NADA ATIVADO!\n"
-    msg += "ï¿½x}ï¿½ PrÃ³xima derrota terÃ¡ puniÃ§Ã£o com duraÃ§Ã£o dobrada"
+    msg += "\n⚠️ DOBRO OU NADA ATIVADO!\n"
+    msg += "🎲 Próxima derrota terá punição com duração dobrada"
   }
 
   return msg
@@ -77,7 +77,7 @@ function registerDobroWin(groupId, winnerId, result) {
     objectiveReachedNow = true
     state.doubledEnabled = true
     if (!state.activeSince) state.activeSince = Date.now()
-    // Ao atingir o objetivo, reinicia o ciclo para permitir nova recompensa em 2 vitÃ³rias.
+    // Ao atingir o objetivo, reinicia o ciclo para permitir nova recompensa em 2 vitórias.
     state.activeStreak = 0
   }
 
@@ -106,7 +106,7 @@ function registerDobroLoss(groupId, loserId, result) {
   state.lastLoser = loserId
   state.lastTossAt = Date.now()
 
-  // Perder reinicia o ciclo de sequÃªncia atual.
+  // Perder reinicia o ciclo de sequência atual.
   state.activeStreak = 0
   state.streakPlayer = null
   state.doubledEnabled = false
@@ -157,7 +157,7 @@ function isDobroChoiceCommand(cmd) {
   const normalized = String(cmd || "").toLowerCase().trim()
   return normalized === "!moeda continua" || normalized === "!moeda sair" ||
          normalized === "continua" || normalized === "sair" ||
-         normalized === "sim" || normalized === "nao" || normalized === "nÃ£o"
+         normalized === "sim" || normalized === "nao" || normalized === "não"
 }
 
 async function handleCoinGuess({
@@ -232,21 +232,21 @@ async function handleCoinGuess({
     }
 
     let winText =
-      `VocÃª acertou! A moeda caiu em *${resolvedResult}*.\n` +
+      `Você acertou! A moeda caiu em *${resolvedResult}*.\n` +
       `Streak: *${streak}*`
 
     if (dobroOutcome.active) {
       winText += `\nDobro ou Nada: ${dobroOutcome.state.activeStreak}/2\n`
-      winText += "ï¿½xï¿½ *Continua ou sai?* Digite: !moeda continua (para mais!) ou !moeda sair (para ficar com seus ganhos)"
+      winText += "💬 *Continua ou sai?* Digite: !moeda continua (para mais!) ou !moeda sair (para ficar com seus ganhos)"
     }
 
     await sock.sendMessage(from, { text: winText, mentions: [sender] })
 
     await sock.sendMessage(from, {
       text:
-        `Escolha um alvo e a puniÃ§Ã£o dele em atÃ© 30 segundos.\n` +
+        `Escolha um alvo e a punição dele em até 30 segundos.\n` +
         `${getPunishmentMenuText()}\n` +
-        `Formato: @mention <nÃºmero da puniÃ§Ã£o>`,
+        `Formato: @mention <número da punição>`,
       mentions: [sender],
     })
 
@@ -293,10 +293,10 @@ async function handleCoinGuess({
       await rewardWinner(sender, rewardMultiplier)
     }
 
-    let winText = `VocÃª acertou! A moeda caiu em *${resolvedResult}*.\nï¿½xï¿½ Streak: *${streak}*`
+    let winText = `Você acertou! A moeda caiu em *${resolvedResult}*.\n🔥 Streak: *${streak}*`
     if (dobroOutcome.active) {
       winText += `\nDobro ou Nada: ${dobroOutcome.state.activeStreak}/2`
-      winText += "\nï¿½xï¿½ *Continua ou sai?* Digite: !moeda continua (para mais!) ou !moeda sair (para ficar com seus ganhos)"
+      winText += "\n💬 *Continua ou sai?* Digite: !moeda continua (para mais!) ou !moeda sair (para ficar com seus ganhos)"
     }
 
     await sock.sendMessage(from, { text: winText })
@@ -321,12 +321,12 @@ async function handleCoinGuess({
     await chargeLoser(sender, lossMultiplier)
   }
   const lossLabel = (dobroTriggered && resenhaAveriguada[from])
-    ? "ï¿½xï¿½ Sua streak foi resetada.\nï¿½aï¿½ï¸ DOBRO OU NADA DISPAROU."
-    : "ï¿½xï¿½ Sua streak foi resetada."
+    ? "💥 Sua streak foi resetada.\n⚠️ DOBRO OU NADA DISPAROU."
+    : "💥 Sua streak foi resetada."
   await sock.sendMessage(from, {
     text:
       `A moeda caiu em *${resolvedResult}*.\nSe fudeu.\n${lossLabel}` +
-      (usedStreakSaver ? "\nï¿½x:x Salva-streak consumido: sua sequÃªncia foi preservada." : ""),
+      (usedStreakSaver ? "\n🛟 Salva-streak consumido: sua sequência foi preservada." : ""),
     mentions: [sender]
   })
 
@@ -334,17 +334,17 @@ async function handleCoinGuess({
     if (!canTriggerPunishment) {
       await sock.sendMessage(from, {
         text:
-          `ï¿½aï¸ Aposta de *${wagerMultiplier}x* abaixo do minimo de *${minPunishmentBet}x* para puniÃ§Ãµes no Cara ou Coroa.\n` +
-          `Sem puniÃ§Ã£o nesta rodada.`,
+          `Aposta de *${wagerMultiplier}x* abaixo do minimo de *${minPunishmentBet}x* para punicoes no Cara ou Coroa.\n` +
+          `Sem punicao nesta rodada.`,
         mentions: [sender],
       })
       return true
     }
 
     const randomPunishment = getRandomPunishmentChoice()
-    const punishmentPrefix = dobroTriggered ? "Dobro ou Nada ativo: puniÃ§Ã£o com duraÃ§Ã£o dobrada.\n" : ""
+    const punishmentPrefix = dobroTriggered ? "Dobro ou Nada ativo: punição com duração dobrada.\n" : ""
     await sock.sendMessage(from, {
-      text: `${punishmentPrefix}PuniÃ§Ã£o sorteada: *${getPunishmentNameById(randomPunishment)}*`,
+      text: `${punishmentPrefix}Punição sorteada: *${getPunishmentNameById(randomPunishment)}*`,
       mentions: [sender]
     })
     await applyPunishment(sock, from, sender, randomPunishment, { origin: "game" })
@@ -353,7 +353,7 @@ async function handleCoinGuess({
       const extended = extendTimedPunishment(from, sender, 2)
       if (extended) {
         await sock.sendMessage(from, {
-          text: "â³ DuraÃ§Ã£o da puniÃ§Ã£o atual foi dobrada pelo Dobro ou Nada.",
+          text: "⏳ Duração da punição atual foi dobrada pelo Dobro ou Nada.",
           mentions: [sender]
         })
       }
@@ -425,13 +425,13 @@ async function startCoinRound({ sock, from, sender, cmd, prefix, isGroup }) {
   const betMultiplier = rawBet ? Number.parseInt(rawBet, 10) : 1
   if (rawBet && !/^\d+$/.test(rawBet)) {
     await sock.sendMessage(from, {
-      text: `ï¿½R Aposta invÃ¡lida! Use bet 1-10. Estado: ${profile.coins}. (Compat: Use: !moeda [2-10])`,
+      text: `❌ Aposta inválida! Use bet 1-10. Estado: ${profile.coins}. (Compat: Use: !moeda [2-10])`,
     })
     return true
   }
   if (!Number.isFinite(betMultiplier) || betMultiplier < 1 || betMultiplier > 10) {
     await sock.sendMessage(from, {
-      text: `ï¿½R Aposta invÃ¡lida! Use bet 1-10. Estado: ${profile.coins}. (Compat: Use: !moeda [2-10])`,
+      text: `❌ Aposta inválida! Use bet 1-10. Estado: ${profile.coins}. (Compat: Use: !moeda [2-10])`,
     })
     return true
   }
@@ -440,7 +440,7 @@ async function startCoinRound({ sock, from, sender, cmd, prefix, isGroup }) {
   const buyInAmount = betMultiplier * 10
   if (profile.coins < buyInAmount) {
     await sock.sendMessage(from, {
-      text: `VocÃª precisa de pelo menos *${buyInAmount}* moedas para fazer uma aposta de *${betMultiplier}x*. Saldo atual: ${profile.coins}`,
+      text: `Você precisa de pelo menos *${buyInAmount}* moedas para fazer uma aposta de *${betMultiplier}x*. Saldo atual: ${profile.coins}`,
     })
     return true
   }
@@ -449,7 +449,7 @@ async function startCoinRound({ sock, from, sender, cmd, prefix, isGroup }) {
   const rateCheck = checkCoinRateLimit(from, sender)
   if (!rateCheck.allowed) {
     await sock.sendMessage(from, {
-      text: `VocÃª atingiu o limite de *${RATE_LIMIT_MAX_PLAYS}* jogadas em 30 minutos. Que tal jogar outros *!jogos* ?`,
+      text: `Você atingiu o limite de *${RATE_LIMIT_MAX_PLAYS}* jogadas em 30 minutos. Que tal jogar outros *!jogos* ?`,
     })
     return true
   }
@@ -459,7 +459,7 @@ async function startCoinRound({ sock, from, sender, cmd, prefix, isGroup }) {
     const safeCheck = checkCoinSafeRateLimit(from, sender)
     if (!safeCheck.allowed) {
       await sock.sendMessage(from, {
-        text: `VocÃª atingiu o limite de *${SAFE_RATE_LIMIT_MAX_PLAYS}* jogadas seguras (aposta ï¿½0ï¿½3) em 4 horas. Use aposta 4-10 ou jogue outros *!jogos*.`,
+        text: `Você atingiu o limite de *${SAFE_RATE_LIMIT_MAX_PLAYS}* jogadas seguras (aposta ≤3) em 4 horas. Use aposta 4-10 ou jogue outros *!jogos*.`,
       })
       return true
     }
@@ -488,15 +488,15 @@ async function startCoinRound({ sock, from, sender, cmd, prefix, isGroup }) {
   if (coinPunishmentPending[from]?.[sender]) {
     await sock.sendMessage(from, {
       text: resenhaOn
-        ? "VocÃª jÃ¡ tem uma escolha de puniÃ§Ã£o pendente. Resolva isso antes de iniciar outra rodada."
-        : "VocÃª jÃ¡ tem uma escolha pendente. Resolva isso antes de iniciar outra rodada."
+        ? "Você já tem uma escolha de punição pendente. Resolva isso antes de iniciar outra rodada."
+        : "Você já tem uma escolha pendente. Resolva isso antes de iniciar outra rodada."
     })
     return true
   }
 
   if (coinGames[from]?.[sender]) {
     await sock.sendMessage(from, {
-      text: "VocÃª jÃ¡ tem uma rodada em andamento. Responda com *cara* ou *coroa*."
+      text: "Você já tem uma rodada em andamento. Responda com *cara* ou *coroa*."
     })
     return true
   }
@@ -520,8 +520,8 @@ async function startCoinRound({ sock, from, sender, cmd, prefix, isGroup }) {
 
   await sock.sendMessage(from, {
     text: dobroToggleActive
-      ? `Cara ou Coroa, ladrÃ£o?\nAposta: *${betMultiplier}x*\nï¿½aï¿½ï¸ Dobro ou Nada estÃ¡ ATIVO para esta rodada de !moeda.`
-      : `Cara ou Coroa, ladrÃ£o?\nAposta: *${betMultiplier}x*\nPuniÃ§Ãµes sÃ³ disparam a partir de *4x* em modo resenha.`
+      ? `Cara ou Coroa, ladrão?\nAposta: *${betMultiplier}x*\n⚠️ Dobro ou Nada está ATIVO para esta rodada de !moeda.`
+      : `Cara ou Coroa, ladrão?\nAposta: *${betMultiplier}x*\nPunições só disparam a partir de *4x* em modo resenha.`
   })
 
   setTimeout(() => {
@@ -599,4 +599,3 @@ module.exports = {
   sendStreakRanking,
   sendStreakValue,
 }
-
