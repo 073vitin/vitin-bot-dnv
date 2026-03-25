@@ -1250,7 +1250,7 @@ app.get("/", (req,res)=>{
     }
 
     function metricRow(label, m){
-      return "<tr><td class=\"left\">"+escapeHtml(label)+"</td><td class=\"right\">"+escapeHtml(m?.count||0)+"</td><td class=\"right\">"+escapeHtml(fmtMs(m?.lastMs))+"</td><td class=\"right\">"+escapeHtml(fmtMs(m?.avgMs))+"</td><td class=\"right\">"+escapeHtml(fmtMs(m?.p95Ms))+"</td><td class=\"right\">"+escapeHtml(fmtMs(m?.maxMs))+"</td></tr>"
+      return "<tr><td class=\"left\">"+escapeHtml(label)+"</td><td class=\"right\">"+escapeHtml((m&&m.count)||0)+"</td><td class=\"right\">"+escapeHtml(fmtMs((m&&m.lastMs)))+"</td><td class=\"right\">"+escapeHtml(fmtMs((m&&m.avgMs)))+"</td><td class=\"right\">"+escapeHtml(fmtMs((m&&m.p95Ms)))+"</td><td class=\"right\">"+escapeHtml(fmtMs((m&&m.maxMs)))+"</td></tr>"
     }
 
     async function refresh(){
@@ -2942,15 +2942,6 @@ async function startBot(){
             if (results.winner) {
               await rewardPlayer(results.winner, GAME_REWARDS.REACAO, 1, "Reação")
               incrementUserStat(results.winner, "gameReacaoWin", 1)
-              const allowedTargets = finalState.restrictToPlayers
-                ? (finalState.players || []).filter((p) => p !== results.winner)
-                : null
-              await createPendingTargetForWinner(
-                results.winner,
-                `⚡ @${results.winner.split("@")[0]}, você venceu o Teste de Reação!`,
-                1,
-                allowedTargets
-              )
             }
 
             storage.clearGameState(from, "reaçãoActive")
@@ -3013,7 +3004,9 @@ async function startBot(){
                 rewardedPlayers.forEach((playerId) => incrementUserStat(playerId, "gameComandoWin", 1))
                 incrementUserStat(loser, "gameComandoLoss", 1)
                 await rewardPlayers(rewardedPlayers, GAME_REWARDS.COMANDO_SUCCESS, 1, "Comando")
-                await applyRandomGamePunishment(loser)
+                if (finalState.instruction?.cmd === "silence") {
+                  await applyRandomGamePunishment(loser)
+                }
               }
               storage.clearGameState(from, "comandoActive")
             }

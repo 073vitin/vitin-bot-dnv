@@ -1835,16 +1835,6 @@ async function handleGameMessageFlow(ctx) {
       const reactionLosers = (reactionActive.players || []).filter((playerId) => playerId !== sender)
       reactionLosers.forEach((playerId) => incrementUserStat(playerId, "gameReacaoLoss", 1))
 
-      const allowedTargets = reactionActive.restrictToPlayers
-        ? (reactionActive.players || []).filter((p) => p !== sender)
-        : null
-      await createPendingTargetForWinner(
-        sender,
-        `⚡ @${sender.split("@")[0]} venceu o Teste de Reação!`,
-        1,
-        allowedTargets
-      )
-
       storage.clearGameState(from, "reaçãoActive")
       return true
     }
@@ -1864,13 +1854,6 @@ async function handleGameMessageFlow(ctx) {
       incrementUserStat(sender, "gameEmbaralhadoWin", 1)
       const embaralhadoLosers = (wsActive.players || []).filter((playerId) => playerId !== sender)
       embaralhadoLosers.forEach((playerId) => incrementUserStat(playerId, "gameEmbaralhadoLoss", 1))
-
-      await createPendingTargetForWinner(
-        sender,
-        `📝 @${sender.split("@")[0]}, você venceu o Embaralhado!`,
-        1,
-        null
-      )
 
       storage.clearGameState(from, "embaralhadoActive")
       return true
@@ -1895,13 +1878,6 @@ async function handleGameMessageFlow(ctx) {
         incrementUserStat(result.winner, "gameMemoriaWin", 1)
         const memoriaLosers = (memActive.players || []).filter((playerId) => playerId !== result.winner)
         memoriaLosers.forEach((playerId) => incrementUserStat(playerId, "gameMemoriaLoss", 1))
-
-        await createPendingTargetForWinner(
-          result.winner,
-          `🎯 @${result.winner.split("@")[0]}, você venceu a Memória!`,
-          1,
-          null
-        )
 
         storage.clearGameState(from, "memóriaActive")
         return true
