@@ -533,9 +533,46 @@ async function handleEconomyCommands(ctx) {
   const applyMentionPolicy = (userIds = []) => {
     const unique = [...new Set((userIds || []).filter(Boolean))]
     return unique.filter((userId) => {
+      const isRegistered = typeof registrationService?.isRegistered === "function"
+        ? registrationService.isRegistered(userId)
+        : true
+      if (!isRegistered) return false
       if (typeof economyService.isMentionOptIn !== "function") return true
       return economyService.isMentionOptIn(userId)
     })
+  }
+
+  const hasPublicVisibility = (userId = "") => {
+    const isRegistered = typeof registrationService?.isRegistered === "function"
+      ? registrationService.isRegistered(userId)
+      : true
+    if (!isRegistered) return false
+
+    const mentionOptIn = typeof economyService.isMentionOptIn === "function"
+      ? economyService.isMentionOptIn(userId)
+      : true
+    const profile = typeof economyService.getProfile === "function"
+      ? economyService.getProfile(userId)
+      : null
+    const customLabel = String(profile?.preferences?.publicLabel || "").trim()
+    return Boolean(mentionOptIn || customLabel)
+  }
+
+  const getPublicRankingLabel = (userId = "") => {
+    const profile = typeof economyService.getProfile === "function"
+      ? economyService.getProfile(userId)
+      : null
+    const customLabel = String(profile?.preferences?.publicLabel || "").trim()
+    if (customLabel) return customLabel
+
+    const mentionOptIn = typeof economyService.isMentionOptIn === "function"
+      ? economyService.isMentionOptIn(userId)
+      : true
+    if (mentionOptIn) {
+      return `@${String(userId || "").split("@")[0]}`
+    }
+
+    return ""
   }
 
   if (cmdName === prefix + "mentions") {
@@ -2337,19 +2374,18 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
     const metadata = await sock.groupMetadata(from)
     const members = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
     const ranking = economyService.getGroupRanking(members, 10)
-    if (ranking.length === 0) {
+    const visibleRanking = ranking.filter((entry) => hasPublicVisibility(entry.userId))
+    if (visibleRanking.length === 0) {
       await sock.sendMessage(from, { text: "Sem dados de economia neste grupo ainda." })
       return true
     }
 
-    const lines = ranking.map((entry, index) => {
-      const label = typeof economyService.getStablePublicLabel === "function"
-        ? economyService.getStablePublicLabel(entry.userId)
-        : entry.userId.split("@")[0]
+    const lines = visibleRanking.map((entry, index) => {
+      const label = getPublicRankingLabel(entry.userId)
       return `${index + 1}. ${label} - *${entry.coins}*`
     })
     const globalPos = economyService.getUserGlobalPosition(sender)
-    const mentions = applyMentionPolicy(ranking.map((entry) => entry.userId))
+    const mentions = applyMentionPolicy(visibleRanking.map((entry) => entry.userId))
     await sock.sendMessage(from, {
       text:
         `🏦 Ranking de ${CURRENCY_LABEL} (grupo)\n` +
@@ -2366,15 +2402,14 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
     const ranking = typeof economyService.getGroupXpRanking === "function"
       ? economyService.getGroupXpRanking(members, 10)
       : []
-    if (ranking.length === 0) {
+    const visibleRanking = ranking.filter((entry) => hasPublicVisibility(entry.userId))
+    if (visibleRanking.length === 0) {
       await sock.sendMessage(from, { text: "Sem dados de XP neste grupo ainda." })
       return true
     }
 
-    const lines = ranking.map((entry, index) => {
-      const label = typeof economyService.getStablePublicLabel === "function"
-        ? economyService.getStablePublicLabel(entry.userId)
-        : entry.userId.split("@")[0]
+    const lines = visibleRanking.map((entry, index) => {
+      const label = getPublicRankingLabel(entry.userId)
       const level = Math.max(1, Math.floor(Number(entry?.level) || 1))
       const xpNow = Math.max(0, Math.floor(Number(entry?.xp) || 0))
       const xpToNext = Math.max(1, Math.floor(Number(entry?.xpToNextLevel) || 1))
@@ -2383,7 +2418,7 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
     const globalPos = typeof economyService.getUserGlobalXpPosition === "function"
       ? economyService.getUserGlobalXpPosition(sender)
       : null
-    const mentions = applyMentionPolicy(ranking.map((entry) => entry.userId))
+    const mentions = applyMentionPolicy(visibleRanking.map((entry) => entry.userId))
     await sock.sendMessage(from, {
       text:
         `⭐ Ranking de XP (grupo)\n` +

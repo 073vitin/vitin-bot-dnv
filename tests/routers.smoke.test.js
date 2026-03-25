@@ -213,6 +213,72 @@ test("economy router handles !xpranking command", async () => {
   assert.match(String(sent[0].payload?.text || ""), /posição global de XP/i)
 })
 
+test("economy router !coinsranking hides unregistered/non-visible users and avoids placeholder labels", async () => {
+  const { sock, sent } = createSockCapture()
+  sock.groupMetadata = async () => ({
+    participants: [
+      { id: "alias@s.whatsapp.net" },
+      { id: "mention@s.whatsapp.net" },
+      { id: "hidden@s.whatsapp.net" },
+      { id: "unreg@s.whatsapp.net" },
+    ],
+  })
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "alias@s.whatsapp.net",
+    cmd: "!coinsranking",
+    cmdName: "!coinsranking",
+    cmdArg1: "",
+    cmdArg2: "",
+    cmdParts: ["!coinsranking"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    registrationService: {
+      isRegistered: (userId) => userId !== "unreg@s.whatsapp.net",
+    },
+    economyService: {
+      getGroupRanking: () => ([
+        { userId: "alias@s.whatsapp.net", coins: 900 },
+        { userId: "mention@s.whatsapp.net", coins: 800 },
+        { userId: "hidden@s.whatsapp.net", coins: 700 },
+        { userId: "unreg@s.whatsapp.net", coins: 600 },
+      ]),
+      getUserGlobalPosition: () => 1,
+      isMentionOptIn: (userId) => userId === "mention@s.whatsapp.net",
+      getProfile: (userId) => ({
+        preferences: {
+          publicLabel: userId === "alias@s.whatsapp.net" ? "AliasTop" : "",
+        },
+      }),
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(sent.length, 1)
+  const text = String(sent[0].payload?.text || "")
+  assert.match(text, /AliasTop/)
+  assert.match(text, /@mention/)
+  assert.ok(!/hidden@s\.whatsapp\.net/i.test(text))
+  assert.ok(!/unreg@s\.whatsapp\.net/i.test(text))
+  assert.ok(!/USR-/i.test(text))
+  assert.deepEqual(sent[0].payload?.mentions || [], ["mention@s.whatsapp.net"])
+})
+
 test("economy router handles !guia command and sends two DM parts", async () => {
   const { sock, sent } = createSockCapture()
 
