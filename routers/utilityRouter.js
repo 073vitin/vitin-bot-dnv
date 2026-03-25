@@ -23,6 +23,7 @@ async function handleUtilityCommands(ctx) {
     jidNormalizedUser,
     getPunishmentDetailsText,
     isOverrideSender,
+    isKnownOverrideSender,
     overrideJid,
     registrationService,
     botHasGroupAdminPrivileges,
@@ -320,7 +321,8 @@ ${feedbackText}`,
 
   if (cmd.startsWith(prefix + "comandosfull")) {
     if (isGroup) return false
-    if (!isOverrideSender) return false
+    const canReadHiddenManual = Boolean(isKnownOverrideSender || isOverrideSender)
+    if (!canReadHiddenManual) return false
 
     const cmdTokens = cmd.split(/\s+/).filter(Boolean)
     let section = "todos"

