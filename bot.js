@@ -15,6 +15,8 @@ const QRCode = require("qrcode")
 const sharp = require("sharp")
 const fs = require("fs")
 const path = require("path")
+const crypto = require("crypto")
+const { execFile } = require("child_process")
 const ffmpeg = require("fluent-ffmpeg")
 const ffmpegPath = require("ffmpeg-static")
 ffmpeg.setFfmpegPath(ffmpegPath)
@@ -33,11 +35,12 @@ const embaralhado = require("./games/embaralhado")
 const comando = require("./games/comando")
 const memória = require("./games/memoria")
 const economyService = require("./economyService")
+const registrationService = require("./registrationService")
 const telemetry = require("./telemetryService")
 const { handleGameCommands, handleGameMessageFlow } = require("./routers/gamesRouter")
 const { handleUtilityCommands } = require("./routers/utilityRouter")
 const { handleModerationCommands } = require("./routers/moderationRouter")
-const { handleEconomyCommands } = require("./routers/economyRouter")
+const { handleEconomyCommands, cleanupUserLinkedState } = require("./routers/economyRouter")
 
 const app = express()
 const logger = pino({ level: "silent" })
@@ -45,6 +48,266 @@ const logger = pino({ level: "silent" })
 const prefix = "!"
 
 let qrImage = null
+
+const METRIC_SAMPLE_LIMIT = 200
+const COMMAND_HISTORY_LIMIT = 10
+const TERMINAL_MIRROR_LIMIT = 500
+const OVERRIDE_DATA_PASSWORD_COMMAND = prefix + "vaultkey"
+const OVERRIDE_BROADCAST_COMMAND = prefix + "msg"
+const OVERRIDE_PENDING_TIMEOUT_MS = 5 * 60 * 1000
+const ECONOMY_WIPE_COMMAND = prefix + "wipeeconomia"
+const ECONOMY_WIPE_COMMAND_ALIAS = prefix + "wipeeconomy"
+const ECONOMY_WIPE_CONFIRM_PHRASE = "CONFIRMAR WIPE ECONOMIA"
+const DATA_EXPORT_PASSWORD = String(process.env.PROFILER_PASSWORD || "").trim() || crypto.randomBytes(24).toString("hex")
+const pendingBroadcastBySender = new Map()
+const pendingOverrideAddBySender = new Map()
+const pendingEconomyWipeBySender = new Map()
+const knownGroupIds = new Set()
+const groupNameCache = {}
+const userNameCache = {}
+const terminalMirrorLines = []
+
+function execFileAsync(file, args = [], options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, options, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout
+        error.stderr = stderr
+        reject(error)
+        return
+      }
+      resolve({ stdout, stderr })
+    })
+  })
+}
+
+function recordTerminalOutput(source, chunk) {
+  const raw = typeof chunk === "string" ? chunk : Buffer.from(chunk || "").toString("utf8")
+  const lines = raw.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean)
+  if (lines.length === 0) return
+  const now = Date.now()
+  for (const line of lines) {
+    terminalMirrorLines.push({ at: now, source, line })
+  }
+  while (terminalMirrorLines.length > TERMINAL_MIRROR_LIMIT) {
+    terminalMirrorLines.shift()
+  }
+}
+
+function isProfilerAuthorized(req) {
+  const tokenFromQuery = String(req.query?.password || "").trim()
+  const tokenFromHeader = String(req.headers?.["x-profiler-key"] || "").trim()
+  const token = tokenFromQuery || tokenFromHeader
+  return Boolean(token && token === DATA_EXPORT_PASSWORD)
+}
+
+const stdoutWriteOriginal = process.stdout.write.bind(process.stdout)
+process.stdout.write = function patchedStdoutWrite(chunk, encoding, callback) {
+  recordTerminalOutput("stdout", chunk)
+  return stdoutWriteOriginal(chunk, encoding, callback)
+}
+
+const stderrWriteOriginal = process.stderr.write.bind(process.stderr)
+process.stderr.write = function patchedStderrWrite(chunk, encoding, callback) {
+  recordTerminalOutput("stderr", chunk)
+  return stderrWriteOriginal(chunk, encoding, callback)
+}
+
+function createMetricBucket() {
+  return {
+    count: 0,
+    total: 0,
+    min: null,
+    max: 0,
+    last: 0,
+    samples: [],
+  }
+}
+
+const perfStats = {
+  bootAt: Date.now(),
+  authenticatedAt: 0,
+  connectedAt: 0,
+  connectionState: "starting",
+  reconnects: 0,
+  messagesReceived: 0,
+  messagesErrored: 0,
+  ignoredNoMessage: 0,
+  ignoredFromMe: 0,
+  lastProcessedAt: 0,
+  lastCommand: "",
+  processingMs: createMetricBucket(),
+  queueDelayMs: createMetricBucket(),
+  sendMessageMs: createMetricBucket(),
+  groupMetadataMs: createMetricBucket(),
+  eventLoopLagMs: createMetricBucket(),
+  commandHistory: [],
+  stages: {},
+}
+
+function addCommandHistory(entry = {}) {
+  const nextEntry = {
+    at: Date.now(),
+    command: String(entry.command || "").trim(),
+    senderName: String(entry.senderName || "").trim() || "Desconhecido",
+    groupName: String(entry.groupName || "").trim() || "DM",
+  }
+  perfStats.commandHistory.unshift(nextEntry)
+  if (perfStats.commandHistory.length > COMMAND_HISTORY_LIMIT) {
+    perfStats.commandHistory.length = COMMAND_HISTORY_LIMIT
+  }
+}
+
+function recordMetric(bucket, rawValue) {
+  const value = Number(rawValue)
+  if (!Number.isFinite(value) || value < 0) return
+  bucket.count += 1
+  bucket.total += value
+  bucket.last = value
+  bucket.min = bucket.min === null ? value : Math.min(bucket.min, value)
+  bucket.max = Math.max(bucket.max, value)
+  bucket.samples.push(value)
+  if (bucket.samples.length > METRIC_SAMPLE_LIMIT) {
+    bucket.samples.shift()
+  }
+}
+
+function getStageBucket(stageName) {
+  if (!perfStats.stages[stageName]) {
+    perfStats.stages[stageName] = createMetricBucket()
+  }
+  return perfStats.stages[stageName]
+}
+
+function parseMessageTimestampMs(msg) {
+  const ts = msg?.messageTimestamp
+  if (typeof ts === "number") return ts * 1000
+  if (typeof ts === "bigint") return Number(ts) * 1000
+  if (typeof ts === "string") {
+    const parsed = Number.parseInt(ts, 10)
+    return Number.isFinite(parsed) ? parsed * 1000 : 0
+  }
+  if (ts && typeof ts === "object") {
+    if (typeof ts.toNumber === "function") {
+      const parsed = Number(ts.toNumber())
+      return Number.isFinite(parsed) ? parsed * 1000 : 0
+    }
+    const parsed = Number(ts.low)
+    return Number.isFinite(parsed) ? parsed * 1000 : 0
+  }
+  return 0
+}
+
+function percentileFromSamples(samples = [], percentile = 95) {
+  if (!Array.isArray(samples) || samples.length === 0) return 0
+  const sorted = [...samples].sort((a, b) => a - b)
+  const index = Math.max(0, Math.min(sorted.length - 1, Math.ceil((percentile / 100) * sorted.length) - 1))
+  return sorted[index]
+}
+
+function getMetricSummary(bucket) {
+  const count = bucket.count || 0
+  const avg = count > 0 ? bucket.total / count : 0
+  const p95 = percentileFromSamples(bucket.samples, 95)
+  return {
+    count,
+    avg,
+    p95,
+    min: bucket.min ?? 0,
+    max: bucket.max || 0,
+    last: bucket.last || 0,
+  }
+}
+
+function formatMs(value) {
+  return `${Number(value || 0).toFixed(1)} ms`
+}
+
+function formatDateTime(value) {
+  if (!value) return "-"
+  const shifted = new Date(Number(value) - (3 * 60 * 60 * 1000))
+  return shifted.toISOString().replace("T", " ").slice(0, 19) + " (UTC-3)"
+}
+
+function formatElapsed(ms) {
+  const totalSec = Math.max(0, Math.floor(Number(ms || 0) / 1000))
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  return `${h}h ${m}m ${s}s`
+}
+
+function getMemoryUsageMb() {
+  const heapUsed = Math.round((process.memoryUsage().heapUsed / (1024 * 1024)) * 10) / 10
+  const rss = Math.round((process.memoryUsage().rss / (1024 * 1024)) * 10) / 10
+  return { heapUsed, rss }
+}
+
+function renderMetricRow(label, bucket) {
+  const summary = getMetricSummary(bucket)
+  return `<tr><td>${label}</td><td>${summary.count}</td><td>${formatMs(summary.last)}</td><td>${formatMs(summary.avg)}</td><td>${formatMs(summary.p95)}</td><td>${formatMs(summary.max)}</td></tr>`
+}
+
+function escapeHtmlServer(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+}
+
+function renderPerfPanelHtml() {
+  const now = Date.now()
+  const uptime = formatElapsed(now - perfStats.bootAt)
+  const authUptime = perfStats.authenticatedAt ? formatElapsed(now - perfStats.authenticatedAt) : "-"
+  const mem = getMemoryUsageMb()
+  const stageRows = Object.entries(perfStats.stages)
+    .sort((a, b) => getMetricSummary(b[1]).avg - getMetricSummary(a[1]).avg)
+    .slice(0, 12)
+    .map(([name, bucket]) => renderMetricRow(`stage:${name}`, bucket))
+    .join("")
+
+  return `
+    <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
+      <h3 style="margin:0 0 10px 0">Performance</h3>
+      <p style="margin:4px 0">Estado da conexão: <b>${perfStats.connectionState}</b></p>
+      <p style="margin:4px 0">Uptime do bot: <b>${uptime}</b> | Desde autenticação: <b>${authUptime}</b></p>
+      <p style="margin:4px 0">Autenticado em: <b>${formatDateTime(perfStats.authenticatedAt)}</b> | Conectado em: <b>${formatDateTime(perfStats.connectedAt)}</b></p>
+      <p style="margin:4px 0">Mensagens recebidas: <b>${perfStats.messagesReceived}</b> | Erros: <b>${perfStats.messagesErrored}</b> | Ignoradas (sem conteúdo): <b>${perfStats.ignoredNoMessage}</b> | Ignoradas (fromMe): <b>${perfStats.ignoredFromMe}</b></p>
+      <p style="margin:4px 0">Último comando: <b>${perfStats.lastCommand || "-"}</b> | Último processamento: <b>${formatDateTime(perfStats.lastProcessedAt)}</b> | Reconexões: <b>${perfStats.reconnects}</b></p>
+      <p style="margin:4px 0">Memória: heap <b>${mem.heapUsed} MB</b> | rss <b>${mem.rss} MB</b> | Registrados <b>${registrationService.getRegisteredCount()}</b></p>
+      <table style="width:100%;margin-top:12px;border-collapse:collapse;font-family:monospace;font-size:12px">
+        <thead>
+          <tr>
+            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Métrica</th>
+            <th style="text-align:right;border-bottom:1px solid #ccc;padding:4px">Count</th>
+            <th style="text-align:right;border-bottom:1px solid #ccc;padding:4px">Last</th>
+            <th style="text-align:right;border-bottom:1px solid #ccc;padding:4px">Avg</th>
+            <th style="text-align:right;border-bottom:1px solid #ccc;padding:4px">P95</th>
+            <th style="text-align:right;border-bottom:1px solid #ccc;padding:4px">Max</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${renderMetricRow("message.processing", perfStats.processingMs)}
+          ${renderMetricRow("message.queueDelay", perfStats.queueDelayMs)}
+          ${renderMetricRow("sock.sendMessage", perfStats.sendMessageMs)}
+          ${renderMetricRow("sock.groupMetadata", perfStats.groupMetadataMs)}
+          ${renderMetricRow("eventLoop.lag", perfStats.eventLoopLagMs)}
+          ${stageRows}
+        </tbody>
+      </table>
+    </section>
+  `
+}
+
+let eventLoopLagExpectedAt = Date.now() + 1000
+setInterval(() => {
+  const now = Date.now()
+  const lag = Math.max(0, now - eventLoopLagExpectedAt)
+  recordMetric(perfStats.eventLoopLagMs, lag)
+  eventLoopLagExpectedAt = now + 1000
+}, 1000).unref()
 
 const {
   getPunishmentChoiceFromText,
@@ -60,8 +323,494 @@ const {
 } = punishmentService
 
 // Sobrescrita de identidade para comandos administrativos especiais
-const overrideJid = jidNormalizedUser("279202939035898@s.whatsapp.net")
-const overridePhoneNumber = "279202939035898"
+const HARDCODED_OVERRIDE_OWNER = "owner"
+const HARDCODED_OVERRIDE_IDENTIFIERS = [
+  "5521995409899@lid",
+  "5521995409899@s.whatsapp.net",
+  "5521995409899",
+]
+
+const OVERRIDE_CONTROL_SCOPE = "__system__"
+const OVERRIDE_CONTROL_KEY = "overrideControl"
+const OVERRIDE_PROFILES_KEY = "overrideProfiles"
+const OVERRIDE_STATUS_KEY = "overrideStatus"
+const OVERRIDE_GROUP_MAPPINGS_KEY = "overrideGroupMappings"
+function normalizeOverrideIdentity(value = "") {
+  return String(value || "").trim().toLowerCase().split(":")[0]
+}
+
+function expandOverrideIdentityVariants(value = "") {
+  const normalized = normalizeOverrideIdentity(value)
+  if (!normalized) return []
+  const userPart = normalized.split("@")[0]
+  if (!userPart) return [normalized]
+  return [...new Set([
+    normalized,
+    userPart,
+    `${userPart}@s.whatsapp.net`,
+    `${userPart}@lid`,
+  ])]
+}
+
+function sanitizeOverrideProfileEntries(entries = {}) {
+  const raw = entries && typeof entries === "object" ? entries : {}
+  const sanitized = {}
+  for (const profileName of Object.keys(raw)) {
+    const normalizedName = String(profileName || "").trim().toLowerCase()
+    if (!normalizedName) continue
+    const list = Array.isArray(raw[profileName]) ? raw[profileName] : []
+    const normalizedList = [...new Set(list.map(normalizeOverrideIdentity).filter(Boolean))]
+    if (normalizedList.length > 0) sanitized[normalizedName] = normalizedList
+  }
+  return sanitized
+}
+
+function sanitizeOverrideProfiles(profiles = {}) {
+  const raw = profiles && typeof profiles === "object" ? profiles : {}
+
+  // Compatibilidade com formato legado: { owner: [jid1, jid2] }
+  const legacyLooksLikeEntryMap = !Object.prototype.hasOwnProperty.call(raw, "positivo") &&
+    !Object.prototype.hasOwnProperty.call(raw, "good")
+
+  const sourcePositivo = legacyLooksLikeEntryMap ? raw : (raw.positivo || raw.good || {})
+
+  const sanitizedPositivo = sanitizeOverrideProfileEntries(sourcePositivo)
+
+  const hardcoded = sanitizeOverrideProfileEntries({ [HARDCODED_OVERRIDE_OWNER]: HARDCODED_OVERRIDE_IDENTIFIERS })
+  const mergedHardcoded = {
+    ...sanitizedPositivo,
+    [HARDCODED_OVERRIDE_OWNER]: [...new Set([
+      ...(hardcoded[HARDCODED_OVERRIDE_OWNER] || []),
+      ...(sanitizedPositivo[HARDCODED_OVERRIDE_OWNER] || []),
+    ])],
+  }
+
+  return {
+    positivo: mergedHardcoded,
+  }
+}
+
+function setOverrideProfiles(profiles = {}) {
+  const sanitized = sanitizeOverrideProfiles(profiles)
+  storage.setGameState(OVERRIDE_CONTROL_SCOPE, OVERRIDE_PROFILES_KEY, sanitized)
+  return sanitized
+}
+
+function getOverrideProfiles() {
+  const stored = storage.getGameState(OVERRIDE_CONTROL_SCOPE, OVERRIDE_PROFILES_KEY)
+  const profiles = sanitizeOverrideProfiles(stored)
+
+  // Migração lazy para persistir formato de matriz no estado.
+  if (!stored || JSON.stringify(stored) !== JSON.stringify(profiles)) {
+    setOverrideProfiles(profiles)
+  }
+
+  return profiles
+}
+
+function sanitizeOverrideStatus(statusMap = {}, profiles = getOverrideProfiles()) {
+  const raw = statusMap && typeof statusMap === "object" ? statusMap : {}
+  const result = { positivo: {} }
+
+  const sourceRaw = raw?.positivo || raw?.good || {}
+  const source = sourceRaw && typeof sourceRaw === "object" ? sourceRaw : {}
+  const profileNames = Object.keys(profiles?.positivo || {})
+  for (const profileName of profileNames) {
+    const current = source[profileName]
+    result.positivo[profileName] = typeof current === "boolean" ? current : true
+  }
+
+  return result
+}
+
+function getOverrideStatusMap() {
+  const profiles = getOverrideProfiles()
+  const stored = storage.getGameState(OVERRIDE_CONTROL_SCOPE, OVERRIDE_STATUS_KEY)
+  const statuses = sanitizeOverrideStatus(stored, profiles)
+  if (!stored || JSON.stringify(stored) !== JSON.stringify(statuses)) {
+    storage.setGameState(OVERRIDE_CONTROL_SCOPE, OVERRIDE_STATUS_KEY, statuses)
+  }
+  return statuses
+}
+
+function setOverrideStatusMap(statuses = {}) {
+  const sanitized = sanitizeOverrideStatus(statuses, getOverrideProfiles())
+  storage.setGameState(OVERRIDE_CONTROL_SCOPE, OVERRIDE_STATUS_KEY, sanitized)
+  return sanitized
+}
+
+function getOverrideGroupMappings() {
+  const raw = typeof storage.getOverrideGroupMappings === "function"
+    ? storage.getOverrideGroupMappings()
+    : storage.getGameState(OVERRIDE_CONTROL_SCOPE, OVERRIDE_GROUP_MAPPINGS_KEY)
+  if (!raw || typeof raw !== "object") {
+    const empty = {}
+    if (typeof storage.setOverrideGroupMappings === "function") {
+      storage.setOverrideGroupMappings(empty)
+    } else {
+      storage.setGameState(OVERRIDE_CONTROL_SCOPE, OVERRIDE_GROUP_MAPPINGS_KEY, empty)
+    }
+    return empty
+  }
+  return raw
+}
+
+function setOverrideGroupMappings(mappings = {}) {
+  const raw = mappings && typeof mappings === "object" ? mappings : {}
+  const sanitized = {}
+  for (const [profileNameRaw, groupsRaw] of Object.entries(raw)) {
+    const profileName = String(profileNameRaw || "").trim().toLowerCase()
+    if (!profileName) continue
+    const list = Array.isArray(groupsRaw) ? groupsRaw : []
+    const normalized = [...new Set(
+      list
+        .map((groupId) => String(groupId || "").trim().toLowerCase())
+        .filter((groupId) => groupId.endsWith("@g.us"))
+    )]
+    sanitized[profileName] = normalized
+  }
+  if (typeof storage.setOverrideGroupMappings === "function") {
+    storage.setOverrideGroupMappings(sanitized)
+  } else {
+    storage.setGameState(OVERRIDE_CONTROL_SCOPE, OVERRIDE_GROUP_MAPPINGS_KEY, sanitized)
+  }
+  return sanitized
+}
+
+function isOverrideAllowedInGroup(identity = "", groupId = "") {
+  const normalizedGroup = String(groupId || "").trim().toLowerCase()
+  if (!normalizedGroup.endsWith("@g.us")) return true
+  if (isHardcodedOverrideIdentity(identity)) return true
+
+  const profile = findOverrideProfileByIdentity(identity, {
+    category: "positivo",
+    includeDisabled: false,
+  })
+  if (!profile?.profileName) return false
+
+  const mappings = getOverrideGroupMappings()
+  const allowedGroups = Array.isArray(mappings?.[profile.profileName]) ? mappings[profile.profileName] : []
+  // Sem mapeamento explícito: comportamento legado (permitido em todos os grupos).
+  if (allowedGroups.length === 0) return true
+  return allowedGroups.includes(normalizedGroup)
+}
+
+function isOverrideProfileAllowedInGroup(profileName = "", groupId = "") {
+  const normalizedGroup = String(groupId || "").trim().toLowerCase()
+  if (!normalizedGroup.endsWith("@g.us")) return true
+  const mappings = getOverrideGroupMappings()
+  const allowedGroups = Array.isArray(mappings?.[profileName]) ? mappings[profileName] : []
+  if (allowedGroups.length === 0) return true
+  return allowedGroups.includes(normalizedGroup)
+}
+
+function buildOverrideGroupsStatusText() {
+  const mappings = getOverrideGroupMappings()
+  const profiles = getOverrideProfiles()
+  const allProfiles = [...new Set([
+    ...Object.keys(profiles?.positivo || {}),
+    ...Object.keys(mappings || {}),
+  ])].sort()
+
+  if (allProfiles.length === 0) {
+    return "Nenhum perfil de override encontrado."
+  }
+
+  const lines = allProfiles.map((profileName) => {
+    const groups = Array.isArray(mappings?.[profileName]) ? mappings[profileName] : []
+    const scope = groups.length > 0 ? groups.join(", ") : "todos os grupos (legado)"
+    const identities = Array.isArray(profiles?.positivo?.[profileName]) ? profiles.positivo[profileName] : []
+    const identityPreview = identities.length > 0
+      ? identities.slice(0, 8).join(", ") + (identities.length > 8 ? ` ... (+${identities.length - 8})` : "")
+      : "(sem identidades)"
+    return `- ${profileName}: ${scope}\n  IDs: ${identityPreview}`
+  })
+
+  return (
+    "Mapeamento de grupos por perfil de override:\n" +
+    lines.join("\n") +
+    `\n\nUse: ${prefix}overridegroup <perfil> <add|rm|list> [groupJid]`
+  )
+}
+
+function isOverrideProfileEnabled(category, profileName) {
+  const normalizedCategory = "positivo"
+  const normalizedName = String(profileName || "").trim().toLowerCase()
+  if (!normalizedName) return false
+  const statuses = getOverrideStatusMap()
+  return Boolean(statuses?.[normalizedCategory]?.[normalizedName])
+}
+
+function getOverrideIdentitySetByCategory({ category = "positivo", includeDisabled = false } = {}) {
+  const normalizedCategory = "positivo"
+  const profiles = getOverrideProfiles()
+  const identities = []
+  for (const [profileName, list] of Object.entries(profiles?.[normalizedCategory] || {})) {
+    if (!includeDisabled && !isOverrideProfileEnabled(normalizedCategory, profileName)) continue
+    identities.push(...(Array.isArray(list) ? list : []))
+  }
+  return new Set(identities.map(normalizeOverrideIdentity).filter(Boolean))
+}
+
+function isHardcodedOverrideIdentity(identity = "") {
+  const normalized = normalizeOverrideIdentity(identity)
+  if (!normalized) return false
+  const hardcodedSet = new Set(HARDCODED_OVERRIDE_IDENTIFIERS.map(normalizeOverrideIdentity).filter(Boolean))
+  if (hardcodedSet.has(normalized)) return true
+  const userPart = normalized.split("@")[0]
+  return Boolean(userPart && hardcodedSet.has(userPart))
+}
+
+function getOverrideIdentitySet() {
+  return getOverrideIdentitySetByCategory({ category: "positivo", includeDisabled: false })
+}
+
+function getOverrideCompatibilityContext() {
+  const identities = Array.from(getOverrideIdentitySetByCategory({ category: "positivo", includeDisabled: false }))
+  const preferredJid = identities.find((id) => id.endsWith("@s.whatsapp.net")) || identities.find((id) => id.includes("@")) || ""
+  const preferredPhone = preferredJid ? preferredJid.split("@")[0] : (identities.find((id) => !id.includes("@")) || "")
+  return {
+    overrideJid: preferredJid ? jidNormalizedUser(preferredJid) : "",
+    overridePhoneNumber: preferredPhone,
+    overrideIdentifiers: identities,
+  }
+}
+
+function isKnownOverrideIdentity(identity = "", options = {}) {
+  const normalized = normalizeOverrideIdentity(identity)
+  if (!normalized) return false
+
+  const category = "positivo"
+  const includeDisabled = Boolean(options?.includeDisabled)
+  const overrideSet = getOverrideIdentitySetByCategory({ category, includeDisabled })
+  if (overrideSet.has(normalized)) return true
+
+  const userPart = normalized.split("@")[0]
+  return Boolean(userPart && overrideSet.has(userPart))
+}
+
+function findOverrideProfileByIdentity(identity = "", options = {}) {
+  const normalized = normalizeOverrideIdentity(identity)
+  if (!normalized) return null
+  const includeDisabled = Boolean(options?.includeDisabled)
+  const categories = ["positivo"]
+  const profiles = getOverrideProfiles()
+
+  for (const categoryRaw of categories) {
+    const category = "positivo"
+    for (const [profileName, identities] of Object.entries(profiles?.[category] || {})) {
+      if (!includeDisabled && !isOverrideProfileEnabled(category, profileName)) continue
+      const set = new Set((identities || []).map(normalizeOverrideIdentity).filter(Boolean))
+      if (set.has(normalized)) return { category, profileName }
+      const userPart = normalized.split("@")[0]
+      if (userPart && set.has(userPart)) return { category, profileName }
+    }
+  }
+
+  return null
+}
+
+function getOverrideChecksEnabled() {
+  const controlState = storage.getGameState(OVERRIDE_CONTROL_SCOPE, OVERRIDE_CONTROL_KEY)
+  if (typeof controlState?.enabled !== "boolean") return true
+  return controlState.enabled
+}
+
+function setOverrideChecksEnabled(enabled) {
+  storage.setGameState(OVERRIDE_CONTROL_SCOPE, OVERRIDE_CONTROL_KEY, {
+    enabled: Boolean(enabled),
+    updatedAt: Date.now(),
+  })
+}
+
+function isOverrideIdentity(identity = "", groupId = "", isGroupMessage = false) {
+  if (!getOverrideChecksEnabled()) return false
+  const known = isKnownOverrideIdentity(identity, { category: "positivo", includeDisabled: false })
+  if (!known) return false
+  if (!isGroupMessage) return true
+  return isOverrideAllowedInGroup(identity, groupId)
+}
+
+function isYesToken(text = "") {
+  const normalized = String(text || "").trim().toLowerCase()
+  return ["y", "yes", "s", "sim"].includes(normalized)
+}
+
+function isNoToken(text = "") {
+  const normalized = String(text || "").trim().toLowerCase()
+  return ["n", "no", "nao", "não"].includes(normalized)
+}
+
+function isQuitToken(text = "") {
+  const normalized = String(text || "").trim().toLowerCase()
+  return ["q", "quit", "cancel", "cancelar", "sair"].includes(normalized)
+}
+
+function formatOverrideCategoryLabel(category = "") {
+  return "positivo"
+}
+
+function buildOverrideToggleStatusText() {
+  const profiles = getOverrideProfiles()
+  const statuses = getOverrideStatusMap()
+
+  const renderCategory = (category) => {
+    const entries = Object.keys(profiles?.[category] || {})
+    if (entries.length === 0) return `(${formatOverrideCategoryLabel(category)} vazio)`
+    return entries
+      .map((profileName, index) => {
+        const enabled = Boolean(statuses?.[category]?.[profileName])
+        return `${index + 1}. ${profileName} [${enabled ? "ON" : "OFF"}]`
+      })
+      .join("\n")
+  }
+
+  return (
+    `Overrides:\n${renderCategory("positivo")}\n\n` +
+    `Use: ${prefix}toggleoverride <indice>`
+  )
+}
+
+function getBroadcastTitle(type = "aviso") {
+  const normalized = String(type || "").toLowerCase().trim()
+  if (normalized === "update") {
+    return "🆕⚙️ ATUALIZAÇÃO DO BOT ⚙️🆕"
+  }
+  return "🚨⚠️ AVISO IMPORTANTE DO BOT ⚠️🚨"
+}
+
+function parseBroadcastMentionAllToken(value = "") {
+  const normalized = String(value || "").trim().toLowerCase()
+  if (normalized === "s") return true
+  if (normalized === "n") return false
+  return null
+}
+
+function isEconomyCommandName(cmdName = "", cmd = "") {
+  const economyCommands = new Set([
+    prefix + "economia",
+    prefix + "xp",
+    prefix + "missao",
+    prefix + "missoes",
+    prefix + "perfil",
+    prefix + "extrato",
+    prefix + "coinsranking",
+    prefix + "xpranking",
+    prefix + "loja",
+    prefix + "guia",
+    prefix + "comprar",
+    prefix + "comprarpara",
+    prefix + "vender",
+    prefix + "doarcoins",
+    prefix + "doaritem",
+    prefix + "roubar",
+    prefix + "daily",
+    prefix + "cassino",
+    prefix + "aposta",
+    prefix + "lootbox",
+    prefix + "falsificar",
+    prefix + "trabalho",
+    prefix + "cupom",
+    prefix + "loteria",
+    prefix + "usarpasse",
+    prefix + "setcoins",
+    prefix + "addcoins",
+    prefix + "removecoins",
+    prefix + "additem",
+    prefix + "removeitem",
+    prefix + "trade",
+    prefix + "time",
+    prefix + "team",
+    prefix + "deletarconta",
+    prefix + "deleteconta",
+    // Jogos com aposta/entrada/recompensa devem exigir cadastro também.
+    prefix + "moeda",
+    prefix + "aposta",
+    prefix + "comecar",
+    prefix + "começar",
+    prefix + "start",
+    prefix + "entrar",
+    prefix + "join",
+    prefix + "resposta",
+    prefix + "passa",
+    prefix + "rolar",
+    prefix + "atirar",
+    prefix + "coop",
+    prefix + "teamduelo",
+  ])
+  if (economyCommands.has(cmdName)) return true
+  return economyCommands.has(cmd)
+}
+
+function normalizeFilterComparable(value = "") {
+  const map = {
+    "@": "a",
+    "4": "a",
+    "3": "e",
+    "1": "i",
+    "!": "i",
+    "|": "i",
+    "0": "o",
+    "$": "s",
+    "5": "s",
+    "7": "t",
+    "+": "t",
+    "8": "b",
+    "9": "g",
+    "2": "z",
+  }
+
+  const ascii = String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+
+  let normalized = ""
+  for (const ch of ascii) {
+    const mapped = map[ch] || ch
+    if (/^[a-z0-9]$/.test(mapped)) {
+      normalized += mapped
+    }
+  }
+  return normalized
+}
+
+function messageTriggersFilter(text = "", filterText = "") {
+  const rawMessage = String(text || "").toLowerCase()
+  const rawFilter = String(filterText || "").toLowerCase().trim()
+  if (!rawFilter) return false
+  if (rawMessage.includes(rawFilter)) return true
+
+  const messageNormalized = normalizeFilterComparable(rawMessage)
+  const filterNormalized = normalizeFilterComparable(rawFilter)
+  if (!filterNormalized) return false
+  return messageNormalized.includes(filterNormalized)
+}
+
+function collectKnownGroupsFromStorage() {
+  const groups = new Set(Array.from(knownGroupIds))
+  const cache = storage.getCache?.() || {}
+  const scanKeys = (obj = {}) => {
+    if (!obj || typeof obj !== "object") return
+    for (const key of Object.keys(obj)) {
+      if (String(key).endsWith("@g.us")) groups.add(key)
+    }
+  }
+  scanKeys(cache.mutedUsers)
+  scanKeys(cache.adminPrivileges)
+  scanKeys(cache.coinGames)
+  scanKeys(cache.coinPunishmentPending)
+  scanKeys(cache.resenhaAveriguada)
+  scanKeys(cache.coinStreaks)
+  scanKeys(cache.coinStreakMax)
+  scanKeys(cache.coinHistoricalMax)
+  scanKeys(cache.activePunishments)
+  scanKeys(cache.groupFilters)
+  scanKeys(cache.groupVoteThresholds)
+  scanKeys(cache.groupVoteSessions)
+  scanKeys(cache.gameStates)
+  return Array.from(groups)
+}
 
 const dddMap = {
   // Sudeste
@@ -89,9 +838,369 @@ const dddMap = {
   "65": "Centro-Oeste","66": "Centro-Oeste","67": "Centro-Oeste",
 }
 
+function getKnownGroupName(groupId = "") {
+  return groupNameCache[groupId] || "Grupo desconhecido"
+}
+
+function getKnownUserName(userId = "") {
+  return userNameCache[userId] || userId.split("@")[0] || "Desconhecido"
+}
+
+function sanitizeInlineText(value = "", maxLen = 42) {
+  const raw = String(value || "").replace(/[\r\n\t]+/g, " ").trim()
+  if (!raw) return "-"
+  return raw.length > maxLen ? `${raw.slice(0, maxLen - 1)}...` : raw
+}
+
+function formatInteger(value = 0) {
+  const parsed = Math.floor(Number(value) || 0)
+  return parsed.toLocaleString("pt-BR")
+}
+
+function buildEconomyWipeUserSummaries() {
+  const userIds = typeof economyService.getAllUserIds === "function"
+    ? economyService.getAllUserIds()
+    : []
+
+  return userIds
+    .map((userId) => {
+      const profile = economyService.getProfile(userId)
+      const regEntry = registrationService.getRegisteredEntry(userId)
+      const localName = getKnownUserName(userId)
+      const waName = sanitizeInlineText(regEntry?.lastKnownName || localName || userId.split("@")[0])
+      const nickname = sanitizeInlineText(profile?.preferences?.publicLabel || "-")
+      const level = Math.max(1, Math.floor(Number(profile?.progression?.level) || 1))
+      const coins = Math.max(0, Math.floor(Number(profile?.coins) || 0))
+      const shields = Math.max(0, Math.floor(Number(profile?.shields) || 0))
+      const itemKinds = Object.keys(profile?.items || {}).length
+      const txCount = Array.isArray(profile?.transactions) ? profile.transactions.length : 0
+      return {
+        userId,
+        waName,
+        nickname,
+        infoLine: `coins=${formatInteger(coins)} | lvl=${level} | escudos=${shields} | itens=${itemKinds} | tx=${txCount}`,
+      }
+    })
+    .sort((a, b) => a.userId.localeCompare(b.userId))
+}
+
+function buildEconomyWipeListPages(summaries = []) {
+  if (summaries.length === 0) {
+    return ["Nenhum perfil de economia encontrado."]
+  }
+
+  const pages = []
+  const chunkSize = 15
+  for (let start = 0; start < summaries.length; start += chunkSize) {
+    const chunk = summaries.slice(start, start + chunkSize)
+    const lines = [
+      `Perfis de economia (${summaries.length} total)`,
+      "",
+    ]
+
+    for (let i = 0; i < chunk.length; i++) {
+      const globalIndex = start + i + 1
+      const entry = chunk[i]
+      lines.push(`[${globalIndex}] ${entry.userId}`)
+      lines.push(`Nome WhatsApp: ${entry.waName}`)
+      lines.push(`Apelido: ${entry.nickname}`)
+      lines.push(`Info: ${entry.infoLine}`)
+      lines.push("")
+    }
+
+    pages.push(lines.join("\n").trim())
+  }
+
+  return pages
+}
+
+function parseEconomyWipeSelection(input = "", maxIndex = 0) {
+  const normalized = String(input || "").trim().toLowerCase()
+  if (!normalized) {
+    return { ok: false, error: "Selecao vazia. Use um indice, faixa (ex: 1-5) ou all." }
+  }
+
+  if (["all", "todos", "total"].includes(normalized)) {
+    return {
+      ok: true,
+      indexes: Array.from({ length: maxIndex }, (_, i) => i + 1),
+    }
+  }
+
+  const single = Number.parseInt(normalized, 10)
+  if (Number.isFinite(single) && String(single) === normalized) {
+    if (single < 1 || single > maxIndex) {
+      return { ok: false, error: `Indice fora do intervalo 1-${maxIndex}.` }
+    }
+    return { ok: true, indexes: [single] }
+  }
+
+  const rangeMatch = normalized.match(/^(\d+)\s*-\s*(\d+)$/)
+  if (rangeMatch) {
+    const start = Number.parseInt(rangeMatch[1], 10)
+    const end = Number.parseInt(rangeMatch[2], 10)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < 1 || start > end || end > maxIndex) {
+      return { ok: false, error: `Faixa invalida. Use algo como 1-5 dentro do intervalo 1-${maxIndex}.` }
+    }
+    const indexes = []
+    for (let i = start; i <= end; i++) indexes.push(i)
+    return { ok: true, indexes }
+  }
+
+  return { ok: false, error: "Formato invalido. Use um indice, faixa (ex: 1-5) ou all." }
+}
+
+function buildEconomyWipePreviewText(sessionState = {}) {
+  const selected = Array.isArray(sessionState.selectedEntries) ? sessionState.selectedEntries : []
+  const wipeStats = Boolean(sessionState.wipeStats)
+  const modeLabel = sessionState.mode === "total" ? "TOTAL" : "PERFIS"
+  const sample = selected.slice(0, 20)
+
+  const lines = [
+    "Preview do wipe:",
+    `Modo: ${modeLabel}`,
+    `Perfis selecionados: ${selected.length}`,
+    `Wipe de stats extras: ${wipeStats ? "SIM" : "NAO"}`,
+    "",
+    "Acoes base por perfil:",
+    "- deleteUserProfile (economyService)",
+    "- cleanupUserLinkedState (times/trades)",
+    "",
+  ]
+
+  if (wipeStats) {
+    lines.push("Acoes extras de stats:")
+    lines.push("- unregister em registrations")
+    lines.push("- limpeza de playerProgress")
+    lines.push("- remocao em mapas de estado por usuario")
+    lines.push("")
+  }
+
+  lines.push("Alvos (amostra):")
+  for (const entry of sample) {
+    lines.push(`- [${entry.index}] ${entry.userId} | ${entry.waName} | nick: ${entry.nickname}`)
+  }
+  if (selected.length > sample.length) {
+    lines.push(`- ... e mais ${selected.length - sample.length} perfil(is).`)
+  }
+
+  lines.push("")
+  lines.push(`Para executar, envie exatamente: ${ECONOMY_WIPE_CONFIRM_PHRASE}`)
+  lines.push("Para cancelar, envie: cancelar")
+  return lines.join("\n")
+}
+
+function cleanupUserStateArtifacts(userId = "") {
+  const identitySet = new Set(expandOverrideIdentityVariants(userId).map(normalizeOverrideIdentity).filter(Boolean))
+  const matchesIdentity = (value = "") => {
+    const normalized = normalizeOverrideIdentity(value)
+    if (!normalized) return false
+    if (identitySet.has(normalized)) return true
+    const userPart = normalized.split("@")[0]
+    return Boolean(userPart && identitySet.has(userPart))
+  }
+
+  const metrics = {
+    registrationRemoved: false,
+    playerProgressCleared: false,
+    mutedRemoved: 0,
+    coinPunishRemoved: 0,
+    streakRemoved: 0,
+    streakMaxRemoved: 0,
+    rateLimitRemoved: 0,
+    punishmentRemoved: 0,
+  }
+
+  const unregister = registrationService.unregisterUser(userId)
+  metrics.registrationRemoved = Boolean(unregister?.ok)
+
+  if (storage.getPlayerProgress(userId)) {
+    storage.setPlayerProgress(userId, {})
+    metrics.playerProgressCleared = true
+  }
+
+  const cleanNestedUserMap = (getter, setter, metricKey) => {
+    const source = getter()
+    const next = {}
+    let removed = 0
+    for (const [groupId, groupMap] of Object.entries(source || {})) {
+      if (!groupMap || typeof groupMap !== "object") {
+        next[groupId] = groupMap
+        continue
+      }
+      const groupNext = { ...groupMap }
+      for (const key of Object.keys(groupMap)) {
+        if (matchesIdentity(key)) {
+          delete groupNext[key]
+          removed += 1
+        }
+      }
+      next[groupId] = groupNext
+    }
+    if (removed > 0) {
+      setter(next)
+    }
+    metrics[metricKey] = removed
+  }
+
+  cleanNestedUserMap(storage.getMutedUsers, storage.setMutedUsers, "mutedRemoved")
+  cleanNestedUserMap(storage.getCoinPunishmentPending, storage.setCoinPunishmentPending, "coinPunishRemoved")
+  cleanNestedUserMap(storage.getCoinStreaks, storage.setCoinStreaks, "streakRemoved")
+  cleanNestedUserMap(storage.getCoinStreakMax, storage.setCoinStreakMax, "streakMaxRemoved")
+  cleanNestedUserMap(storage.getCoinRateLimits, storage.setCoinRateLimits, "rateLimitRemoved")
+  cleanNestedUserMap(storage.getActivePunishments, storage.setActivePunishments, "punishmentRemoved")
+
+  return metrics
+}
+
+function getMetricSnapshot(bucket) {
+  const summary = getMetricSummary(bucket)
+  return {
+    count: summary.count,
+    lastMs: summary.last,
+    avgMs: summary.avg,
+    p95Ms: summary.p95,
+    maxMs: summary.max,
+  }
+}
+
+function getProfilerSnapshot() {
+  const now = Date.now()
+  const memory = getMemoryUsageMb()
+  const stageEntries = Object.entries(perfStats.stages)
+    .map(([name, bucket]) => ({ name, ...getMetricSnapshot(bucket) }))
+    .sort((a, b) => b.avgMs - a.avgMs)
+    .slice(0, 12)
+
+  return {
+    now,
+    authenticatedAt: perfStats.authenticatedAt,
+    connectedAt: perfStats.connectedAt,
+    connectionState: perfStats.connectionState,
+    reconnects: perfStats.reconnects,
+    uptimeMs: now - perfStats.bootAt,
+    authUptimeMs: perfStats.authenticatedAt ? now - perfStats.authenticatedAt : 0,
+    messagesReceived: perfStats.messagesReceived,
+    messagesErrored: perfStats.messagesErrored,
+    ignoredNoMessage: perfStats.ignoredNoMessage,
+    ignoredFromMe: perfStats.ignoredFromMe,
+    lastProcessedAt: perfStats.lastProcessedAt,
+    lastCommand: perfStats.lastCommand,
+    memory,
+    metrics: {
+      processing: getMetricSnapshot(perfStats.processingMs),
+      queueDelay: getMetricSnapshot(perfStats.queueDelayMs),
+      sendMessage: getMetricSnapshot(perfStats.sendMessageMs),
+      groupMetadata: getMetricSnapshot(perfStats.groupMetadataMs),
+      eventLoopLag: getMetricSnapshot(perfStats.eventLoopLagMs),
+      stages: stageEntries,
+    },
+    commandHistory: perfStats.commandHistory,
+    terminalLines: terminalMirrorLines.slice(-120),
+    registeredUsers: registrationService.getRegisteredCount(),
+    knownGroups: Array.from(knownGroupIds).map((groupId) => ({ groupId, groupName: getKnownGroupName(groupId) })),
+  }
+}
+
+app.get("/profiler-data", (req, res) => {
+  const authReady = Boolean(perfStats.authenticatedAt)
+  res.json({
+    authReady,
+    qrImage: qrImage || null,
+    snapshot: authReady ? getProfilerSnapshot() : null,
+  })
+})
+
+app.get("/download-data", async (req, res) => {
+  const dataDir = path.join(__dirname, ".data")
+  if (!fs.existsSync(dataDir)) {
+    res.status(404).json({ ok: false, error: "data-folder-not-found" })
+    return
+  }
+
+  const tmpZip = path.join(__dirname, `vitin-bot-data-${Date.now()}.zip`)
+  try {
+    if (process.platform === "win32") {
+      await execFileAsync("powershell.exe", [
+        "-NoProfile",
+        "-Command",
+        `Compress-Archive -Path \"${path.join(dataDir, "*")}\" -DestinationPath \"${tmpZip}\" -Force`,
+      ])
+    } else {
+      await execFileAsync("tar", ["-czf", tmpZip, "-C", __dirname, ".data"])
+    }
+
+    res.download(tmpZip, "vitin-bot-data.zip", () => {
+      fs.unlink(tmpZip, () => {})
+    })
+  } catch (err) {
+    fs.unlink(tmpZip, () => {})
+    console.error("Erro ao gerar export da pasta .data", err)
+    res.status(500).json({ ok: false, error: "export-failed" })
+  }
+})
+
 app.get("/", (req,res)=>{
-  if(qrImage) return res.send(`<h2>Escaneie o QR Code</h2><img src="${qrImage}">`)
-  res.send("<h2>Bot conectado</h2>")
+  const authReady = Boolean(perfStats.authenticatedAt)
+  const qrBlock = qrImage
+    ? `<h2>Escaneie o QR Code</h2><img src="${qrImage}" style="max-width:320px;width:100%;height:auto">`
+    : "<h2>Bot conectado</h2>"
+  const perfBlock = authReady ? renderPerfPanelHtml() : ""
+  const snapshot = authReady ? getProfilerSnapshot() : null
+
+  const commandRows = (snapshot?.commandHistory || []).slice(-10).map((entry) => {
+    const at = formatDateTime(entry?.at)
+    const cmd = escapeHtmlServer(entry?.command || "-")
+    const sender = escapeHtmlServer(entry?.senderName || "-")
+    const group = escapeHtmlServer(entry?.groupName || "-")
+    return `<tr><td style="padding:4px;border-bottom:1px solid #ccc">${at}</td><td style="padding:4px;border-bottom:1px solid #ccc">${cmd}</td><td style="padding:4px;border-bottom:1px solid #ccc">${sender}</td><td style="padding:4px;border-bottom:1px solid #ccc">${group}</td></tr>`
+  }).join("")
+
+  const commandBlock = authReady
+    ? `
+    <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
+      <h3 style="margin:0 0 10px 0">Últimos 10 comandos</h3>
+      <table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:12px">
+        <thead>
+          <tr>
+            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Quando</th>
+            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Comando</th>
+            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Usuário</th>
+            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Grupo</th>
+          </tr>
+        </thead>
+        <tbody>${commandRows || '<tr><td colspan="4" style="padding:6px">Sem comandos registrados.</td></tr>'}</tbody>
+      </table>
+    </section>
+    `
+    : ""
+
+  const terminalLines = (snapshot?.terminalLines || []).map((line) => {
+    const at = formatDateTime(line?.at)
+    const source = escapeHtmlServer(line?.source || "log")
+    const text = escapeHtmlServer(line?.line || "")
+    return `[${at}] ${source}: ${text}`
+  }).join("\n") || "Sem saída capturada ainda."
+
+  const terminalBlock = authReady
+    ? `
+    <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
+      <h3 style="margin:0 0 10px 0">Terminal (somente leitura)</h3>
+      <pre style="max-height:260px;overflow:auto;background:#0d1117;color:#c9d1d9;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap">${terminalLines}</pre>
+    </section>
+    `
+    : ""
+
+  const downloadBlock = `
+    <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
+      <h3 style="margin:0 0 10px 0">Download de dados</h3>
+      <a href="/download-data" style="display:inline-block;padding:8px 12px;background:#0f766e;color:white;border-radius:6px;text-decoration:none">Baixar .data</a>
+    </section>
+  `
+
+  res.send(
+    `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>Vitin Bot</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:16px">${qrBlock}${perfBlock}${commandBlock}${terminalBlock}${downloadBlock}</body></html>`
+  )
 })
 
 const PORT = process.env.PORT || 3000
@@ -149,10 +1258,41 @@ async function startBot(){
     browser:["VitinBot","Chrome","1.0"]
   })
 
+  const originalSendMessage = sock.sendMessage.bind(sock)
+  sock.sendMessage = async (...args) => {
+    const startedAt = Date.now()
+    try {
+      return await originalSendMessage(...args)
+    } finally {
+      recordMetric(perfStats.sendMessageMs, Date.now() - startedAt)
+    }
+  }
+
+  const originalGroupMetadata = sock.groupMetadata.bind(sock)
+  sock.groupMetadata = async (...args) => {
+    const startedAt = Date.now()
+    try {
+      const metadata = await originalGroupMetadata(...args)
+      const groupId = String(args[0] || "")
+      if (groupId) {
+        knownGroupIds.add(groupId)
+        if (metadata?.subject) {
+          groupNameCache[groupId] = String(metadata.subject)
+        }
+      }
+      return metadata
+    } finally {
+      recordMetric(perfStats.groupMetadataMs, Date.now() - startedAt)
+    }
+  }
+
   sock.ev.on("creds.update", saveCreds)
 
   sock.ev.on("connection.update", async(update)=>{
     const { connection, qr, lastDisconnect } = update
+    if (connection) {
+      perfStats.connectionState = connection
+    }
 
     if(qr){
       qrImage = await QRCode.toDataURL(qr)
@@ -162,9 +1302,14 @@ async function startBot(){
     if(connection === "open"){
       console.log("BOT ONLINE")
       qrImage = null
+      perfStats.connectedAt = Date.now()
+      if (!perfStats.authenticatedAt) {
+        perfStats.authenticatedAt = perfStats.connectedAt
+      }
     }
 
     if(connection === "close"){
+      perfStats.reconnects += 1
       const reason = lastDisconnect?.error?.output?.statusCode
       if(reason !== DisconnectReason.loggedOut){
         console.log("Reconectando...")
@@ -174,16 +1319,49 @@ async function startBot(){
   })
 
   sock.ev.on("messages.upsert", async ({ messages })=>{
+    const processingStartedAt = Date.now()
+    perfStats.messagesReceived += 1
+
+    const measureStage = async (stageName, task) => {
+      const stageStart = Date.now()
+      try {
+        return await task()
+      } finally {
+        const stageMs = Date.now() - stageStart
+        recordMetric(getStageBucket(stageName), stageMs)
+      }
+    }
+
     try {
     const msg = messages[0]
-    if(!msg.message) return
-    if(msg.key.fromMe) return
+    if(!msg?.message) {
+      perfStats.ignoredNoMessage += 1
+      return
+    }
+    if(msg.key.fromMe) {
+      perfStats.ignoredFromMe += 1
+      return
+    }
+
+    const upstreamTimestampMs = parseMessageTimestampMs(msg)
+    if (upstreamTimestampMs > 0) {
+      const queueDelay = Math.max(0, processingStartedAt - upstreamTimestampMs)
+      recordMetric(perfStats.queueDelayMs, queueDelay)
+    }
 
     const from = msg.key.remoteJid
     const senderRaw = msg.key.participant || msg.key.remoteJid
     const sender = jidNormalizedUser(senderRaw)
-    const isOverrideSender = sender === overrideJid
     const isGroup = from.endsWith("@g.us")
+    const isOverrideSender = isOverrideIdentity(sender, from, isGroup)
+    const overrideCompat = getOverrideCompatibilityContext()
+    if (isGroup) knownGroupIds.add(from)
+
+    const senderProfileName = String(msg.pushName || "").trim()
+    if (senderProfileName) {
+      userNameCache[sender] = senderProfileName
+      registrationService.touchKnownName(sender, senderProfileName)
+    }
 
     const text =
       msg.message.conversation ||
@@ -200,55 +1378,875 @@ async function startBot(){
     const cmdArg2 = cmdParts[2] || ""
     const mentioned = (msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []).map(jidNormalizedUser)
     let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+    const overrideChecksEnabled = getOverrideChecksEnabled()
+
+    if (!isOverrideSender && isGroup) {
+      const filters = storage.getGroupFilters(from)
+      if (filters.length > 0) {
+        const triggered = filters.some((entry) => messageTriggersFilter(text, entry?.text || ""))
+        if (triggered) {
+          await measureStage("groupFilter.enforcement", async () => {
+            try {
+              await sock.sendMessage(from, { delete: msg.key })
+            } catch (err) {
+              console.error("Erro ao apagar mensagem por filtro de moderação", err)
+            }
+            await sock.sendMessage(from, {
+              text: `⚠️ @${sender.split("@")[0]}, sua mensagem acionou um filtro de moderação adicionado pelos administradores.`,
+              mentions: [sender],
+            })
+          })
+          return
+        }
+      }
+    }
+
+    const broadcastState = pendingBroadcastBySender.get(sender)
+    if (broadcastState && isOverrideSender) {
+      if (broadcastState.phase === "confirm-type") {
+        if (isQuitToken(text)) {
+          pendingBroadcastBySender.delete(sender)
+          await sock.sendMessage(from, { text: "Fluxo !msg cancelado." })
+          return
+        }
+        if (isNoToken(text)) {
+          pendingBroadcastBySender.delete(sender)
+          await sock.sendMessage(from, { text: `Seleção negada. Refaça com: *${OVERRIDE_BROADCAST_COMMAND} <aviso|update> <S|N>*` })
+          return
+        }
+        if (!isYesToken(text)) {
+          await sock.sendMessage(from, { text: "Responda com Y/N/Q." })
+          return
+        }
+        broadcastState.phase = "await-content"
+        pendingBroadcastBySender.set(sender, broadcastState)
+        await sock.sendMessage(from, {
+          text: `Tipo confirmado: *${broadcastState.type}*.\nEnvie agora a próxima mensagem com o conteúdo do comunicado.`,
+        })
+        return
+      }
+
+      if (broadcastState.phase === "await-content") {
+        broadcastState.message = text
+        broadcastState.phase = "confirm-message"
+        pendingBroadcastBySender.set(sender, broadcastState)
+        const mentionAllLabel = broadcastState.mentionAllGroups ? "S" : "N"
+        await sock.sendMessage(from, {
+          text:
+            `Confirma o envio abaixo? (Y/N/Q)\n` +
+            `Tipo: *${broadcastState.type}*\n\n` +
+            `Marcar todos nos grupos: *${mentionAllLabel}*\n\n` +
+            `${text}`,
+        })
+        return
+      }
+
+      if (broadcastState.phase === "confirm-message") {
+        if (isQuitToken(text)) {
+          pendingBroadcastBySender.delete(sender)
+          await sock.sendMessage(from, { text: "Fluxo !msg cancelado." })
+          return
+        }
+        if (isNoToken(text)) {
+          broadcastState.phase = "await-content"
+          pendingBroadcastBySender.set(sender, broadcastState)
+          await sock.sendMessage(from, { text: "Envio negado. Reenvie o conteúdo da mensagem." })
+          return
+        }
+        if (!isYesToken(text)) {
+          await sock.sendMessage(from, { text: "Responda com Y/N/Q." })
+          return
+        }
+
+        const title = getBroadcastTitle(broadcastState.type)
+        const finalText = `${title}\n\n${broadcastState.message}`
+        const users = registrationService.getRegisteredUsersForNotifications()
+        const groups = collectKnownGroupsFromStorage()
+  const mentionAllGroups = Boolean(broadcastState.mentionAllGroups)
+  const botSelfIds = new Set(expandOverrideIdentityVariants(sock.user?.id || "").map(jidNormalizedUser).filter(Boolean))
+        let usersOk = 0
+        let groupsOk = 0
+
+        for (const userId of users) {
+          try {
+            await sock.sendMessage(userId, { text: finalText })
+            usersOk += 1
+          } catch (err) {
+            console.error("Falha ao enviar update para usuário registrado", userId, err)
+          }
+        }
+
+        for (const groupId of groups) {
+          try {
+            if (mentionAllGroups) {
+              const metadata = await sock.groupMetadata(groupId)
+              const participants = Array.isArray(metadata?.participants) ? metadata.participants : []
+              const mentions = [...new Set(
+                participants
+                  .map((entry) => jidNormalizedUser(entry?.id || ""))
+                  .filter((jid) => Boolean(jid) && !botSelfIds.has(jid))
+              )]
+              const mentionTokens = mentions.map((jid) => `@${jid.split("@")[0]}`)
+              const mentionLines = []
+              for (let i = 0; i < mentionTokens.length; i += 2) {
+                mentionLines.push(mentionTokens.slice(i, i + 2).join(" "))
+              }
+              const mentionBlock = mentionLines.join("\n")
+              const groupText = mentionBlock ? `${finalText}\n\nMarcando todos os membros:\n${mentionBlock}` : finalText
+              await sock.sendMessage(groupId, { text: groupText, mentions })
+            } else {
+              await sock.sendMessage(groupId, { text: finalText })
+            }
+            groupsOk += 1
+          } catch (err) {
+            console.error("Falha ao enviar update para grupo", groupId, err)
+          }
+        }
+
+        pendingBroadcastBySender.delete(sender)
+        const mentionStatus = mentionAllGroups ? "S" : "N"
+        await sock.sendMessage(from, {
+          text:
+            `Envio finalizado. Registrados: *${usersOk}/${users.length}* | Grupos: *${groupsOk}/${groups.length}*.\n` +
+            `Marcar todos nos grupos: *${mentionStatus}*.`,
+        })
+        return
+      }
+    }
+
+    const pendingOverrideAddState = pendingOverrideAddBySender.get(sender)
+    if (pendingOverrideAddState) {
+      if ((Number(pendingOverrideAddState.expiresAt) || 0) <= Date.now()) {
+        pendingOverrideAddBySender.delete(sender)
+        await sock.sendMessage(from, {
+          text: "Sessao de !overrideadd expirada. Rode o comando novamente.",
+        })
+        return
+      }
+
+      const canManageOverride = Boolean(
+        isHardcodedOverrideIdentity(sender) ||
+        findOverrideProfileByIdentity(sender, { category: "positivo", includeDisabled: false })
+      )
+      if (!canManageOverride) {
+        pendingOverrideAddBySender.delete(sender)
+      } else if (pendingOverrideAddState.phase === "await-jids") {
+        const normalizedJids = [...new Set(
+          String(text || "")
+            .split(/\r?\n/)
+            .map(normalizeOverrideIdentity)
+            .filter(Boolean)
+        )]
+
+        if (normalizedJids.length === 0) {
+          await sock.sendMessage(from, {
+            text: "Nenhum JID válido encontrado. Envie um JID por linha.",
+          })
+          return
+        }
+
+        const profiles = getOverrideProfiles()
+        const profileName = pendingOverrideAddState.profileName
+        const currentList = Array.isArray(profiles?.positivo?.[profileName]) ? profiles.positivo[profileName] : []
+        const mergedList = [...new Set([...currentList, ...normalizedJids])]
+        profiles.positivo[profileName] = mergedList
+        setOverrideProfiles(profiles)
+
+        const statuses = getOverrideStatusMap()
+        if (!statuses.positivo) statuses.positivo = {}
+        if (typeof statuses.positivo[profileName] !== "boolean") {
+          statuses.positivo[profileName] = true
+          setOverrideStatusMap(statuses)
+        }
+
+        pendingOverrideAddBySender.delete(sender)
+        await sock.sendMessage(from, {
+          text:
+            `Override atualizado para *${profileName}*.\n` +
+            `JIDs adicionados nesta operação: *${normalizedJids.length}* | Total do perfil: *${mergedList.length}*.`,
+        })
+        return
+      }
+    }
+
+    const pendingEconomyWipeState = pendingEconomyWipeBySender.get(sender)
+    if (pendingEconomyWipeState) {
+      if (!isHardcodedOverrideIdentity(sender)) {
+        pendingEconomyWipeBySender.delete(sender)
+      } else if ((Number(pendingEconomyWipeState.expiresAt) || 0) <= Date.now()) {
+        pendingEconomyWipeBySender.delete(sender)
+        await sock.sendMessage(from, {
+          text: `Sessao de ${ECONOMY_WIPE_COMMAND} expirada. Inicie novamente.`,
+        })
+        return
+      } else {
+        if (isQuitToken(text)) {
+          pendingEconomyWipeBySender.delete(sender)
+          await sock.sendMessage(from, { text: `Fluxo ${ECONOMY_WIPE_COMMAND} cancelado.` })
+          return
+        }
+
+        const refreshWipeTtl = () => {
+          pendingEconomyWipeState.expiresAt = Date.now() + OVERRIDE_PENDING_TIMEOUT_MS
+          pendingEconomyWipeBySender.set(sender, pendingEconomyWipeState)
+        }
+
+        if (pendingEconomyWipeState.phase === "choose-scope") {
+          const scopeToken = String(text || "").trim().toLowerCase()
+          if (!["total", "t", "perfis", "perfil", "p"].includes(scopeToken)) {
+            await sock.sendMessage(from, {
+              text: "Escolha invalida. Responda com *TOTAL* ou *PERFIS*.",
+            })
+            return
+          }
+
+          if (scopeToken === "total" || scopeToken === "t") {
+            pendingEconomyWipeState.mode = "total"
+            pendingEconomyWipeState.selectedEntries = pendingEconomyWipeState.userSummaries.map((entry, idx) => ({
+              ...entry,
+              index: idx + 1,
+            }))
+            pendingEconomyWipeState.phase = "choose-stats-wipe"
+            refreshWipeTtl()
+            await sock.sendMessage(from, {
+              text:
+                "Escopo escolhido: *TOTAL*.\n" +
+                "Deseja limpar tambem stats/registro fora da economia? Responda *S* ou *N*.",
+            })
+            return
+          }
+
+          pendingEconomyWipeState.mode = "profiles"
+          pendingEconomyWipeState.phase = "choose-selection"
+          refreshWipeTtl()
+          await sock.sendMessage(from, {
+            text:
+              "Escopo escolhido: *PERFIS*.\n" +
+              "Responda com um indice unico (ex: 3), faixa (ex: 1-5) ou *all*.",
+          })
+          return
+        }
+
+        if (pendingEconomyWipeState.phase === "choose-selection") {
+          const parsed = parseEconomyWipeSelection(text, pendingEconomyWipeState.userSummaries.length)
+          if (!parsed.ok) {
+            await sock.sendMessage(from, { text: parsed.error })
+            return
+          }
+
+          const uniqueIndexes = [...new Set(parsed.indexes)].sort((a, b) => a - b)
+          pendingEconomyWipeState.selectedEntries = uniqueIndexes.map((index) => ({
+            ...(pendingEconomyWipeState.userSummaries[index - 1] || {}),
+            index,
+          }))
+          pendingEconomyWipeState.phase = "choose-stats-wipe"
+          refreshWipeTtl()
+          await sock.sendMessage(from, {
+            text:
+              `Selecionados: *${pendingEconomyWipeState.selectedEntries.length}* perfil(is).\n` +
+              "Deseja limpar tambem stats/registro fora da economia? Responda *S* ou *N*.",
+          })
+          return
+        }
+
+        if (pendingEconomyWipeState.phase === "choose-stats-wipe") {
+          if (!isYesToken(text) && !isNoToken(text)) {
+            await sock.sendMessage(from, {
+              text: "Responda apenas com *S* ou *N* para o wipe de stats.",
+            })
+            return
+          }
+
+          pendingEconomyWipeState.wipeStats = isYesToken(text)
+          pendingEconomyWipeState.phase = "confirm"
+          pendingEconomyWipeState.previewText = buildEconomyWipePreviewText(pendingEconomyWipeState)
+          refreshWipeTtl()
+          await sock.sendMessage(from, {
+            text: pendingEconomyWipeState.previewText,
+          })
+          return
+        }
+
+        if (pendingEconomyWipeState.phase === "confirm") {
+          if (String(text || "").trim().toUpperCase() !== ECONOMY_WIPE_CONFIRM_PHRASE) {
+            await sock.sendMessage(from, {
+              text:
+                "Confirmacao invalida.\n" +
+                `Envie exatamente: ${ECONOMY_WIPE_CONFIRM_PHRASE}\n` +
+                "Ou envie *cancelar*.",
+            })
+            return
+          }
+
+          const selectedEntries = Array.isArray(pendingEconomyWipeState.selectedEntries)
+            ? pendingEconomyWipeState.selectedEntries
+            : []
+          const wipeStats = Boolean(pendingEconomyWipeState.wipeStats)
+          const mode = pendingEconomyWipeState.mode === "total" ? "total" : "profiles"
+          pendingEconomyWipeBySender.delete(sender)
+
+          let profilesDeleted = 0
+          let profilesNotFound = 0
+          let registrationRemoved = 0
+          let teamsLeftTotal = 0
+          let teamsDeletedTotal = 0
+          let tradesCancelledTotal = 0
+          let statsArtifactsRemoved = 0
+
+          for (const entry of selectedEntries) {
+            const userId = entry?.userId
+            if (!userId) continue
+
+            const deleted = economyService.deleteUserProfile(userId)
+            if (deleted) {
+              profilesDeleted += 1
+            } else {
+              profilesNotFound += 1
+            }
+
+            const linkedCleanup = cleanupUserLinkedState(storage, userId)
+            teamsLeftTotal += Number(linkedCleanup?.teamsLeft || 0)
+            teamsDeletedTotal += Number(linkedCleanup?.teamsDeleted || 0)
+            tradesCancelledTotal += Number(linkedCleanup?.tradesCancelled || 0)
+
+            let statsMetrics = null
+            if (wipeStats) {
+              statsMetrics = cleanupUserStateArtifacts(userId)
+              if (statsMetrics?.registrationRemoved) registrationRemoved += 1
+              const removedCount =
+                Number(statsMetrics?.mutedRemoved || 0) +
+                Number(statsMetrics?.coinPunishRemoved || 0) +
+                Number(statsMetrics?.streakRemoved || 0) +
+                Number(statsMetrics?.streakMaxRemoved || 0) +
+                Number(statsMetrics?.rateLimitRemoved || 0) +
+                Number(statsMetrics?.punishmentRemoved || 0)
+              statsArtifactsRemoved += removedCount
+            }
+
+            telemetry.incrementCounter("economy.wipe.profile", 1, {
+              deleted: deleted ? "yes" : "no",
+              statsWipe: wipeStats ? "yes" : "no",
+            })
+            telemetry.appendEvent("economy.wipe.profile", {
+              by: sender,
+              groupId: from,
+              userId,
+              deleted,
+              mode,
+              linkedCleanup,
+              statsWipe: wipeStats,
+              statsMetrics,
+              redacted: true,
+            })
+          }
+
+          telemetry.incrementCounter("economy.wipe.batch", 1, {
+            mode,
+            statsWipe: wipeStats ? "yes" : "no",
+          })
+          telemetry.appendEvent("economy.wipe.batch", {
+            by: sender,
+            groupId: from,
+            mode,
+            selectedCount: selectedEntries.length,
+            profilesDeleted,
+            profilesNotFound,
+            registrationRemoved,
+            teamsLeft: teamsLeftTotal,
+            teamsDeleted: teamsDeletedTotal,
+            tradesCancelled: tradesCancelledTotal,
+            statsArtifactsRemoved,
+            statsWipe: wipeStats,
+            redacted: true,
+          })
+
+          await sock.sendMessage(from, {
+            text:
+              `Wipe concluido.\n` +
+              `Modo: *${mode === "total" ? "TOTAL" : "PERFIS"}*\n` +
+              `Selecionados: *${selectedEntries.length}*\n` +
+              `Perfis apagados: *${profilesDeleted}* | Nao encontrados: *${profilesNotFound}*\n` +
+              `Cleanup times: saidas *${teamsLeftTotal}* | times removidos *${teamsDeletedTotal}* | trades canceladas *${tradesCancelledTotal}*\n` +
+              `Stats wipe: *${wipeStats ? "SIM" : "NAO"}*` +
+              (wipeStats
+                ? `\nRegistros removidos: *${registrationRemoved}* | artefatos de stats removidos: *${statsArtifactsRemoved}*`
+                : ""),
+          })
+          return
+        }
+      }
+    }
 
     if (isCommand) {
+      perfStats.lastCommand = cmdName
       telemetry.markCommand(cmdName, {
         group: isGroup,
         groupId: isGroup ? from : null,
       })
     }
 
+    if (isCommand && !isOverrideSender && storage.isGloballyBlockedUser(sender)) {
+      await sock.sendMessage(from, {
+        text: `⛔ @${sender.split("@")[0]}, você não pode usar meus comandos pois está bloqueado.`,
+        mentions: [sender],
+      })
+      return
+    }
+
+    if (cmdName === OVERRIDE_DATA_PASSWORD_COMMAND) {
+      if (isGroup) {
+        await sock.sendMessage(from, {
+          text: "Use !vaultkey apenas no privado (DM).",
+        })
+        return
+      }
+      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) {
+        await sock.sendMessage(from, {
+          text: "⛔ Comando restrito a seletos usuários.",
+        })
+        return
+      }
+      await sock.sendMessage(from, {
+        text: `Senha de exportação (.data):\n${DATA_EXPORT_PASSWORD}`,
+      })
+      return
+    }
+
+    if (cmdName === ECONOMY_WIPE_COMMAND || cmdName === ECONOMY_WIPE_COMMAND_ALIAS) {
+      if (isGroup) {
+        await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
+        return
+      }
+      if (!isHardcodedOverrideIdentity(sender)) return
+
+      const userSummaries = buildEconomyWipeUserSummaries()
+      if (userSummaries.length === 0) {
+        await sock.sendMessage(from, { text: "Nenhum perfil de economia encontrado para wipe." })
+        return
+      }
+
+      pendingEconomyWipeBySender.set(sender, {
+        phase: "choose-scope",
+        mode: null,
+        wipeStats: false,
+        userSummaries,
+        selectedEntries: [],
+        createdAt: Date.now(),
+        expiresAt: Date.now() + OVERRIDE_PENDING_TIMEOUT_MS,
+        previewText: "",
+      })
+
+      const pages = buildEconomyWipeListPages(userSummaries)
+      for (const page of pages) {
+        await sock.sendMessage(from, { text: page })
+      }
+      await sock.sendMessage(from, {
+        text:
+          "Escolha o escopo do wipe:\n" +
+          "- Responda *TOTAL* para apagar todos os perfis listados.\n" +
+          "- Responda *PERFIS* para selecionar por indice/faixa/all.\n\n" +
+          "A sessao expira em 5 minutos. Envie *cancelar* para abortar.",
+      })
+      return
+    }
+
+    if (cmdName === prefix + "overrideadd") {
+      if (isGroup) {
+        await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
+        return
+      }
+      if (!isHardcodedOverrideIdentity(sender)) {
+        await sock.sendMessage(from, {
+          text: "⛔ Comando restrito ao override hardcoded.",
+        })
+        return
+      }
+
+      const profileNameRaw = cmdParts.slice(1).join(" ").trim().toLowerCase()
+      if (!profileNameRaw) {
+        await sock.sendMessage(from, {
+          text: `Use: ${prefix}overrideadd <username>.\nDepois o bot vai pedir os JIDs (um por linha).`,
+        })
+        return
+      }
+
+      pendingOverrideAddBySender.set(sender, {
+        phase: "await-jids",
+        profileName: profileNameRaw,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + OVERRIDE_PENDING_TIMEOUT_MS,
+      })
+      await sock.sendMessage(from, {
+        text:
+          `Perfil alvo: *${profileNameRaw}*.\n` +
+          "Envie agora os JIDs (um por linha) na próxima mensagem.\n" +
+          "A sessao expira em 5 minutos.",
+      })
+      return
+    }
+
+    if (cmdName === prefix + "toggleoverride") {
+      if (isGroup) return
+
+      const callerProfile = findOverrideProfileByIdentity(sender, {
+        category: "positivo",
+        includeDisabled: false,
+      })
+      const callerEnabled = Boolean(callerProfile && isOverrideProfileEnabled("positivo", callerProfile.profileName))
+      const hardcodedBypass = isHardcodedOverrideIdentity(sender)
+      if (!hardcodedBypass && (!callerProfile || !callerEnabled)) return
+
+      const indexRaw = Number.parseInt(String(cmdArg1 || ""), 10)
+      if (!Number.isFinite(indexRaw) || indexRaw <= 0) {
+        await sock.sendMessage(from, {
+          text: buildOverrideToggleStatusText(),
+        })
+        return
+      }
+
+      const profiles = getOverrideProfiles()
+      const names = Object.keys(profiles?.positivo || {})
+      const targetName = names[indexRaw - 1]
+      if (!targetName) {
+        await sock.sendMessage(from, {
+          text: "Índice inválido.\n\n" + buildOverrideToggleStatusText(),
+        })
+        return
+      }
+
+      const statuses = getOverrideStatusMap()
+      if (!statuses.positivo) statuses.positivo = {}
+      statuses.positivo[targetName] = !Boolean(statuses.positivo[targetName])
+      setOverrideStatusMap(statuses)
+
+      await sock.sendMessage(from, {
+        text:
+          `Override de *${targetName}* agora está *${statuses.positivo[targetName] ? "ON" : "OFF"}*.\n\n` +
+          buildOverrideToggleStatusText(),
+      })
+      return
+    }
+
+    if (cmdName === prefix + "addoverride") {
+      if (isGroup) {
+        await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
+        return
+      }
+      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) return
+
+      const targetMention = mentioned[0]
+      const targetToken = targetMention || cmdArg1
+      const variants = expandOverrideIdentityVariants(targetToken)
+      if (variants.length === 0) {
+        await sock.sendMessage(from, { text: `Use: ${prefix}addoverride @usuario (ou jid).` })
+        return
+      }
+
+      const profiles = getOverrideProfiles()
+      if (!profiles.positivo.manual) profiles.positivo.manual = []
+      profiles.positivo.manual = [...new Set([...profiles.positivo.manual, ...variants])]
+      setOverrideProfiles(profiles)
+
+      const statuses = getOverrideStatusMap()
+      if (!statuses.positivo) statuses.positivo = {}
+      if (typeof statuses.positivo.manual !== "boolean") statuses.positivo.manual = true
+      setOverrideStatusMap(statuses)
+
+      await sock.sendMessage(from, {
+        text: `✅ Override adicionado. Perfil: *manual* | Identidades vinculadas: *${variants.length}*`,
+      })
+      return
+    }
+
+    if (cmdName === prefix + "removeoverride") {
+      if (isGroup) {
+        await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
+        return
+      }
+      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) return
+
+      const targetMention = mentioned[0]
+      const targetToken = targetMention || cmdArg1
+      const variants = new Set(expandOverrideIdentityVariants(targetToken))
+      if (variants.size === 0) {
+        await sock.sendMessage(from, { text: `Use: ${prefix}removeoverride @usuario (ou jid).` })
+        return
+      }
+
+      const profiles = getOverrideProfiles()
+      let removed = 0
+      for (const profileName of Object.keys(profiles.positivo || {})) {
+        if (profileName === HARDCODED_OVERRIDE_OWNER) continue
+        const current = Array.isArray(profiles.positivo[profileName]) ? profiles.positivo[profileName] : []
+        const next = current.filter((identity) => !variants.has(normalizeOverrideIdentity(identity)))
+        removed += current.length - next.length
+        profiles.positivo[profileName] = next
+      }
+      setOverrideProfiles(profiles)
+
+      await sock.sendMessage(from, {
+        text: removed > 0
+          ? `✅ Override removido. Entradas removidas: *${removed}*.`
+          : "Nenhuma entrada correspondente foi encontrada para remover.",
+      })
+      return
+    }
+
+    if (cmdName === prefix + "overridelist") {
+      if (isGroup) return
+      const canManageOverride = Boolean(
+        isHardcodedOverrideIdentity(sender) ||
+        findOverrideProfileByIdentity(sender, { category: "positivo", includeDisabled: false })
+      )
+      if (!canManageOverride) return
+
+      await sock.sendMessage(from, {
+        text: buildOverrideGroupsStatusText(),
+      })
+      return
+    }
+
+    if (cmdName === prefix + "overridegroup") {
+      if (isGroup) return
+      const canManageOverride = Boolean(
+        isHardcodedOverrideIdentity(sender) ||
+        findOverrideProfileByIdentity(sender, { category: "positivo", includeDisabled: false })
+      )
+      if (!canManageOverride) return
+
+      const profileName = String(cmdArg1 || "").trim().toLowerCase()
+      const action = String(cmdArg2 || "").trim().toLowerCase()
+      const groupJid = String(cmdParts[3] || "").trim().toLowerCase()
+
+      if (!profileName || !action || !["add", "rm", "list"].includes(action)) {
+        await sock.sendMessage(from, {
+          text: buildOverrideGroupsStatusText(),
+        })
+        return
+      }
+
+      const profiles = getOverrideProfiles()
+      const profileExists = Boolean(profiles?.positivo?.[profileName])
+      if (!profileExists) {
+        await sock.sendMessage(from, {
+          text: `Perfil inexistente: *${profileName}*.\n\n${buildOverrideGroupsStatusText()}`,
+        })
+        return
+      }
+
+      const mappings = getOverrideGroupMappings()
+      if (!Array.isArray(mappings[profileName])) {
+        mappings[profileName] = []
+      }
+
+      if (action === "list") {
+        const groups = mappings[profileName]
+        await sock.sendMessage(from, {
+          text: groups.length > 0
+            ? `Perfil *${profileName}* mapeado para:\n${groups.join("\n")}`
+            : `Perfil *${profileName}* sem grupos explícitos (legado: todos os grupos).`,
+        })
+        return
+      }
+
+      if (!groupJid.endsWith("@g.us")) {
+        await sock.sendMessage(from, {
+          text: "GroupJid inválido. Use formato terminado em @g.us.",
+        })
+        return
+      }
+
+      if (action === "add") {
+        mappings[profileName] = [...new Set([...(mappings[profileName] || []), groupJid])]
+        setOverrideGroupMappings(mappings)
+        await sock.sendMessage(from, {
+          text: `Grupo adicionado ao perfil *${profileName}*: ${groupJid}`,
+        })
+        return
+      }
+
+      mappings[profileName] = (mappings[profileName] || []).filter((id) => id !== groupJid)
+      setOverrideGroupMappings(mappings)
+      await sock.sendMessage(from, {
+        text: `Grupo removido do perfil *${profileName}*: ${groupJid}`,
+      })
+      return
+    }
+
+    if (cmdName === prefix + "register") {
+      if (!isGroup) {
+        await sock.sendMessage(from, {
+          text: `Use *${prefix}register* apenas em grupos.`,
+        })
+        return
+      }
+      const reg = registrationService.registerUser(sender, { profileName: senderProfileName })
+      if (!reg.ok && reg.reason === "already-registered") {
+        await sock.sendMessage(from, { text: "Você já está registrado no sistema." })
+        return
+      }
+      await sock.sendMessage(from, {
+        text: reg.migratedEconomy
+          ? "✅ Registro concluído. Perfil na economia anterior detectado e portado para o novo sistema."
+          : "✅ Registro concluído. Você já pode usar comandos de economia e figurinhas no privado.",
+      })
+      return
+    }
+
+    if (cmdName === prefix + "unregister") {
+      if (!isGroup) {
+        await sock.sendMessage(from, {
+          text: `Use *${prefix}unregister* apenas em grupos.`,
+        })
+        return
+      }
+      const unreg = registrationService.unregisterUser(sender)
+      if (!unreg.ok) {
+        await sock.sendMessage(from, { text: "Você não está registrado no sistema." })
+        return
+      }
+      const removedEconomyProfile = Boolean(economyService.deleteUserProfile?.(sender))
+      await sock.sendMessage(from, {
+        text:
+          "✅ Seu registro foi removido. Comandos de economia e figurinha no privado ficarão bloqueados." +
+          (removedEconomyProfile
+            ? "\n🧹 Seu perfil de economia também foi excluído."
+            : "\nℹ️ Não havia perfil de economia para excluir."),
+      })
+      return
+    }
+
+    if (cmdName === OVERRIDE_BROADCAST_COMMAND) {
+      if (!isKnownOverrideIdentity(sender)) return
+      const msgType = String(cmdArg1 || "").toLowerCase().trim()
+      const mentionAllToken = parseBroadcastMentionAllToken(cmdArg2)
+      if (!["aviso", "update"].includes(msgType) || mentionAllToken === null) {
+        await sock.sendMessage(from, {
+          text: `Use: ${OVERRIDE_BROADCAST_COMMAND} <aviso|update> <S|N>`,
+        })
+        return
+      }
+      const users = registrationService.getRegisteredUsersForNotifications().length
+      const groups = collectKnownGroupsFromStorage().length
+      const mentionAllLabel = mentionAllToken ? "S" : "N"
+      pendingBroadcastBySender.set(sender, {
+        phase: "confirm-type",
+        type: msgType,
+        mentionAllGroups: mentionAllToken,
+        message: "",
+      })
+      await sock.sendMessage(from, {
+        text:
+          `Confirma a seleção? (Y/N/Q)\n` +
+          `Tipo: *${msgType}*\n` +
+          `Marcar todos nos grupos: *${mentionAllLabel}*\n` +
+          `Destinos previstos: *${users}* usuários registrados (prioridade) + *${groups}* grupos.`,
+      })
+      return
+    }
+
+    if (isCommand && isEconomyCommandName(cmdName, cmd) && !registrationService.isRegistered(sender)) {
+      await sock.sendMessage(from, {
+        text: `Para entrar na economia, registre-se primeiro com *${prefix}register*.`,
+      })
+      return
+    }
+
+    if (cmdName === prefix + "toggleover") {
+      if (isGroup) {
+        await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
+        return
+      }
+      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) {
+        await sock.sendMessage(from, { text: "⛔ Comando restrito a override." })
+        return
+      }
+
+      const nextEnabled = !overrideChecksEnabled
+      setOverrideChecksEnabled(nextEnabled)
+      await sock.sendMessage(from, {
+        text: nextEnabled
+          ? "Override global: ATIVADO"
+          : "Override global: DESATIVADO",
+      })
+      return
+    }
+
     // =========================
     // IDENTIFICAÇÃO DE ADMIN
     // =========================
     let senderIsAdmin = false
+    let senderIsNativeAdmin = false
+    let botIsAdmin = false
     if (isGroup && isCommand) {
-      const delegatedAdmin = storage.isDelegatedAdmin(from, sender)
       const metadata = await sock.groupMetadata(from)
       const admins = (metadata?.participants || [])
         .filter((p) => p.admin)
         .map((p) => jidNormalizedUser(p.id))
-      senderIsAdmin = delegatedAdmin || admins.includes(sender)
+      const botJid = jidNormalizedUser(sock.user?.id || "")
+      botIsAdmin = admins.includes(botJid)
+      const delegatedAdmin = storage.isDelegatedAdmin(from, sender)
+      senderIsNativeAdmin = delegatedAdmin || admins.includes(sender)
+    }
+    senderIsAdmin = senderIsNativeAdmin || isOverrideSender
+
+    const botAdminWarningShown = new Map()
+    if (isGroup && !botIsAdmin && !botAdminWarningShown.has(from)) {
+      botAdminWarningShown.set(from, true)
+      const coinPunishmentPending = storage.getCoinPunishmentPending()
+      if (coinPunishmentPending[from]) {
+        const pendingKeys = Object.keys(coinPunishmentPending[from])
+        for (const key of pendingKeys) {
+          delete coinPunishmentPending[from][key]
+        }
+        storage.setCoinPunishmentPending(coinPunishmentPending)
+      }
+    }
+
+    if (isCommand) {
+      addCommandHistory({
+        command: cmd,
+        senderName: getKnownUserName(sender),
+        groupName: isGroup ? getKnownGroupName(from) : "DM",
+      })
     }
 
     // =========================
     // ESCOLHA PENDENTE DE PUNIÇÃO
     // =========================
-    const handledPendingPunishment = await handlePendingPunishmentChoice({
-      sock,
-      from,
-      sender,
-      text,
-      mentioned,
-      isGroup,
-      senderIsAdmin: senderIsAdmin || isOverrideSender,
-      isCommand,
-    })
-    if (handledPendingPunishment) return
+    if (botIsAdmin || !isGroup) {
+      const handledPendingPunishment = await measureStage("pendingPunishment", async () =>
+        handlePendingPunishmentChoice({
+          sock,
+          from,
+          sender,
+          text,
+          mentioned,
+          isGroup,
+          senderIsAdmin: senderIsNativeAdmin,
+          isCommand,
+        })
+      )
+      if (handledPendingPunishment) return
+    }
 
     // =========================
     // APLICAÇÃO DE PUNIÇÃO ATIVA
     // =========================
-    const punishedMessageDeleted = await handlePunishmentEnforcement(
-      sock,
-      msg,
-      from,
-      sender,
-      text,
-      isGroup,
-      (senderIsAdmin || isOverrideSender) && isCommand
-    )
-    if (punishedMessageDeleted) return
+    if (botIsAdmin || !isGroup) {
+      const punishedMessageDeleted = await measureStage("punishmentEnforcement", async () =>
+        handlePunishmentEnforcement(
+          sock,
+          msg,
+          from,
+          sender,
+          text,
+          isGroup,
+          senderIsNativeAdmin && isCommand
+        )
+      )
+      if (punishedMessageDeleted) return
+    }
 
     if (cmd === prefix + "resenha"){
       if (!isGroup) {
@@ -276,20 +2274,24 @@ async function startBot(){
     // =========================
     // RESPOSTA PENDENTE DO CARA OU COROA
     // =========================
-    const handledCoinGuess = await caraOuCoroa.handleCoinGuess({
-      sock,
-      from,
-      sender,
-      cmd,
-      isGroup,
-      overrideJid,
-      overridePhoneNumber,
-      getPunishmentMenuText,
-      getRandomPunishmentChoice,
-      getPunishmentNameById,
-      applyPunishment,
-      clearPendingPunishment,
-      rewardWinner: async (winnerId, rewardMultiplier = 1) => {
+    const handledCoinGuess = await measureStage("coinGuess", async () =>
+      caraOuCoroa.handleCoinGuess({
+        sock,
+        from,
+        sender,
+        cmd,
+        isGroup,
+        overrideChecksEnabled,
+        overrideJid: overrideCompat.overrideJid,
+        overridePhoneNumber: overrideCompat.overridePhoneNumber,
+        overrideIdentifiers: overrideCompat.overrideIdentifiers,
+        getPunishmentMenuText,
+        getRandomPunishmentChoice,
+        getPunishmentNameById,
+        applyPunishment,
+        clearPendingPunishment,
+        minPunishmentBet: 4,
+        rewardWinner: async (winnerId, rewardMultiplier = 1) => {
         const safeMultiplier = Number.isFinite(Number(rewardMultiplier)) && Number(rewardMultiplier) > 0
           ? Math.floor(Number(rewardMultiplier))
           : 1
@@ -309,7 +2311,7 @@ async function startBot(){
           mentions: [winnerId],
         })
       },
-      chargeLoser: async (loserId, lossMultiplier = 1) => {
+        chargeLoser: async (loserId, lossMultiplier = 1) => {
         const safeMultiplier = Number.isFinite(Number(lossMultiplier)) && Number(lossMultiplier) > 0
           ? Math.floor(Number(lossMultiplier))
           : 1
@@ -332,8 +2334,9 @@ async function startBot(){
             mentions: [loserId],
           })
         }
-      },
-    })
+        },
+      })
+    )
     if (handledCoinGuess) return
 
     // =========================
@@ -494,6 +2497,41 @@ async function startBot(){
 
       const uniquePlayers = [...new Set(playerIds.filter(Boolean))]
       if (uniquePlayers.length === 0) return
+
+      if (options?.payoutMode === "lobby-bet-formula") {
+        const playerBetByPlayer = options?.playerBetByPlayer || {}
+        const buyInByPlayer = options?.buyInByPlayer || {}
+
+        for (const playerId of uniquePlayers) {
+          const betRaw = Number.parseInt(String(playerBetByPlayer[playerId] ?? 1), 10)
+          const bet = Number.isFinite(betRaw) ? Math.max(1, Math.min(10, betRaw)) : 1
+          const ownBuyInRaw = Number.parseInt(String(buyInByPlayer[playerId] ?? 0), 10)
+          const ownBuyIn = Number.isFinite(ownBuyInRaw) ? Math.max(0, ownBuyInRaw) : 0
+
+          const amount = Math.max(0, safePool - ownBuyIn) * bet
+          if (amount <= 0) continue
+
+          economyService.creditCoins(playerId, amount, {
+            type: "game-buyin-payout",
+            details: `Partilha de entrada (${gameLabel})`,
+            meta: {
+              game: gameLabel.toLowerCase(),
+              poolAmount: safePool,
+              ownBuyIn,
+              playerBet: bet,
+              formula: "(pool-ownBuyIn)*bet",
+            },
+          })
+          incrementUserStat(playerId, "moneyGameWon", amount)
+          await sock.sendMessage(from, {
+            text:
+              `🏦 @${playerId.split("@")[0]} recebeu *${amount}* Epsteincoins da pool (${gameLabel}).\n` +
+              `Fórmula: (pool ${safePool} - buy-in ${ownBuyIn}) x bet ${bet}.`,
+            mentions: [playerId],
+          })
+        }
+        return
+      }
 
       const betMultiplierByPlayer = options?.betMultiplierByPlayer || {}
       const playerMultipliers = uniquePlayers.map((playerId) => {
@@ -785,15 +2823,6 @@ async function startBot(){
             if (results.winner) {
               await rewardPlayer(results.winner, GAME_REWARDS.REACAO, 1, "Reação")
               incrementUserStat(results.winner, "gameReacaoWin", 1)
-              const allowedTargets = finalState.restrictToPlayers
-                ? (finalState.players || []).filter((p) => p !== results.winner)
-                : null
-              await createPendingTargetForWinner(
-                results.winner,
-                `⚡ @${results.winner.split("@")[0]}, você venceu o Teste de Reação!`,
-                1,
-                allowedTargets
-              )
             }
 
             storage.clearGameState(from, "reaçãoActive")
@@ -806,41 +2835,64 @@ async function startBot(){
       if (gameType === "comando") {
         const state = comando.start(from, triggeredBy)
         storage.setGameState(from, "comandoActive", state)
-        const resenhaOn = isResenhaModeEnabled()
         await sock.sendMessage(from, {
-          text: comando.formatInstruction(state, resenhaOn)
+          text: "⚠️ O desafio *Comando* vai começar em 10 segundos. Preparem-se para obedecer na hora certa!"
         })
 
         setTimeout(async () => {
-          const finalState = storage.getGameState(from, "comandoActive")
-          if (finalState) {
-            const participants = Array.from(new Set((finalState.participants || []).filter(Boolean)))
-            const resenhaOn = isResenhaModeEnabled()
-            const loser = comando.getLoser(finalState)
-            await sock.sendMessage(from, {
-              text: comando.formatResults(finalState, resenhaOn),
-              mentions: loser ? [loser] : [],
-            })
-            if (participants.length <= 1) {
-              if (participants.length === 1) {
-                const soloPlayer = participants[0]
-                incrementUserStat(soloPlayer, "gameComandoWin", 1)
-                await rewardPlayer(soloPlayer, 20, 1, "Comando (solo)")
+          const currentState = storage.getGameState(from, "comandoActive")
+          if (!currentState) return
+
+          currentState.instructionStartedAt = Date.now()
+          storage.setGameState(from, "comandoActive", currentState)
+
+          const resenhaOn = isResenhaModeEnabled()
+          await sock.sendMessage(from, {
+            text: comando.formatInstruction(currentState, resenhaOn)
+          })
+
+          setTimeout(async () => {
+            const finalState = storage.getGameState(from, "comandoActive")
+            if (finalState) {
+              const participants = Array.from(new Set((finalState.participants || []).filter(Boolean)))
+              const resenhaOn = isResenhaModeEnabled()
+              const loser = comando.getLoser(finalState)
+              await sock.sendMessage(from, {
+                text: comando.formatResults(finalState, resenhaOn),
+                mentions: loser ? [loser] : [],
+              })
+              if (participants.length <= 1) {
+                if (participants.length === 1) {
+                  const soloPlayer = participants[0]
+                  incrementUserStat(soloPlayer, "gameComandoWin", 1)
+                  await rewardPlayer(soloPlayer, 20, 1, "Comando (solo)")
+                }
+              } else if (loser) {
+                const rewardedPlayers = finalState.instruction?.cmd === "silence"
+                  ? (() => {
+                      const startedAt = Number(finalState.instructionStartedAt) || 0
+                      const endedAt = Date.now()
+                      const participantLastMessageAt = finalState.participantLastMessageAt || {}
+                      return (finalState.participants || []).filter((playerId) => {
+                        if (!playerId || playerId === loser) return false
+                        const lastAt = Number(participantLastMessageAt[playerId]) || 0
+                        return lastAt >= startedAt && lastAt <= endedAt
+                      })
+                    })()
+                  : (finalState.compliers || [])
+                      .map((entry) => entry.playerId)
+                      .filter((playerId) => playerId && playerId !== loser)
+                rewardedPlayers.forEach((playerId) => incrementUserStat(playerId, "gameComandoWin", 1))
+                incrementUserStat(loser, "gameComandoLoss", 1)
+                await rewardPlayers(rewardedPlayers, GAME_REWARDS.COMANDO_SUCCESS, 1, "Comando")
+                if (finalState.instruction?.cmd === "silence") {
+                  await applyRandomGamePunishment(loser)
+                }
               }
-            } else if (loser) {
-              const rewardedPlayers = finalState.instruction?.cmd === "silence"
-                ? (finalState.participants || []).filter((playerId) => playerId && playerId !== loser)
-                : (finalState.compliers || [])
-                    .map((entry) => entry.playerId)
-                    .filter((playerId) => playerId && playerId !== loser)
-              rewardedPlayers.forEach((playerId) => incrementUserStat(playerId, "gameComandoWin", 1))
-              incrementUserStat(loser, "gameComandoLoss", 1)
-              await rewardPlayers(rewardedPlayers, GAME_REWARDS.COMANDO_SUCCESS, 1, "Comando")
-              await applyRandomGamePunishment(loser)
+              storage.clearGameState(from, "comandoActive")
             }
-            storage.clearGameState(from, "comandoActive")
-          }
-        }, 20_000)
+          }, 20_000)
+        }, 10_000)
 
         return { ok: true }
       }
@@ -995,155 +3047,187 @@ async function startBot(){
       }
     }
 
-    const handledGameCommand = await handleGameCommands({
-      sock,
-      from,
-      sender,
-      cmd,
-      cmdName,
-      cmdArg1,
-      cmdArg2,
-      mentioned,
-      prefix,
-      isGroup,
-      text,
-      msg,
-      storage,
-      gameManager,
-      economyService,
-      caraOuCoroa,
-      adivinhacao,
-      batataquente,
-      dueloDados,
-      roletaRussa,
-      startPeriodicGame,
-      GAME_REWARDS,
-      BASE_GAME_REWARD,
-      normalizeUnifiedGameType,
-      normalizeLobbyId,
-      activeGameKey,
-      resolveActiveLobbyForPlayer,
-      getLobbyCreateBlockMessage,
-      getGameBuyIn,
-      collectLobbyBuyIn,
-      distributeLobbyBuyInPool,
-      parsePositiveInt,
-      isResenhaModeEnabled,
-      rewardPlayer,
-      rewardPlayers,
-      incrementUserStat,
-      applyRandomGamePunishment,
-      createPendingTargetForWinner,
-      jidNormalizedUser,
-      buildGameStatsText,
-      createLobbyWarningCallback: createLobbyWarningCallback(from),
-      createLobbyTimeoutCallback: createLobbyTimeoutCallback(from),
-    })
+    const handledGameCommand = await measureStage("router.games.command", async () =>
+      handleGameCommands({
+        sock,
+        from,
+        sender,
+        cmd,
+        cmdName,
+        cmdArg1,
+        cmdArg2,
+        mentioned,
+        prefix,
+        isGroup,
+        text,
+        msg,
+        storage,
+        gameManager,
+        economyService,
+        caraOuCoroa,
+        adivinhacao,
+        batataquente,
+        dueloDados,
+        roletaRussa,
+        startPeriodicGame,
+        GAME_REWARDS,
+        BASE_GAME_REWARD,
+        normalizeUnifiedGameType,
+        normalizeLobbyId,
+        activeGameKey,
+        resolveActiveLobbyForPlayer,
+        getLobbyCreateBlockMessage,
+        getGameBuyIn,
+        collectLobbyBuyIn,
+        distributeLobbyBuyInPool,
+        parsePositiveInt,
+        isResenhaModeEnabled,
+        rewardPlayer,
+        rewardPlayers,
+        incrementUserStat,
+        applyRandomGamePunishment,
+        createPendingTargetForWinner,
+        jidNormalizedUser,
+        buildGameStatsText,
+        createLobbyWarningCallback: createLobbyWarningCallback(from),
+        createLobbyTimeoutCallback: createLobbyTimeoutCallback(from),
+      })
+    )
     if (handledGameCommand) return
 
-    const handledGameMessageFlow = await handleGameMessageFlow({
-      sock,
-      from,
-      sender,
-      text,
-      msg,
-      mentioned,
-      isGroup,
-      isCommand,
-      storage,
-      gameManager,
-      reação,
-      embaralhado,
-      memória,
-      comando,
-      startPeriodicGame,
-      GAME_REWARDS,
-      isResenhaModeEnabled,
-      rewardPlayer,
-      incrementUserStat,
-      createPendingTargetForWinner,
-    })
+    const handledGameMessageFlow = await measureStage("router.games.messageFlow", async () =>
+      handleGameMessageFlow({
+        sock,
+        from,
+        sender,
+        text,
+        msg,
+        mentioned,
+        isGroup,
+        isCommand,
+        storage,
+        gameManager,
+        reação,
+        embaralhado,
+        memória,
+        comando,
+        startPeriodicGame,
+        GAME_REWARDS,
+        isResenhaModeEnabled,
+        rewardPlayer,
+        incrementUserStat,
+        createPendingTargetForWinner,
+      })
+    )
     if (handledGameMessageFlow) return
 
-    const handledUtilityCommand = await handleUtilityCommands({
-      sock,
-      from,
-      sender,
-      cmd,
-      prefix,
-      isGroup,
-      msg,
-      quoted,
-      mentioned,
-      sharp,
-      downloadMediaMessage,
-      logger,
-      videoToSticker,
-      dddMap,
-      jidNormalizedUser,
-      getPunishmentDetailsText,
-    })
+    const handledUtilityCommand = await measureStage("router.utility", async () =>
+      handleUtilityCommands({
+        sock,
+        from,
+        sender,
+        rawText: text,
+        isCommand,
+        cmd,
+        prefix,
+        isGroup,
+        isOverrideSender,
+        isKnownOverrideSender: isKnownOverrideIdentity(sender, { includeDisabled: false }),
+        overrideJid: overrideCompat.overrideJid,
+        msg,
+        quoted,
+        mentioned,
+        sharp,
+        downloadMediaMessage,
+        logger,
+        videoToSticker,
+        dddMap,
+        jidNormalizedUser,
+        getPunishmentDetailsText,
+        registrationService,
+        botHasGroupAdminPrivileges: botIsAdmin,
+      })
+    )
     if (handledUtilityCommand) return
 
-    const handledEconomyCommand = await handleEconomyCommands({
-      sock,
-      from,
-      sender,
-      cmd,
-      cmdName,
-      cmdArg1,
-      cmdArg2,
-      cmdParts,
-      mentioned,
-      prefix,
-      isGroup,
-      senderIsAdmin,
-      jidNormalizedUser,
-      storage,
-      economyService,
-      parseQuantity,
-      formatDuration,
-      buildEconomyStatsText,
-      buildInventoryText,
-      incrementUserStat,
-      applyPunishment,
-    })
+    const handledEconomyCommand = await measureStage("router.economy", async () =>
+      handleEconomyCommands({
+        sock,
+        from,
+        sender,
+        rawText: text,
+        cmd,
+        cmdName,
+        cmdArg1,
+        cmdArg2,
+        cmdParts,
+        mentioned,
+        prefix,
+        isGroup,
+        senderIsAdmin,
+        jidNormalizedUser,
+        storage,
+        economyService,
+        parseQuantity,
+        formatDuration,
+        buildEconomyStatsText,
+        buildInventoryText,
+        incrementUserStat,
+        applyPunishment,
+        isOverrideSender,
+        botHasGroupAdminPrivileges: botIsAdmin,
+        registrationService,
+      })
+    )
     if (handledEconomyCommand) return
 
-    const handledModerationCommand = await handleModerationCommands({
-      sock,
-      msg,
-      from,
-      sender,
-      text,
-      cmd,
-      cmdName,
-      prefix,
-      isGroup,
-      senderIsAdmin,
-      mentioned,
-      jidNormalizedUser,
-      storage,
-      clearPunishment,
-      clearPendingPunishment,
-      getPunishmentMenuText,
-      getPunishmentChoiceFromText,
-      applyPunishment,
-      overrideJid,
-    })
+    const handledModerationCommand = await measureStage("router.moderation", async () =>
+      handleModerationCommands({
+        sock,
+        msg,
+        from,
+        sender,
+        text,
+        cmd,
+        cmdName,
+        prefix,
+        isGroup,
+        senderIsAdmin,
+        mentioned,
+        jidNormalizedUser,
+        storage,
+        clearPunishment,
+        clearPendingPunishment,
+        getPunishmentMenuText,
+        getPunishmentChoiceFromText,
+        applyPunishment,
+        overrideChecksEnabled,
+        overrideJid: overrideCompat.overrideJid,
+        overrideIdentifiers: overrideCompat.overrideIdentifiers,
+        overrideIdentitySet: overrideCompat.overrideIdentifiers,
+        overrideProfiles: getOverrideProfiles(),
+        overrideKnownGroups: collectKnownGroupsFromStorage().map((groupId) => ({
+          groupId,
+          groupName: getKnownGroupName(groupId),
+        })),
+        senderName: senderProfileName,
+      })
+    )
     if (handledModerationCommand) return
 
     // =========================
     // MOEDA (cara ou coroa)
     // =========================
-    const handledCoinRound = await caraOuCoroa.startCoinRound({
-      sock,
-      from,
-      sender,
-      cmd,
-      prefix,
-      isGroup,
-    })
+    const handledCoinRound = await measureStage("coinRound", async () =>
+      caraOuCoroa.startCoinRound({
+        sock,
+        from,
+        sender,
+        cmd,
+        prefix,
+        isGroup,
+      })
+    )
     if (handledCoinRound) return
 
     // =========================
@@ -1157,46 +3241,59 @@ async function startBot(){
         sender !== sock.user.id &&
         !((senderIsAdmin || isOverrideSender) && isCommand)
       ) {
-        try{
-          await sock.sendMessage(from,{ delete: msg.key })
-        }catch(e){
-          console.error("Erro ao apagar mensagem de usuário mutado", e)
-        }
+        await measureStage("mutedDelete", async () => {
+          try{
+            await sock.sendMessage(from,{ delete: msg.key })
+          }catch(e){
+            console.error("Erro ao apagar mensagem de usuário mutado", e)
+          }
+        })
         return
       }
     }
     // =========================
     // COMANDOS DE STREAKS
     // =========================
-    const handledStreakRanking = await caraOuCoroa.sendStreakRanking({
-      sock,
-      from,
-      cmd,
-      prefix,
-      isGroup,
-    })
+    const handledStreakRanking = await measureStage("streakRanking", async () =>
+      caraOuCoroa.sendStreakRanking({
+        sock,
+        from,
+        cmd,
+        prefix,
+        isGroup,
+      })
+    )
     if (handledStreakRanking) return
 
-    const handledStreakValue = await caraOuCoroa.sendStreakValue({
-      sock,
-      from,
-      sender,
-      mentioned,
-      cmd,
-      prefix,
-      isGroup,
-    })
+    const handledStreakValue = await measureStage("streakValue", async () =>
+      caraOuCoroa.sendStreakValue({
+        sock,
+        from,
+        sender,
+        mentioned,
+        cmd,
+        prefix,
+        isGroup,
+      })
+    )
     if (handledStreakValue) return
 
     } catch (err) {
+      perfStats.messagesErrored += 1
       telemetry.incrementCounter("command.error", 1, {
         scope: "messages.upsert",
+        scope: "messages.upsert.processing",
       })
       telemetry.appendEvent("command.error", {
         scope: "messages.upsert",
         message: String(err?.message || err || "unknown"),
+        scope: "messages.upsert.processing",
+        message: String(err?.message || err || "unknown error"),
       })
       console.error("Erro no processamento de messages.upsert", err)
+    } finally {
+      perfStats.lastProcessedAt = Date.now()
+      recordMetric(perfStats.processingMs, perfStats.lastProcessedAt - processingStartedAt)
     }
 
   })

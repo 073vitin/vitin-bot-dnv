@@ -1,4 +1,5 @@
 const crypto = require("crypto")
+const { downloadMediaMessage } = require("@whiskeysockets/baileys")
 const storage = require("./storage")
 const economyService = require("./economyService")
 const telemetry = require("./telemetryService")
@@ -68,7 +69,7 @@ function getPunishmentMenuText() {
     "5. Mute total por 5 minutos (tudo que enviar será apagado).",
     "--- Novas punições ---",
     "6. Sem vogais por 5 minutos (severidade escala tempo em 1.5x).",
-    "7. Toda mensagem deve começar com 🚨URGENTE: por 5 minutos (severidade escala tempo em 1.5x).",
+    "7. Toda mensagem deve começar com URGENTE (🚨 e ':' opcionais) por 5 minutos (severidade escala tempo em 1.5x).",
     "8. Mensagem deve conter palavras da lista por 5 minutos (severidade escala tempo em 1.5x e quantidade +1 por nível).",
     "9. Mensagens em caixa alta por 10 minutos (severidade adiciona +2 minutos por nível).",
     "10. Mensagens são apagadas e repostadas pelo bot por 5 minutos (severidade não escala).",
@@ -82,24 +83,24 @@ function getPunishmentDetailsText() {
   return [
     "📚 Lista detalhada de punições (1-13)",
     "",
-    "1. Máx. 5 caracteres (clássica)",
+    "1. Máx. 5 caracteres",
     "- Regra: mensagem com mais de 5 caracteres é apagada.",
     "- Duração: 5 minutos x severidade.",
     "",
-    "2. 1 mensagem a cada 20s (clássica)",
+    "2. 1 mensagem a cada 20s",
     "- Regra: se enviar antes do intervalo, apaga.",
     "- Duração: 10 minutos x severidade.",
     "",
-    "3. Bloqueio de letras (clássica)",
+    "3. Bloqueio de letras",
     "- Regra: mensagem com letras bloqueadas é apagada.",
-    "- Escala: +1 letra proibida por severidade (arredonda para cima quando aplicável).",
+    "- Escala: +1 letra proibida por severidade.",
     "- Término: indefinido, encerra ao cumprir condição de saída.",
     "",
-    "4. Só emojis/figurinhas (clássica)",
+    "4. Só emojis/figurinhas",
     "- Regra: texto fora de emoji/sticker é apagado.",
     "- Duração: 5 minutos x severidade.",
     "",
-    "5. Mute total (clássica)",
+    "5. Mute total",
     "- Regra: toda mensagem é apagada.",
     "- Duração: 5 minutos x severidade.",
     "",
@@ -107,8 +108,8 @@ function getPunishmentDetailsText() {
     "- Regra: mensagem com vogal é apagada.",
     "- Duração: 5 minutos, escala x1.5 por severidade.",
     "",
-    "7. Prefixo obrigatório 🚨URGENTE:",
-    "- Regra: mensagem sem esse início é apagada.",
+    "7. Prefixo obrigatório",
+    "- Regra: mensagem sem início em 🚨URGENTE: é apagada.",
     "- Duração: 5 minutos, escala x1.5 por severidade.",
     "",
     "8. Palavra(s) da lista",
@@ -121,7 +122,7 @@ function getPunishmentDetailsText() {
     "- Duração: 10 minutos +2 minutos por severidade.",
     "",
     "10. Apaga e reposta",
-    "- Regra: bot apaga mensagem e reposta em texto.",
+    "- Regra: bot apaga e reposta texto/mídia (quando possível).",
     "- Duração: 5 minutos.",
     "- Escala: não escala com severidade.",
     "",
@@ -220,14 +221,89 @@ function hasLetters(text = "") {
   return /[a-z]/i.test(String(text || ""))
 }
 
+function matchesUrgentPrefix(text = "", requiredPrefix = "🚨URGENTE:") {
+  const raw = String(text || "")
+  const trimmedStart = raw.trimStart()
+  if (!trimmedStart) return false
+
+  // Keep strict support for configured prefix, but accept small user-input variations.
+  const strictPrefix = String(requiredPrefix || "🚨URGENTE:").trim()
+  if (strictPrefix && trimmedStart.startsWith(strictPrefix)) return true
+
+  return /^(?:🚨\s*)?urgente\s*:?\s*/i.test(trimmedStart)
+}
+
 function getResendText(msg, text = "") {
   const trimmed = String(text || "").trim()
   if (trimmed) return trimmed
-  if (msg?.message?.stickerMessage) return "[figurinha reenviada pelo bot]"
-  if (msg?.message?.imageMessage) return "[imagem reenviada pelo bot]"
-  if (msg?.message?.videoMessage) return "[vídeo reenviado pelo bot]"
-  if (msg?.message?.audioMessage) return "[áudio reenviado pelo bot]"
+  if (msg?.message?.stickerMessage) return "[figurinhas não podem ser reenviadas pelo bot]"
+  if (msg?.message?.imageMessage) return "[imagens não podem ser reenviadas pelo bot]"
+  if (msg?.message?.videoMessage) return "[vídeos não podem ser reenviados pelo bot]"
+  if (msg?.message?.audioMessage) return "[áudios não podem ser reenviados pelo bot]"
   return "[mensagem reenviada pelo bot]"
+}
+
+async function resendPunishedContent(sock, from, sender, msg, text = "") {
+  const mentionTag = `@${sender.split("@")[0]}`
+  const resendPrefix = `📢 Repost de ${mentionTag}: `
+
+  const sendFallbackText = async () => {
+    const resendText = getResendText(msg, text)
+    await sock.sendMessage(from, {
+      text: `${resendPrefix}${resendText}`,
+      mentions: [sender],
+    })
+  }
+
+  try {
+    if (msg?.message?.stickerMessage) {
+      const stickerBuffer = await downloadMediaMessage(msg, "buffer", {}, {})
+      await sock.sendMessage(from, { sticker: stickerBuffer })
+      await sock.sendMessage(from, {
+        text: `${resendPrefix}[figurinha reenviada pelo bot]`,
+        mentions: [sender],
+      })
+      return
+    }
+
+    if (msg?.message?.imageMessage) {
+      const imageBuffer = await downloadMediaMessage(msg, "buffer", {}, {})
+      await sock.sendMessage(from, {
+        image: imageBuffer,
+        caption: `${resendPrefix}${getResendText(msg, text)}`,
+        mentions: [sender],
+      })
+      return
+    }
+
+    if (msg?.message?.videoMessage) {
+      const videoBuffer = await downloadMediaMessage(msg, "buffer", {}, {})
+      await sock.sendMessage(from, {
+        video: videoBuffer,
+        caption: `${resendPrefix}${getResendText(msg, text)}`,
+        mentions: [sender],
+      })
+      return
+    }
+
+    if (msg?.message?.audioMessage) {
+      const audioBuffer = await downloadMediaMessage(msg, "buffer", {}, {})
+      await sock.sendMessage(from, {
+        audio: audioBuffer,
+        mimetype: "audio/ogg; codecs=opus",
+        ptt: Boolean(msg?.message?.audioMessage?.ptt),
+      })
+      await sock.sendMessage(from, {
+        text: `${resendPrefix}[audio reenviado pelo bot]`,
+        mentions: [sender],
+      })
+      return
+    }
+  } catch (e) {
+    console.error("Erro ao reenviar mídia na punição 10", e)
+  }
+
+  await sendFallbackText()
 }
 
 function normalizeUserId(value = "") {
@@ -376,7 +452,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
       endsAt: now + durationMs,
       requiredPrefix: "🚨URGENTE:",
     }
-    warningText = `${mentionTag}, punição ativada: por *${Math.ceil(durationMs / 60_000)} minutos* toda mensagem deve começar com *🚨URGENTE:*.`
+    warningText = `${mentionTag}, punição ativada: por *${Math.ceil(durationMs / 60_000)} minutos* toda mensagem deve começar com *URGENTE* (🚨 e ':' são opcionais).`
   }
 
   if (punishmentId === "8") {
@@ -512,9 +588,10 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
   if (punishment.type === "lettersBlock") {
     const letters = punishment.letters || []
     if (isUnlockLettersMessage(text, letters)) {
+      const lettersLabel = letters.length > 0 ? letters.join(" / ") : "(sem letras)"
       clearPunishment(from, sender)
       await sock.sendMessage(from, {
-        text: `@${sender.split("@")[0]}, você cumpriu a condição e foi liberado da punição das letras (${letters[0]} / ${letters[1]}).`,
+        text: `@${sender.split("@")[0]}, você cumpriu a condição e foi liberado da punição das letras (${lettersLabel}).`,
         mentions: [sender]
       })
       return false
@@ -536,7 +613,7 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
 
   if (punishment.type === "urgentPrefix") {
     const prefix = String(punishment.requiredPrefix || "🚨URGENTE:")
-    shouldDelete = !String(text || "").startsWith(prefix)
+    shouldDelete = !matchesUrgentPrefix(text, prefix)
   }
 
   if (punishment.type === "wordListRequired") {
@@ -600,11 +677,7 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
   try {
     await sock.sendMessage(from, { delete: msg.key })
     if (punishment.type === "deleteAndRepost") {
-      const resendText = getResendText(msg, text)
-      await sock.sendMessage(from, {
-        text: `📢 Repost de @${sender.split("@")[0]}: ${resendText}`,
-        mentions: [sender],
-      })
+      await resendPunishedContent(sock, from, sender, msg, text)
     }
   } catch (e) {
     console.error("Erro ao apagar mensagem por punição", e)
@@ -627,6 +700,25 @@ async function handlePendingPunishmentChoice({ sock, from, sender, text, mention
   const coinPunishmentPending = storage.getCoinPunishmentPending()
   const pending = coinPunishmentPending[from]?.[sender]
   if (!pending || (senderIsAdmin && isCommand)) return false
+
+  const hasEligibilityMetadata = Object.prototype.hasOwnProperty.call(pending, "punishmentEligible") ||
+    Object.prototype.hasOwnProperty.call(pending, "minPunishmentBet") ||
+    Object.prototype.hasOwnProperty.call(pending, "roundBet")
+  if (hasEligibilityMetadata) {
+    const explicitEligible = pending.punishmentEligible !== false
+    const minPunishmentBet = Number.parseInt(String(pending.minPunishmentBet ?? 0), 10)
+    const roundBet = Number.parseInt(String(pending.roundBet ?? 0), 10)
+    const thresholdViolated = Number.isFinite(minPunishmentBet) && minPunishmentBet > 0 &&
+      Number.isFinite(roundBet) && roundBet > 0 && roundBet < minPunishmentBet
+
+    if (!explicitEligible || thresholdViolated) {
+      clearPendingPunishment(from, sender)
+      await sock.sendMessage(from, {
+        text: "Essa escolha de punição expirou por elegibilidade de aposta. Inicie uma nova rodada.",
+      })
+      return true
+    }
+  }
 
   const punishmentChoice = getPunishmentChoiceFromText(text)
   let target = pending.target
