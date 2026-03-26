@@ -388,14 +388,6 @@ ${feedbackText}`,
   }
 
   if (cmd === prefix + "punicoeslista" || cmd === prefix + "puniçõeslista") {
-    if (isGroup && !botHasGroupAdminPrivileges) {
-      trackUtility("punicoeslista", "rejected", { reason: "bot-not-admin" })
-      await sock.sendMessage(from, {
-        text: "⚠️ Não consigo enviar lista de punições neste grupo sem privilégio de administrador.",
-      })
-      return true
-    }
-
     trackUtility("punicoeslista", "success")
     const detailsText = typeof getPunishmentDetailsText === "function"
       ? getPunishmentDetailsText()

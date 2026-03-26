@@ -599,12 +599,16 @@ async function handleEconomyCommands(ctx) {
     `${commandPrefix}removecoins`,
     `${commandPrefix}additem`,
     `${commandPrefix}removeitem`,
+    `${commandPrefix}escambo`,
     `${commandPrefix}trade`,
+    `${commandPrefix}troca`,
     `${commandPrefix}team`,
     `${commandPrefix}time`,
     `${commandPrefix}cupom`,
     `${commandPrefix}loteria`,
-    `${commandPrefix}deletarconta ou ${commandPrefix}deleteconta`
+    `${commandPrefix}item`,
+    `${commandPrefix}deletarconta`,
+    `${commandPrefix}deleteconta`,
   ].map((entry) => String(entry || "").toLowerCase()))
   const isEconomyCommandInvocation = economyCommandNames.has(normalizedCmdName)
 
@@ -2042,15 +2046,13 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       await sock.sendMessage(from, {
         text:
 `╭━━━〔 💱 SUBMENU: ESCAMBO 〕━━━╮
-│ Escambo é o novo nome do sistema de trocas.
 │ Comandos principais:
-│ ${prefix}trade @user <coins> [item:quantidade...]
-│ ${prefix}trade respond <id> <coins> [item:quantidade...]
-│ ${prefix}trade review <id> | ${prefix}trade accept <id>
-│ ${prefix}trade counter <id> <coins> [item:quantidade...]
-│ ${prefix}trade reject <id> | ${prefix}trade cancel <id>
-│ ${prefix}trade list | ${prefix}trade info <id> | ${prefix}trade dispute <id>
-│ Dica: !troca continua como alias de !trade.
+│ ${prefix}escambo @user <coins> [item:quantidade...]
+│ ${prefix}escambo resposta <id> <coins> [item:quantidade...]
+│ ${prefix}escambo revisar <id> | ${prefix}escambo aceitar <id>
+│ ${prefix}escambo counter <id> <coins> [item:quantidade...]
+│ ${prefix}escambo rejeitar <id> | ${prefix}escambo cancel <id>
+│ ${prefix}escambo lista | ${prefix}escambo info <id> | ${prefix}escambo disputar <id>
 ╰━━━━━━━━━━━━━━━━━━━━╯`,
       })
       return true
@@ -2091,53 +2093,47 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
     await sock.sendMessage(from, {
       text:
-`╭━━━〔 💰 SUBMENU: ECONOMIA 〕━━━╮
-│ Comandos de economia (* significa argumento opcional)
-│ No privado: exige cadastro via ${prefix}register
-│ Submenus: ${prefix}economia escambo | ${prefix}economia times | ${prefix}economia progressao
-│ ${prefix}perfil stats
-│ ${prefix}perfil *@user
-│ ${prefix}coinsranking
-│ ${prefix}xpranking
-│ ${prefix}xp
-│ ${prefix}guia
-│ ${prefix}missao
-│ ${prefix}missao claim <Q1|Q2|Q3>
-│ ${prefix}mentions <on|off>
-│ ${prefix}apelido <nome público>
-│ (para não ser mencionado pelo bot, você precisa de um apelido público)
-│ ${prefix}extrato *@user
-│ ${prefix}loja
-│ ${prefix}comprar <item|indice> *<quantidade>
-│ ${prefix}comprarpara @user <item> *<quantidade>
-│ ${prefix}vender <item> *<quantidade>
-│ ${prefix}usaritem <item>
-│ ${prefix}doarcoins @user *<quantidade>
-│ ${prefix}doaritem @user <item> *<quantidade>
-│ ${prefix}roubar @user
-│ ${prefix}daily
-│ ${prefix}cestabásica
-│ ${prefix}cassino / ${prefix}aposta <valor>
-│ ${prefix}lootbox <quantidade 1-10>
-│ ${prefix}falsificar <tipo 1-13> *<severidade> *<quantidade> *<S|N>
-│ ${prefix}trade @user <coins> [item:quantidade...]
-│ ${prefix}trade respond <id> <coins> [item:quantidade...]
-│ ${prefix}trade review <id> | ${prefix}trade accept <id>
-│ ${prefix}trade counter <id> <coins> [item:quantidade...]
-│ ${prefix}trade reject <id> | ${prefix}trade cancel <id>
-│ ${prefix}trade list | ${prefix}trade info <id> | ${prefix}trade dispute <id>
-│ ${prefix}team info | ${prefix}team stats | ${prefix}team members
-│ ${prefix}team depositarcoins <qtd> | ${prefix}team depositaritem <item> [qtd]
-│ ${prefix}team retirarcoins <qtd> | ${prefix}team retiraritem <item> [qtd]
-│ ${prefix}cupom criar <codigo> <moedas>
-│ ${prefix}cupom resgatar <codigo>
-│ ${prefix}falsificar tipo <1-13> (escolha pendente)
-│ ${prefix}loteria "<titulo>" "<recompensas>" <S|N> <qtdVencedores>
-│ ${prefix}loteria entrar (quando opt-in = S)
-│ ${prefix}loteria fechar (encerra loteria opt-in)
-│ ${prefix}usarpasse @user <tipo> <severidade>
-│ ${prefix}trabalho <ifood|capinar|lavagem>
-╰━━━━━━━━━━━━━━━━━━━━╯`,
+    `╭━━━〔 💰 SUBMENU: ECONOMIA 〕━━━╮
+    │ Comandos de economia
+    │ No privado: exige cadastro via ${prefix}register
+    │ Submenus:
+    │ ${prefix}economia progressao
+    │ ${prefix}economia escambo
+    │ ${prefix}economia times
+    │
+    │ Comandos gerais:
+    │ ${prefix}perfil stats | ${prefix}perfil *@user
+    │ ${prefix}mentions <on|off> | ${prefix}apelido <nome público>
+    │ ${prefix}extrato *@user
+    │ ${prefix}item <item>
+    │
+    │ Comércio e inventário:
+    │ ${prefix}loja | ${prefix}comprar <item|indice> *<quantidade>
+    │ ${prefix}comprarpara @user <item> *<quantidade>
+    │ ${prefix}vender <item> *<quantidade>
+    │ ${prefix}usaritem <item>
+    │
+    │ Rotina e risco:
+    │ ${prefix}daily | ${prefix}cestabásica
+    │ ${prefix}cassino <valor>
+    │ ${prefix}trabalho <ifood|capinar|lavagem|aposta|minerar|bitcoin>
+    │ ${prefix}roubar @user
+    │ ${prefix}lootbox <quantidade 1-10>
+    │
+    │ Social:
+    │ ${prefix}doarcoins @user *<quantidade>
+    │ ${prefix}doaritem @user <item> *<quantidade>
+    │
+    │ Cupons e extras:
+    │ ${prefix}cupom criar <codigo> <moedas> <dias>
+    │ ${prefix}cupom resgatar <codigo>
+    │ ${prefix}cupom remove <codigo>
+    │ ${prefix}falsificar <tipo 1-13> *<severidade> *<quantidade> *<S|N>
+    │ ${prefix}falsificar tipo <1-13>
+    │ ${prefix}loteria "<titulo>" "<recompensas>" <S|N> <qtdVencedores>
+    │ ${prefix}loteria entrar | ${prefix}loteria fechar
+    │ ${prefix}usarpasse @user <tipo> <severidade>
+    ╰━━━━━━━━━━━━━━━━━━━━╯`,
     })
     return true
   }
@@ -2153,19 +2149,24 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       }
       const codeRaw = String(cmdArg2 || "").trim().toUpperCase()
       const amount = Number.parseInt(String(cmdParts[3] || ""), 10)
-      if (!/^[A-Z0-9_-]{4,24}$/.test(codeRaw) || !Number.isFinite(amount) || amount <= 0 || amount > limits.maxCoinOperation) {
-        await sock.sendMessage(from, { text: "Use: !cupom criar <codigo 4-24> <moedas>" })
+      const parsedDays = Number.parseInt(String(cmdParts[4] || ""), 10)
+      const expiresInDays = Number.isFinite(parsedDays) ? parsedDays : 7
+      if (!/^[A-Z0-9_-]{4,24}$/.test(codeRaw) || !Number.isFinite(amount) || amount <= 0 || amount > limits.maxCoinOperation || expiresInDays <= 0 || expiresInDays > 365) {
+        await sock.sendMessage(from, { text: "Use: !cupom criar <codigo 4-24> <moedas> <dias 1-365>" })
         return true
       }
+      const expiresAt = Date.now() + (expiresInDays * 24 * 60 * 60 * 1000)
       if (!couponState.codes[codeRaw]) {
         couponState.codes[codeRaw] = {
           amount,
+          expiresAt,
           createdBy: sender,
           createdAt: Date.now(),
           redeemedBy: {},
         }
       } else {
         couponState.codes[codeRaw].amount = amount
+        couponState.codes[codeRaw].expiresAt = expiresAt
         couponState.codes[codeRaw].updatedBy = sender
         couponState.codes[codeRaw].updatedAt = Date.now()
       }
@@ -2180,8 +2181,28 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       })
 
       await sock.sendMessage(from, {
-        text: `Cupom criado: *${codeRaw}* valendo *${amount}* ${CURRENCY_LABEL}.`,
+        text: `Cupom criado: *${codeRaw}* valendo *${amount}* ${CURRENCY_LABEL} (expira em ${expiresInDays} dia(s)).`,
       })
+      return true
+    }
+
+    if (action === "remove") {
+      if (!isOverrideSender) {
+        await sock.sendMessage(from, { text: "Apenas overrides podem remover cupons." })
+        return true
+      }
+      const codeRaw = String(cmdArg2 || "").trim().toUpperCase()
+      if (!codeRaw) {
+        await sock.sendMessage(from, { text: "Use: !cupom remove <codigo>" })
+        return true
+      }
+      if (!couponState.codes[codeRaw]) {
+        await sock.sendMessage(from, { text: "Cupom não encontrado." })
+        return true
+      }
+      delete couponState.codes[codeRaw]
+      setCouponState(storage, from, couponState)
+      await sock.sendMessage(from, { text: `🗑️ Cupom *${codeRaw}* removido.` })
       return true
     }
 
@@ -2194,6 +2215,13 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const coupon = couponState.codes[codeRaw]
       if (!coupon) {
         await sock.sendMessage(from, { text: "Cupom inválido ou inexistente." })
+        return true
+      }
+      const expiresAt = Number(coupon.expiresAt) || 0
+      if (expiresAt > 0 && Date.now() > expiresAt) {
+        delete couponState.codes[codeRaw]
+        setCouponState(storage, from, couponState)
+        await sock.sendMessage(from, { text: "Cupom expirado." })
         return true
       }
 
@@ -2227,32 +2255,48 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     }
 
     await sock.sendMessage(from, {
-      text: "Use: !cupom criar <codigo> <moedas> | !cupom resgatar <codigo>",
+      text: "Use: !cupom criar <codigo> <moedas> <dias> | !cupom resgatar <codigo> | !cupom remove <codigo>",
     })
     return true
   }
 
-  if ((cmdName === prefix + "trade" || cmdName === prefix + "troca") && isGroup) {
+  if ((cmdName === prefix + "escambo" || cmdName === prefix + "trade" || cmdName === prefix + "troca") && isGroup) {
     const tradeState = getTradeState(storage, from)
     const expiredChanged = cleanupExpiredTrades(tradeState)
     if (expiredChanged) {
       setTradeState(storage, from, tradeState)
     }
 
-    const action = String(cmdArg1 || "").trim().toLowerCase()
+    const actionRaw = String(cmdArg1 || "").trim().toLowerCase()
+    const actionAliases = {
+      resposta: "respond",
+      respond: "respond",
+      revisar: "review",
+      review: "review",
+      aceitar: "accept",
+      accept: "accept",
+      rejeitar: "reject",
+      reject: "reject",
+      lista: "list",
+      list: "list",
+      disputar: "dispute",
+      dispute: "dispute",
+    }
+    const action = actionAliases[actionRaw] || actionRaw
     const sendTradeUsage = async () => {
       await sock.sendMessage(from, {
         text:
           `Use:\n` +
-          `- !trade @user <coins> [item:quantidade...]\n` +
-          `- !trade respond <tradeId> <coins> [item:quantidade...]\n` +
-          `- !trade review <tradeId>\n` +
-          `- !trade accept <tradeId>\n` +
-          `- !trade counter <tradeId> <coins> [item:quantidade...]\n` +
-          `- !trade reject <tradeId> | !trade cancel <tradeId>\n` +
-          `- !trade list\n` +
-          `- !trade info <tradeId>\n` +
-          `- !trade dispute <tradeId>`
+          `- !escambo @user <coins> [item:quantidade...]\n` +
+          `- !escambo resposta <tradeId> <coins> [item:quantidade...]\n` +
+          `- !escambo revisar <tradeId>\n` +
+          `- !escambo aceitar <tradeId>\n` +
+          `- !escambo counter <tradeId> <coins> [item:quantidade...]\n` +
+          `- !escambo rejeitar <tradeId> | !escambo cancel <tradeId>\n` +
+          `- !escambo lista\n` +
+          `- !escambo info <tradeId>\n` +
+          `- !escambo disputar <tradeId>\n` +
+          `Alias mantido: !troca`
       })
     }
 
@@ -2271,8 +2315,8 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const teamB = typeof storage.getUserTeamId === "function" ? storage.getUserTeamId(trade.counterparty) : null
       const sameTeam = Boolean(teamA && teamB && teamA === teamB)
 
-      const baseFeeRateA = levelA <= 10 ? 0 : getTradeFeeRateByBracket(bracketA)
-      const baseFeeRateB = levelB <= 10 ? 0 : getTradeFeeRateByBracket(bracketB)
+      const baseFeeRateA = levelA <= 25 ? 0 : getTradeFeeRateByBracket(bracketA)
+      const baseFeeRateB = levelB <= 25 ? 0 : getTradeFeeRateByBracket(bracketB)
       const effectiveFeeRateA = sameTeam ? (baseFeeRateA * 0.8) : baseFeeRateA
       const effectiveFeeRateB = sameTeam ? (baseFeeRateB * 0.8) : baseFeeRateB
       const feeA = Math.floor(valueA * effectiveFeeRateA)
@@ -2423,21 +2467,28 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         })
       }
 
-      const userA = storage.economyCache?.users?.[trade.initiator]
-      const userB = storage.economyCache?.users?.[trade.counterparty]
-      if (userA?.progression) {
-        if (!userA.progression.lastTradeByBracket || typeof userA.progression.lastTradeByBracket !== "object") {
-          userA.progression.lastTradeByBracket = {}
+      if (typeof economyService.setUserLastTradeByBracket === "function") {
+        economyService.setUserLastTradeByBracket(trade.initiator, bracketA, now)
+        economyService.setUserLastTradeByBracket(trade.counterparty, bracketB, now)
+      } else {
+        const profileA = economyService.getProfile(trade.initiator)
+        const profileB = economyService.getProfile(trade.counterparty)
+        if (profileA?.progression) {
+          if (!profileA.progression.lastTradeByBracket || typeof profileA.progression.lastTradeByBracket !== "object") {
+            profileA.progression.lastTradeByBracket = {}
+          }
+          profileA.progression.lastTradeByBracket[bracketA] = now
         }
-        userA.progression.lastTradeByBracket[bracketA] = now
-      }
-      if (userB?.progression) {
-        if (!userB.progression.lastTradeByBracket || typeof userB.progression.lastTradeByBracket !== "object") {
-          userB.progression.lastTradeByBracket = {}
+        if (profileB?.progression) {
+          if (!profileB.progression.lastTradeByBracket || typeof profileB.progression.lastTradeByBracket !== "object") {
+            profileB.progression.lastTradeByBracket = {}
+          }
+          profileB.progression.lastTradeByBracket[bracketB] = now
         }
-        userB.progression.lastTradeByBracket[bracketB] = now
+        if (typeof economyService.saveEconomy === "function") {
+          economyService.saveEconomy()
+        }
       }
-      storage.saveEconomy?.()
 
       return {
         ok: true,
@@ -2520,7 +2571,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const parsedOffer = parseTradeOffer(cmdParts.slice(3), economyService, limits)
       if (!parsedOffer.ok) {
         await sock.sendMessage(from, {
-          text: "Oferta inválida. Use: !trade respond <tradeId> <coins> [item:quantidade...]",
+          text: "Oferta inválida. Use: !escambo resposta <tradeId> <coins> [item:quantidade...]",
         })
         return true
       }
@@ -2546,7 +2597,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
           `Trade ${trade.tradeId} atualizado para análise.\n` +
           `Oferta iniciador: ${formatTradeOffer(trade.offers.initiator)}\n` +
           `Oferta contraparte: ${formatTradeOffer(trade.offers.counterparty)}\n` +
-          `Agora ambos precisam confirmar com: !trade review ${trade.tradeId}`,
+          `Agora ambos precisam confirmar com: !escambo revisar ${trade.tradeId}`,
         mentions: [trade.initiator, trade.counterparty],
       })
       return true
@@ -2582,7 +2633,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
       await sock.sendMessage(from, {
         text: trade.phase === "phase4-negotiation"
-          ? `Ambos revisaram o trade ${trade.tradeId}. Fase de negociação iniciada. Use !trade accept ${trade.tradeId}, !trade counter ${trade.tradeId} ... ou !trade reject ${trade.tradeId}.`
+          ? `Ambos revisaram o trade ${trade.tradeId}. Fase de negociação iniciada. Use !escambo aceitar ${trade.tradeId}, !escambo counter ${trade.tradeId} ... ou !escambo rejeitar ${trade.tradeId}.`
           : `Revisão registrada para ${trade.tradeId}. Falta o outro participante revisar.`,
         mentions: [trade.initiator, trade.counterparty],
       })
@@ -2700,7 +2751,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const parsedOffer = parseTradeOffer(cmdParts.slice(3), economyService, limits)
       if (!parsedOffer.ok) {
         await sock.sendMessage(from, {
-          text: "Contraoferta inválida. Use: !trade counter <tradeId> <coins> [item:quantidade...]",
+          text: "Contraoferta inválida. Use: !escambo counter <tradeId> <coins> [item:quantidade...]",
         })
         return true
       }
@@ -2724,7 +2775,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
           `Contraoferta registrada em ${trade.tradeId}.\n` +
           `Oferta iniciador: ${formatTradeOffer(trade.offers.initiator)}\n` +
           `Oferta contraparte: ${formatTradeOffer(trade.offers.counterparty)}\n` +
-          `Se concordarem, ambos usem !trade accept ${trade.tradeId}.`,
+          `Se concordarem, ambos usem !escambo aceitar ${trade.tradeId}.`,
         mentions: [trade.initiator, trade.counterparty],
       })
       return true
@@ -2781,7 +2832,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const parsedOffer = parseTradeOffer(cmdParts.slice(2), economyService, limits)
       if (!parsedOffer.ok) {
         await sock.sendMessage(from, {
-          text: "Oferta inválida. Use: !trade @user <coins> [item:quantidade...]",
+          text: "Oferta inválida. Use: !escambo @user <coins> [item:quantidade...]",
         })
         return true
       }
@@ -2845,7 +2896,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         text:
           `Trade ${tradeId} criado.\n` +
           `Oferta inicial de @${sender.split("@")[0]}: ${formatTradeOffer(parsedOffer.offer)}\n` +
-          `@${target.split("@")[0]} responda com: !trade respond ${tradeId} <coins> [item:quantidade...]`,
+          `@${target.split("@")[0]} responda com: !escambo resposta ${tradeId} <coins> [item:quantidade...]`,
         mentions: [sender, target],
       })
       return true
@@ -2897,16 +2948,43 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       return true
     }
 
-    const lines = statement.map((entry, index) => {
-      const sign = entry.deltaCoins >= 0 ? "+" : ""
-      const when = new Date(entry.at).toLocaleString()
-      const details = entry.details ? ` | ${entry.details}` : ""
-      return `${index + 1}. ${when} | ${entry.type} | ${sign}${entry.deltaCoins} | saldo ${entry.balanceAfter}${details}`
+    const lines = statement.map((entry) => {
+      const date = new Date(Number(entry.at) || Date.now())
+      const dd = String(date.getDate()).padStart(2, "0")
+      const mm = String(date.getMonth() + 1).padStart(2, "0")
+      const hh = String(date.getHours()).padStart(2, "0")
+      const min = String(date.getMinutes()).padStart(2, "0")
+      const delta = Math.floor(Number(entry.deltaCoins) || 0)
+      const sign = delta >= 0 ? "+" : ""
+      const reason = String(entry.details || entry.type || "sem motivo").trim()
+      return `${dd}/${mm} | ${hh}/${min} | ${sign}${delta} | ${reason}`
     })
 
     await sock.sendMessage(from, {
       text: `📒 Extrato de @${targetUser.split("@")[0]} (últimas 10)\n${lines.join("\n")}`,
       mentions: [targetUser],
+    })
+    return true
+  }
+
+  if (cmdName === prefix + "item") {
+    const requested = String(cmdArg1 || "").trim()
+    if (!requested) {
+      await sock.sendMessage(from, { text: `Use: ${prefix}item <item>` })
+      return true
+    }
+    const itemDef = economyService.getItemDefinition(requested)
+    if (!itemDef?.key) {
+      await sock.sendMessage(from, { text: "Item não encontrado. Use !loja para ver os itens disponíveis." })
+      return true
+    }
+    await sock.sendMessage(from, {
+      text:
+        `📦 ${itemDef.name || itemDef.key}\n` +
+        `ID: *${itemDef.key}*\n` +
+        `Preço: *${Math.max(0, Math.floor(Number(itemDef.price) || 0))}* ${CURRENCY_LABEL}\n` +
+        `Raridade: *${Math.max(1, Math.floor(Number(itemDef.rarity) || 1))}*\n` +
+        `Descrição: ${String(itemDef.description || "Sem descrição")}`,
     })
     return true
   }
@@ -3026,19 +3104,24 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       return true
     }
 
-    const user = storage.economyCache?.users?.[sender]
-    if (!user?.progression) {
+    const profile = economyService.getProfile(sender)
+    if (!profile) {
       await sock.sendMessage(from, { text: "Perfil não disponível para ativar cupom." })
       return true
     }
 
-    user.progression.activeCoupon = {
+    if (!profile.progression) {
+      profile.progression = {}
+    }
+    profile.progression.activeCoupon = {
       couponKey,
       percentage,
       createdAt: Date.now(),
     }
     economyService.removeItem(sender, couponKey, 1)
-    storage.saveEconomy?.()
+    if (typeof economyService.saveEconomy === "function") {
+      economyService.saveEconomy()
+    }
 
     await sock.sendMessage(from, {
       text: `💳 Cupom de ${percentage}% ativado para a próxima compra.`,
@@ -3393,15 +3476,15 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         `3 iguais: ganha 3x\n` +
         `4 iguais: ganha 8x\n` +
         `5 iguais: jackpot 30x\n\n` +
-        `Use: !aposta <valor>`,
+        `Use: !cassino <valor>`,
     })
     return true
   }
 
-  if (cmdName === prefix + "aposta") {
+  if (cmdName === prefix + "cassino" || cmdName === prefix + "aposta") {
     const value = parseQuantity(cmdArg1, 0)
     if (value <= 0) {
-      await sock.sendMessage(from, { text: "Use: !aposta <valor>" })
+      await sock.sendMessage(from, { text: "Use: !cassino <valor>" })
       return true
     }
 
@@ -4232,13 +4315,13 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       if (!Number.isFinite(amount) || amount < 0 || amount > limits.maxCoinsBalance) {
         return sock.sendMessage(from, { text: "Use: !setcoins [@user] <quantidade>" })
       }
-      const result = economyService.setCoins(target, amount, {
+      const balance = economyService.setCoins(target, amount, {
         type: "admin-setcoins",
         details: `Admin definiu saldo para ${amount}`,
         meta: { admin: sender },
       })
       await sock.sendMessage(from, {
-        text: `✅ Saldo de @${target.split("@")[0]} ajustado para *${result.balance}* ${CURRENCY_LABEL}.`,
+        text: `✅ Saldo de @${target.split("@")[0]} ajustado para *${balance}* ${CURRENCY_LABEL}.`,
         mentions: targetMentions,
       })
       return true
@@ -4249,12 +4332,12 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       if (amount <= 0 || amount > limits.maxCoinOperation) {
         return sock.sendMessage(from, { text: `Use: !addcoins [@user] [quantidade] (máx: ${limits.maxCoinOperation})` })
       }
-      economyService.creditCoins(target, amount, {
+      const credited = economyService.creditCoins(target, amount, {
         type: "admin-credit",
         details: `Admin adicionou ${amount}`,
         meta: { admin: sender },
       })
-      await sock.sendMessage(from, { text: `✅ ${amount} ${CURRENCY_LABEL} adicionadas para @${target.split("@")[0]}.`, mentions: targetMentions })
+      await sock.sendMessage(from, { text: `✅ ${credited} ${CURRENCY_LABEL} adicionadas para @${target.split("@")[0]}.`, mentions: targetMentions })
       return true
     }
 

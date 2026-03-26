@@ -786,10 +786,9 @@ const COMMAND_HELP = {
     name: "Usar Item",
     aliases: ["usaritem"],
     description: "Usa um item do seu inventário",
-    usage: "!usaritem <item> [@user]",
+    usage: "!usaritem <item>",
     commonUsage: [
-      "!usaritem escudo - Usar escudo em si mesmo",
-      "!usaritem poção @usuario - Usar em outro",
+      "!usaritem boosterxp - Usar o booster de xp",
     ],
     details: "Itens consumíveis têm efeitos imediatos.",
   },

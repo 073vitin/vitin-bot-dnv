@@ -62,6 +62,7 @@ const DATA_EXPORT_PASSWORD = String(process.env.PROFILER_PASSWORD || "").trim() 
 const pendingBroadcastBySender = new Map()
 const pendingOverrideAddBySender = new Map()
 const pendingEconomyWipeBySender = new Map()
+const pendingUnregisterBySender = new Map()
 const knownGroupIds = new Set()
 const groupNameCache = {}
 const userNameCache = {}
@@ -2206,6 +2207,43 @@ async function startBot(){
         })
         return
       }
+      const unregisterAction = String(cmdArg1 || "").trim().toLowerCase()
+      const pendingUnregister = pendingUnregisterBySender.get(sender)
+      const now = Date.now()
+
+      if (pendingUnregister && pendingUnregister.expiresAt <= now) {
+        pendingUnregisterBySender.delete(sender)
+      }
+
+      if (unregisterAction === "cancelar") {
+        pendingUnregisterBySender.delete(sender)
+        await sock.sendMessage(from, {
+          text: "✅ Solicitação de unregister cancelada.",
+        })
+        return
+      }
+
+      if (unregisterAction !== "confirmar") {
+        pendingUnregisterBySender.set(sender, {
+          expiresAt: now + (2 * 60 * 1000),
+        })
+        await sock.sendMessage(from, {
+          text:
+            `⚠️ Confirme para remover seu registro com *${prefix}unregister confirmar* em até 2 minutos.\n` +
+            `Para abortar, use *${prefix}unregister cancelar*.\n\n` +
+            `Obs: para apagar também os dados de economia, use *${prefix}deleteconta* separadamente.`,
+        })
+        return
+      }
+
+      if (!pendingUnregisterBySender.has(sender)) {
+        await sock.sendMessage(from, {
+          text: `Confirmação não iniciada. Use *${prefix}unregister* e depois *${prefix}unregister confirmar*.`,
+        })
+        return
+      }
+
+      pendingUnregisterBySender.delete(sender)
       const unreg = registrationService.unregisterUser(sender)
       if (!unreg.ok) {
         await sock.sendMessage(from, { text: "Você não está registrado no sistema." })
@@ -2417,15 +2455,19 @@ async function startBot(){
         applyPunishment,
         clearPendingPunishment,
         minPunishmentBet: 4,
-        rewardWinner: async (winnerId, rewardMultiplier = 1) => {
+        rewardWinner: async (winnerId, rewardMultiplier = 1, wagerMultiplier = 2) => {
         const safeMultiplier = Number.isFinite(Number(rewardMultiplier)) && Number(rewardMultiplier) > 0
           ? Math.floor(Number(rewardMultiplier))
           : 1
-        const amount = 25 * safeMultiplier
+        const safeWager = Number.isFinite(Number(wagerMultiplier)) && Number(wagerMultiplier) >= 2
+          ? Math.floor(Number(wagerMultiplier))
+          : 2
+        const baseBuyIn = 25 * safeWager
+        const amount = baseBuyIn + (25 * safeWager * safeMultiplier)
         economyService.creditCoins(winnerId, amount, {
           type: "game-reward",
           details: "Recompensa de Cara ou Coroa",
-          meta: { game: "caraoucoroa" },
+          meta: { game: "caraoucoroa", wagerMultiplier: safeWager, rewardMultiplier: safeMultiplier },
         })
         incrementUserStat(winnerId, "gameCoinWin", 1)
         incrementUserStat(winnerId, "moneyGameWon", amount)
@@ -2437,29 +2479,21 @@ async function startBot(){
           mentions: [winnerId],
         })
       },
-        chargeLoser: async (loserId, lossMultiplier = 1) => {
+        chargeLoser: async (loserId, lossMultiplier = 1, wagerMultiplier = 2) => {
         const safeMultiplier = Number.isFinite(Number(lossMultiplier)) && Number(lossMultiplier) > 0
           ? Math.floor(Number(lossMultiplier))
           : 1
-        const amount = 25 * safeMultiplier
-        const taken = economyService.debitCoinsFlexible(loserId, amount, {
-          type: "game-loss",
-          details: "Derrota em Cara ou Coroa",
-          meta: { game: "caraoucoroa" },
-        })
+        const safeWager = Number.isFinite(Number(wagerMultiplier)) && Number(wagerMultiplier) >= 2
+          ? Math.floor(Number(wagerMultiplier))
+          : 2
         incrementUserStat(loserId, "gameCoinLoss", 1)
         if (safeMultiplier > 1) {
           incrementUserStat(loserId, "gameDobroLoss", 1)
         }
-        if (taken > 0) {
-          incrementUserStat(loserId, "moneyGameLost", taken)
-        }
-        if (taken > 0) {
-          await sock.sendMessage(from, {
-            text: `💸 @${loserId.split("@")[0]} perdeu *${taken}* Epsteincoins (Cara ou Coroa).`,
-            mentions: [loserId],
-          })
-        }
+        await sock.sendMessage(from, {
+          text: `💸 @${loserId.split("@")[0]} perdeu o buy-in de *${25 * safeWager}* Epsteincoins (Cara ou Coroa).`,
+          mentions: [loserId],
+        })
         },
       })
     )
@@ -2626,15 +2660,12 @@ async function startBot(){
 
       if (options?.payoutMode === "lobby-bet-formula") {
         const playerBetByPlayer = options?.playerBetByPlayer || {}
-        const buyInByPlayer = options?.buyInByPlayer || {}
 
         for (const playerId of uniquePlayers) {
           const betRaw = Number.parseInt(String(playerBetByPlayer[playerId] ?? 1), 10)
           const bet = Number.isFinite(betRaw) ? Math.max(1, Math.min(10, betRaw)) : 1
-          const ownBuyInRaw = Number.parseInt(String(buyInByPlayer[playerId] ?? 0), 10)
-          const ownBuyIn = Number.isFinite(ownBuyInRaw) ? Math.max(0, ownBuyInRaw) : 0
 
-          const amount = Math.max(0, safePool - ownBuyIn) * bet
+          const amount = safePool * bet
           if (amount <= 0) continue
 
           economyService.creditCoins(playerId, amount, {
@@ -2643,16 +2674,15 @@ async function startBot(){
             meta: {
               game: gameLabel.toLowerCase(),
               poolAmount: safePool,
-              ownBuyIn,
               playerBet: bet,
-              formula: "(pool-ownBuyIn)*bet",
+              formula: "pool*bet",
             },
           })
           incrementUserStat(playerId, "moneyGameWon", amount)
           await sock.sendMessage(from, {
             text:
               `🏦 @${playerId.split("@")[0]} recebeu *${amount}* Epsteincoins da pool (${gameLabel}).\n` +
-              `Fórmula: (pool ${safePool} - buy-in ${ownBuyIn}) x bet ${bet}.`,
+              `Fórmula: pool ${safePool} x bet ${bet}.`,
             mentions: [playerId],
           })
         }
@@ -2977,46 +3007,64 @@ async function startBot(){
             text: comando.formatInstruction(currentState, resenhaOn)
           })
 
-          setTimeout(async () => {
+          let comandoFinalized = false
+          const finalizeComandoRound = async () => {
+            if (comandoFinalized) return
+            comandoFinalized = true
+
             const finalState = storage.getGameState(from, "comandoActive")
-            if (finalState) {
-              const participants = Array.from(new Set((finalState.participants || []).filter(Boolean)))
-              const resenhaOn = isResenhaModeEnabled()
-              const loser = comando.getLoser(finalState)
-              await sock.sendMessage(from, {
-                text: comando.formatResults(finalState, resenhaOn),
-                mentions: loser ? [loser] : [],
-              })
-              if (participants.length <= 1) {
-                if (participants.length === 1) {
-                  const soloPlayer = participants[0]
-                  incrementUserStat(soloPlayer, "gameComandoWin", 1)
-                  await rewardPlayer(soloPlayer, 20, 1, "Comando (solo)")
-                }
-              } else if (loser) {
-                const rewardedPlayers = finalState.instruction?.cmd === "silence"
-                  ? (() => {
-                      const startedAt = Number(finalState.instructionStartedAt) || 0
-                      const endedAt = Date.now()
-                      const participantLastMessageAt = finalState.participantLastMessageAt || {}
-                      return (finalState.participants || []).filter((playerId) => {
-                        if (!playerId || playerId === loser) return false
-                        const lastAt = Number(participantLastMessageAt[playerId]) || 0
-                        return lastAt >= startedAt && lastAt <= endedAt
-                      })
-                    })()
-                  : (finalState.compliers || [])
-                      .map((entry) => entry.playerId)
-                      .filter((playerId) => playerId && playerId !== loser)
-                rewardedPlayers.forEach((playerId) => incrementUserStat(playerId, "gameComandoWin", 1))
-                incrementUserStat(loser, "gameComandoLoss", 1)
-                await rewardPlayers(rewardedPlayers, GAME_REWARDS.COMANDO_SUCCESS, 1, "Comando")
-                if (finalState.instruction?.cmd === "silence") {
-                  await applyRandomGamePunishment(loser)
-                }
+            if (!finalState) return
+
+            const participants = Array.from(new Set((finalState.participants || []).filter(Boolean)))
+            const finalResenhaOn = isResenhaModeEnabled()
+            const loser = comando.getLoser(finalState)
+            await sock.sendMessage(from, {
+              text: comando.formatResults(finalState, finalResenhaOn),
+              mentions: loser ? [loser] : [],
+            })
+
+            if (participants.length > 1 && loser) {
+              const rewardedPlayers = finalState.instruction?.cmd === "silence"
+                ? (() => {
+                    const startedAt = Number(finalState.instructionStartedAt) || 0
+                    const endedAt = Date.now()
+                    const participantLastMessageAt = finalState.participantLastMessageAt || {}
+                    return (finalState.participants || []).filter((playerId) => {
+                      if (!playerId || playerId === loser) return false
+                      const lastAt = Number(participantLastMessageAt[playerId]) || 0
+                      return lastAt >= startedAt && lastAt <= endedAt
+                    })
+                  })()
+                : (finalState.compliers || [])
+                    .map((entry) => entry.playerId)
+                    .filter((playerId) => playerId && playerId !== loser)
+              rewardedPlayers.forEach((playerId) => incrementUserStat(playerId, "gameComandoWin", 1))
+              incrementUserStat(loser, "gameComandoLoss", 1)
+              await rewardPlayers(rewardedPlayers, GAME_REWARDS.COMANDO_SUCCESS, 1, "Comando")
+              if (finalState.instruction?.cmd === "silence") {
+                await applyRandomGamePunishment(loser)
               }
-              storage.clearGameState(from, "comandoActive")
             }
+
+            storage.clearGameState(from, "comandoActive")
+          }
+
+          if (currentState.instruction?.cmd === "silence") {
+            const silenceStopwatch = setInterval(async () => {
+              const liveState = storage.getGameState(from, "comandoActive")
+              if (!liveState || comandoFinalized) {
+                clearInterval(silenceStopwatch)
+                return
+              }
+              if (liveState.silenceBreaker) {
+                clearInterval(silenceStopwatch)
+                await finalizeComandoRound()
+              }
+            }, 500)
+          }
+
+          setTimeout(async () => {
+            await finalizeComandoRound()
           }, 20_000)
         }, 10_000)
 

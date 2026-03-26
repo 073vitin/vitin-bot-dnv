@@ -228,7 +228,7 @@ async function handleCoinGuess({
     storage.setCoinHistoricalMax(coinHistoricalMax)
 
     if (typeof rewardWinner === "function" && (!dobroOutcome.active || dobroOutcome.objectiveReachedNow)) {
-      await rewardWinner(sender, rewardMultiplier)
+      await rewardWinner(sender, rewardMultiplier, wagerMultiplier)
     }
 
     let winText =
@@ -290,7 +290,7 @@ async function handleCoinGuess({
     storage.setCoinHistoricalMax(coinHistoricalMax)
 
     if (typeof rewardWinner === "function" && (!dobroOutcome.active || dobroOutcome.objectiveReachedNow)) {
-      await rewardWinner(sender, rewardMultiplier)
+      await rewardWinner(sender, rewardMultiplier, wagerMultiplier)
     }
 
     let winText = `Você acertou! A moeda caiu em *${resolvedResult}*.\n🔥 Streak: *${streak}*`
@@ -318,10 +318,10 @@ async function handleCoinGuess({
   const dobroTriggered = !!dobroOutcome.triggeredDoublePunishment
   const lossMultiplier = dobroTriggered ? 2 : 1
   if (typeof chargeLoser === "function") {
-    await chargeLoser(sender, lossMultiplier)
+    await chargeLoser(sender, lossMultiplier, wagerMultiplier)
   }
   const lossLabel = (dobroTriggered && resenhaAveriguada[from])
-    ? "💥 Sua streak foi resetada.\n⚠️ DOBRO OU NADA DISPAROU."
+    ? "💥 Sua streak foi resetada."
     : "💥 Sua streak foi resetada."
   await sock.sendMessage(from, {
     text:
@@ -422,22 +422,22 @@ async function startCoinRound({ sock, from, sender, cmd, prefix, isGroup }) {
 
   const rawBet = String(coinMatch[1] || "").trim()
   const profile = economyService.getProfile(sender)
-  const betMultiplier = rawBet ? Number.parseInt(rawBet, 10) : 1
+  const betMultiplier = rawBet ? Number.parseInt(rawBet, 10) : 2
   if (rawBet && !/^\d+$/.test(rawBet)) {
     await sock.sendMessage(from, {
-      text: `❌ Aposta inválida! Use bet 1-10. Estado: ${profile.coins}. (Compat: Use: !moeda [2-10])`,
+      text: `❌ Aposta inválida! Use bet 2-10. Estado: ${profile.coins}. (Compat: Use: !moeda [2-10])`,
     })
     return true
   }
-  if (!Number.isFinite(betMultiplier) || betMultiplier < 1 || betMultiplier > 10) {
+  if (!Number.isFinite(betMultiplier) || betMultiplier < 2 || betMultiplier > 10) {
     await sock.sendMessage(from, {
-      text: `❌ Aposta inválida! Use bet 1-10. Estado: ${profile.coins}. (Compat: Use: !moeda [2-10])`,
+      text: `❌ Aposta inválida! Use bet 2-10. Estado: ${profile.coins}. (Compat: Use: !moeda [2-10])`,
     })
     return true
   }
 
   // Coin balance check & buy-in deduction
-  const buyInAmount = betMultiplier * 10
+  const buyInAmount = betMultiplier * 25
   if (profile.coins < buyInAmount) {
     await sock.sendMessage(from, {
       text: `Você precisa de pelo menos *${buyInAmount}* moedas para fazer uma aposta de *${betMultiplier}x*. Saldo atual: ${profile.coins}`,

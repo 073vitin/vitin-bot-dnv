@@ -33,7 +33,7 @@ npm test
 - routers/moderationRouter.js: comandos de moderação/punições.
 - routers/utilityRouter.js: utilitários e diversão.
 - services/economyService.js: motor de economia persistente (moedas, itens, estatísticas, cooldowns e extrato).
-- sercices/punishmentService.js: seleção, aplicação e validação de punições.
+- services/punishmentService.js: seleção, aplicação e validação de punições.
 - gameManager.js: ciclo de lobbies e gatilhos periódicos.
 - storage.js: cache e persistência de estado para jogos e moderação.
 - services/telemetryService.js: coleta de eventos e métricas para balanceamento e observabilidade (e curiosidade).
