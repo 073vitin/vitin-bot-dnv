@@ -201,6 +201,31 @@ function setCouponState(storage, groupId, state) {
   })
 }
 
+function resolveCouponScopeByCode(storage, codeRaw = "") {
+  const code = String(codeRaw || "").trim().toUpperCase()
+  if (!code) return null
+  const cache = typeof storage?.getCache === "function" ? storage.getCache() : null
+  const gameStates = cache?.gameStates && typeof cache.gameStates === "object"
+    ? cache.gameStates
+    : {}
+  const groupIds = Object.keys(gameStates)
+    .filter((groupId) => groupId && groupId !== "__system__")
+    .sort((a, b) => a.localeCompare(b))
+
+  for (const groupId of groupIds) {
+    const state = getCouponState(storage, groupId)
+    const coupon = state?.codes?.[code]
+    if (coupon) {
+      return {
+        groupId,
+        state,
+        coupon,
+      }
+    }
+  }
+  return null
+}
+
 function setTradeState(storage, groupId, nextState) {
   if (typeof storage?.setGameState !== "function") return
   storage.setGameState(groupId, TRADE_STATE_KEY, {
@@ -381,6 +406,20 @@ function formatQuestProgressLine(quest = {}) {
     `Progresso: *${progress}/${target}* | Status: *${stateLabel}*\n` +
     `Recompensa: *${Math.floor(Number(quest.rewardXp) || 0)} XP* + *${Math.floor(Number(quest.rewardCoins) || 0)} ${CURRENCY_LABEL}*`
   )
+}
+
+function getMsUntilNextLocalMidnight(nowMs = Date.now()) {
+  const now = new Date(Number(nowMs) || Date.now())
+  const next = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + 1,
+    0,
+    0,
+    0,
+    0
+  )
+  return Math.max(0, next.getTime() - now.getTime())
 }
 
 function grantCommandXp(economyService, userId, xpAmount, source, meta = {}) {
@@ -587,6 +626,8 @@ async function handleEconomyCommands(ctx) {
     `${commandPrefix}roubar`,
     `${commandPrefix}daily`,
     `${commandPrefix}carepackage`,
+    `${commandPrefix}cestabásica`,
+    `${commandPrefix}cestabasica`,
     `${commandPrefix}cassino`,
     `${commandPrefix}lootbox`,
     `${commandPrefix}falsificar`,
@@ -601,7 +642,6 @@ async function handleEconomyCommands(ctx) {
     `${commandPrefix}escambo`,
     `${commandPrefix}trade`,
     `${commandPrefix}troca`,
-    `${commandPrefix}team`,
     `${commandPrefix}time`,
     `${commandPrefix}cupom`,
     `${commandPrefix}loteria`,
@@ -640,7 +680,10 @@ async function handleEconomyCommands(ctx) {
       ? registrationService.getRegisteredEntry(userId)
       : null
     const knownName = String(registeredEntry?.lastKnownName || "").trim()
-    const publicIdentityLabel = publicLabel || knownName
+    const stableLabel = typeof economyService.getStablePublicLabel === "function"
+      ? economyService.getStablePublicLabel(userId)
+      : (String(userId || "").split("@")[0] || "Jogador")
+    const publicIdentityLabel = publicLabel || knownName || stableLabel
     const requirePublicIdentity = Boolean(options?.requirePublicIdentity)
 
     const mentionJidByNormalized = options?.mentionJidByNormalized instanceof Map
@@ -685,20 +728,20 @@ async function handleEconomyCommands(ctx) {
     })
   }
 
-  if (cmdName === prefix + "mentions") {
+  if (cmdName === prefix + "mentions" || cmdName === prefix + "mention") {
     const action = String(cmdArg1 || "").trim().toLowerCase()
     if (!action || action === "status") {
       const current = typeof economyService.isMentionOptIn === "function"
         ? economyService.isMentionOptIn(sender)
         : false
       await sock.sendMessage(from, {
-        text: `Preferência de menção em rankings/listas: *${current ? "ATIVADA" : "DESATIVADA"}*\nUse: !mentions on | !mentions off`,
+        text: `Preferência de menção em rankings/listas: *${current ? "ATIVADA" : "DESATIVADA"}*\nUse: !mention on | !mention off`,
       })
       return true
     }
 
     if (!["on", "off"].includes(action)) {
-      await sock.sendMessage(from, { text: "Use: !mentions on | !mentions off" })
+      await sock.sendMessage(from, { text: "Use: !mention on | !mention off" })
       return true
     }
 
@@ -1020,47 +1063,58 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
 
   if (cmdName === prefix + "guia") {
     const guidePart1 =
-      `GUIA DE ECONOMIA (1/2)\n\n` +
-      `Loop base para subir de forma consistente:\n` +
-      `1. Resgate *${prefix}daily* todo dia (160 moedas base).\n` +
-      `2. Rode *${prefix}trabalho* para renda: ifood, capinar, lavagem, aposta, minerar, ou bitcoin.\n` +
-      `3. Use *${prefix}missao* e finalize Q1/Q2/Q3 para XP + moedas.\n` +
-      `4. Use *${prefix}missaoweekly* para missões com maiores recompensas.\n` +
-      `5. Consulte *${prefix}xp* e *${prefix}xpranking* para acompanhar progressao.\n\n` +
-      `Atinja *nível 100* para receber uma *Coroa Kronos Verdadeira Permanente* de presente!\n\n` +
-      `Comandos-chave:\n` +
-      `- Perfil e historico: ${prefix}perfil, ${prefix}extrato\n` +
-      `- Loja e inventario: ${prefix}loja, ${prefix}comprar, ${prefix}vender\n` +
-      `- Interacao social: ${prefix}doarcoins, ${prefix}doaritem, ${prefix}team\n` +
-      `- Rotina diaria: ${prefix}daily, ${prefix}trabalho, ${prefix}missao claim <Q1|Q2|Q3>`
+      `GUIA DE ECONOMIA - SECAO 1/3 (ROTINA DE GRANA)\n\n` +
+      `Comandos da rotina base para ficar forte sem depender de sorte:\n` +
+      `1. *${prefix}daily* todo dia para garantir renda recorrente.\n` +
+      `2. *${prefix}trabalho <ifood|capinar|lavagem|aposta|minerar|bitcoin>* para farmar moedas.\n` +
+      `3. *${prefix}missao* e *${prefix}missao claim <Q1|Q2|Q3>* para XP + moedas.\n` +
+      `4. *${prefix}missaosemanal* e *${prefix}missaosemanal claim <W1|W2|W3|W4|W5>* para recompensas maiores.\n` +
+      `5. Acompanhe progresso com *${prefix}xp*, *${prefix}xpranking* e *${prefix}coinsranking*.\n\n` +
+      `Rotina curta recomendada (todo dia):\n` +
+      `- ${prefix}daily -> ${prefix}trabalho -> ${prefix}missao -> ${prefix}missaosemanal\n` +
+      `- Feche o ciclo consultando ${prefix}perfil e ${prefix}extrato.`
 
     const guidePart2 =
-      `GUIA DE ECONOMIA (2/2)\n\n` +
-      `Tipos de trabalho (6 opções):\n` +
-      `- *ifood*: 55-145 moedas, 10% falha\n` +
-      `- *capinar*: 110 moedas fixas, 20% falha\n` +
-      `- *lavagem*: 320-620 moedas, 80% falha (~20% da carteira perdida)\n` +
-      `- *aposta*: Minigame! 50% → 2x payout, 50% → 0.5x payout\n` +
-      `- *minerar*: Minigame! 30% → 0 moedas, 70% → 180-330 moedas\n` +
-      `- *bitcoin*: 200-350 moedas, 15% falha\n\n` +
-      `💡 DICA: Jogos em grupo dão *+15%* de recompensa! Jogos solo recebem *-10%* de penalidade.\n\n` +
-      `Rotas de risco:\n` +
-      `- Segura: daily + trabalho + missoes + jogos em grupo.\n` +
-      `- Balanceada: segura + cassino/aposta com valor controlado.\n` +
-      `- Agressiva: incluir roubo, lootbox, trades e jogos arriscados.\n\n` +
-      `Dicas praticas:\n` +
-      `- Nao comprometa todo saldo em uma unica jogada.\n` +
-      `- Use ${prefix}trade com revisao antes de aceitar.\n` +
-      `- Priorize jogos em grupo para bônus de +15% em moedas.\n` +
-      `- Colecionadores: 50+ itens diferentes estão disponíveis na ${prefix}loja!`
+      `GUIA DE ECONOMIA - SECAO 2/3 (SOCIAL + ITENS)\n\n` +
+      `Interacoes sociais (time e trade):\n` +
+      `- Time: ${prefix}time criar, ${prefix}time convidar, ${prefix}time info, ${prefix}time membros\n` +
+      `- Cofre do time: ${prefix}time depositarcoins, ${prefix}time depositaritem, ${prefix}time retirarcoins, ${prefix}time retiraritem\n` +
+      `- Trocas: ${prefix}escambo (ou ${prefix}troca), ${prefix}escambo revisar <id>, ${prefix}escambo aceitar <id>\n` +
+      `- Doacoes diretas: ${prefix}doarcoins e ${prefix}doaritem\n\n` +
+      `Ciclo de itens (comprar, vender e usar):\n` +
+      `- Consulte a loja: ${prefix}loja\n` +
+      `- Compre: ${prefix}comprar <item> [quantidade]\n` +
+      `- Venda: ${prefix}vender <item> [quantidade]\n` +
+      `- Veja detalhes do item: ${prefix}item <item>\n` +
+      `- Use efeitos: ${prefix}usaritem <item> [alvo] ou ${prefix}usarpasse <tipo> <severidade> [alvo]`
+
+    const guidePart3 =
+      `GUIA DE ECONOMIA - SECAO 3/3 (DICAS + EXTRAS + TUTORIAL)\n\n` +
+      `Dicas essenciais:\n` +
+      `- Jogos multiplayer em grupo sao essenciais para ficar rico: *+15%* de recompensa em grupo e *-10%* em solo.\n` +
+      `- Nao arrisque todo saldo em uma jogada (cassino).\n` +
+      `- Antes de aceitar trocas, use ${prefix}escambo revisar <id>.\n` +
+      `- Subir nivel acelera sua economia com recompensas de progressao.\n\n` +
+      `Comandos extras que ajudam muito:\n` +
+      `- ${prefix}carepackage (alias ${prefix}cestabasica)\n` +
+      `- ${prefix}lootbox <quantidade>\n` +
+      `- ${prefix}cassino <valor>\n` +
+      `- ${prefix}cupom <codigo>\n` +
+      `- ${prefix}economia social | ${prefix}economia rotina\n\n` +
+      `Tutorial rapido (primeiros passos):\n` +
+      `1) Dia 1: use ${prefix}daily, rode 1 trabalho seguro (ifood/capinar) e resgate 1 missao.\n` +
+      `2) Dia 2-3: monte estoque na ${prefix}loja, teste ${prefix}comprar/${prefix}vender e acompanhe no ${prefix}extrato.\n` +
+      `3) Dia 4-5: entre em interacao social (time + escambo) com valores pequenos.\n` +
+      `4) Dia 6+: inclua risco controlado (cassino/lootbox) e foque em jogos multiplayer para acelerar riqueza.`
 
     const guideTarget = isGroup ? sender : from
     await sock.sendMessage(guideTarget, { text: guidePart1 })
     await sock.sendMessage(guideTarget, { text: guidePart2 })
+    await sock.sendMessage(guideTarget, { text: guidePart3 })
 
     if (isGroup) {
       await sock.sendMessage(from, {
-        text: `📩 @${sender.split("@")[0]}, te enviei o guia de economia no privado em 2 partes.`,
+        text: `📩 @${sender.split("@")[0]}, te enviei o guia de economia no privado em 3 partes.`,
         mentions: [sender],
       })
     }
@@ -1069,49 +1123,40 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
     telemetry.appendEvent("economy.guide.sent", {
       groupId: isGroup ? from : null,
       userId: sender,
-      parts: 2,
+      parts: 3,
       via: isGroup ? "group" : "dm",
     })
     return true
   }
 
   // Team system commands
-  if (cmdName === prefix + "time" || cmdName === prefix + "team") {
+  if (cmdName === prefix + "time") {
     const actionRaw = String(cmdArg1 || "").trim().toLowerCase()
     const TEAM_ACTION_ALIASES = {
       criar: "create",
-      create: "create",
+      convidar: "invite",
       entra: "join",
-      join: "join",
+      entrar: "join",
       aceitar: "accept",
-      accept: "accept",
       promover: "promote",
-      promote: "promote",
       rebaixar: "demote",
-      demote: "demote",
       sair: "leave",
-      leave: "leave",
       membros: "members",
-      members: "members",
-      stats: "stats",
+      estatisticas: "stats",
+      estatísticas: "stats",
       info: "info",
       listar: "list",
       lista: "list",
-      list: "list",
       doarcoins: "depositarcoins",
       depositarcoins: "depositarcoins",
-      depositcoins: "depositarcoins",
       doaritem: "depositaritem",
       depositaritem: "depositaritem",
-      deposititem: "depositaritem",
       sacarcoins: "retirarcoins",
       retirarcoins: "retirarcoins",
-      withdrawcoins: "retirarcoins",
       sacaritem: "retiraritem",
       retiraritem: "retiraritem",
-      withdrawitem: "retiraritem",
     }
-    const action = TEAM_ACTION_ALIASES[actionRaw] || actionRaw
+    const action = TEAM_ACTION_ALIASES[actionRaw] || ""
 
     // Generate unique team ID from timestamp and random
     const generateTeamId = () => {
@@ -1134,7 +1179,7 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
       const teamName = String(cmdArg2 || "").trim().slice(0, 50)
       if (!teamName) {
         await sock.sendMessage(from, {
-          text: `Use: ${prefix}${cmdName} create <nome do time>`,
+          text: `Use: ${prefix}${cmdName} criar <nome do time>`,
         })
         return true
       }
@@ -1143,7 +1188,7 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
       if (userTeamId) {
         const existingTeam = storage.getTeam(userTeamId)
         await sock.sendMessage(from, {
-          text: `Voce ja faz parte do time *${existingTeam?.name || userTeamId}*. Use ${prefix}${cmdName} leave para sair.`,
+          text: `Voce ja faz parte do time *${existingTeam?.name || userTeamId}*. Use ${prefix}${cmdName} sair para sair.`,
         })
         return true
       }
@@ -1198,7 +1243,7 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
 
       if (typeof storage.inviteToTeam !== "function") {
         await sock.sendMessage(from, {
-          text: `⛔ ${prefix}${cmdName} join foi desativado temporariamente. Use ${prefix}${cmdName} accept <team ID> após receber convite.`,
+          text: `⛔ ${prefix}${cmdName} entrar foi desativado temporariamente. Use ${prefix}${cmdName} aceitar <ID do time> apos receber convite.`,
         })
         return true
       }
@@ -1216,7 +1261,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const userTeamId = storage.getUserTeamId(sender)
       if (!userTeamId) {
         await sock.sendMessage(from, {
-          text: `Voce nao faz parte de um time. Use ${prefix}${cmdName} create <nome> para criar um.`,
+          text: `Voce nao faz parte de um time. Use ${prefix}${cmdName} criar <nome> para criar um.`,
         })
         return true
       }
@@ -1224,7 +1269,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const inviteTargets = mentioned && mentioned.length > 0 ? mentioned : []
       if (inviteTargets.length === 0) {
         await sock.sendMessage(from, {
-          text: `Use: ${prefix}${cmdName} invite @usuario(s)`,
+          text: `Use: ${prefix}${cmdName} convidar @usuario(s)`,
         })
         return true
       }
@@ -1313,7 +1358,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const acceptTeamId = String(cmdArg2 || "").trim().toUpperCase()
       if (!acceptTeamId) {
         await sock.sendMessage(from, {
-          text: `Use: ${prefix}${cmdName} accept <team ID>`,
+          text: `Use: ${prefix}${cmdName} aceitar <ID do time>`,
         })
         return true
       }
@@ -1880,7 +1925,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
           responseText += `*Times disponiveis:*\n` + otherTeams
             .map(team => `${team.name} (${team.teamId}) - ${team.members.length} membros`)
             .join("\n") +
-            `\n\nEntre apenas com convite: ${prefix}${cmdName} accept <ID>.`
+            `\n\nEntre apenas com convite: ${prefix}${cmdName} aceitar <ID>.`
         } else {
           responseText += `Nenhum outro time disponivel.`
         }
@@ -1894,7 +1939,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
           text:
             `*Times com membros neste grupo (${teamList.length} total)*\n\n` +
             (teamLines.length > 0 ? teamLines.join("\n") : "Nenhum time criado ainda.") +
-            `\n\nUse ${prefix}${cmdName} create <nome> para criar um novo time e ${prefix}${cmdName} accept <ID> para aceitar convites.`,
+            `\n\nUse ${prefix}${cmdName} criar <nome> para criar um novo time e ${prefix}${cmdName} aceitar <ID> para aceitar convites.`,
         })
       }
 
@@ -1907,25 +1952,25 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     const menuText = userTeamId
       ? `*Seu time*\n\nComandos:\n` +
         `- ${prefix}${cmdName} info: Ver info do time\n` +
-        `- ${prefix}${cmdName} members: Listar membros\n` +
-        `- ${prefix}${cmdName} stats: Stats do time\n` +
-        `- ${prefix}${cmdName} invite @user: Convidar jogador\n` +
+        `- ${prefix}${cmdName} membros: Listar membros\n` +
+        `- ${prefix}${cmdName} estatisticas: Stats do time\n` +
+        `- ${prefix}${cmdName} convidar @user: Convidar jogador\n` +
         `- ${prefix}${cmdName} depositarcoins <qtd>\n` +
         `- ${prefix}${cmdName} depositaritem <item> [qtd]\n` +
         `- ${prefix}${cmdName} retirarcoins <qtd> (dono/tenente, cooldown 15m)\n` +
         `- ${prefix}${cmdName} retiraritem <item> [qtd] (dono/tenente, cooldown 15m)\n` +
-        `- ${prefix}${cmdName} leave: Sair do time\n` +
-        `- ${prefix}${cmdName} list: Ver outros times`
+        `- ${prefix}${cmdName} sair: Sair do time\n` +
+        `- ${prefix}${cmdName} listar: Ver outros times`
       : `*Sistema de Times*\n\nComandos:\n` +
-        `- ${prefix}${cmdName} create <nome>: Criar um time\n` +
-        `- ${prefix}${cmdName} accept <ID>: Aceitar convite para um time\n` +
-        `- ${prefix}${cmdName} list: Ver times disponiveis`
+        `- ${prefix}${cmdName} criar <nome>: Criar um time\n` +
+        `- ${prefix}${cmdName} aceitar <ID>: Aceitar convite para um time\n` +
+        `- ${prefix}${cmdName} listar: Ver times disponiveis`
 
     await sock.sendMessage(from, { text: menuText })
     return true
   }
 
-  if (cmdName === prefix + "timeranking" || cmdName === prefix + "teamranking") {
+  if (cmdName === prefix + "timeranking") {
     const teams = (typeof storage.getAllTeams === "function" ? storage.getAllTeams() : [])
       .map((team) => {
         const teamId = String(team?.teamId || "")
@@ -2060,51 +2105,104 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
   }
 
   if (cmdName === prefix + "economia") {
-    const submenu = String(cmdArg1 || "").trim().toLowerCase()
-    if (submenu === "escambo") {
+    const submenuRaw = String(cmdArg1 || "").trim().toLowerCase()
+    const submenuAliases = {
+      geral: "geral",
+      general: "geral",
+      util: "geral",
+      utility: "geral",
+      utilidade: "geral",
+      utilidades: "geral",
+      rotina: "rotina",
+      rotinas: "rotina",
+      progresso: "rotina",
+      progressao: "rotina",
+      progressão: "rotina",
+      social: "social",
+      sociais: "social",
+      escambo: "social",
+      trade: "social",
+      troca: "social",
+      time: "social",
+      times: "social",
+      extra: "extras",
+      extras: "extras",
+      especial: "extras",
+      especiais: "extras",
+      specials: "extras",
+      cupom: "extras",
+      cupons: "extras",
+      falsificar: "extras",
+      passe: "extras",
+      usarpasse: "extras",
+    }
+    const submenu = submenuAliases[submenuRaw] || submenuRaw
+
+    if (submenu === "geral") {
       await sock.sendMessage(from, {
         text:
-`╭━━━〔 💱 SUBMENU: ESCAMBO 〕━━━╮
-│ Comandos principais:
+`╭━━━〔 🧭 SUBMENU: GERAL/UTILIDADE 〕━━━╮
+│ Comandos-base para perfil, identidade e consulta:
+│ ${prefix}perfil stats | ${prefix}perfil *@user
+│ ${prefix}xp | ${prefix}xpranking | ${prefix}coinsranking
+│ ${prefix}mentions <on|off> | ${prefix}apelido <nome público>
+│ ${prefix}extrato *@user
+│ ${prefix}item <item>
+│ ${prefix}guia
+╰━━━━━━━━━━━━━━━━━━━━╯`,
+      })
+      return true
+    }
+
+    if (submenu === "rotina") {
+      await sock.sendMessage(from, {
+        text:
+`╭━━━〔 💼 SUBMENU: ROTINA (FAZER MOEDAS) 〕━━━╮
+│ Comandos de renda e progressão diária:
+│ ${prefix}daily | ${prefix}cestabasica
+│ ${prefix}trabalho <ifood|capinar|lavagem|aposta|minerar|bitcoin>
+│ ${prefix}missao | ${prefix}missaosemanal
+│ ${prefix}cassino <valor>
+│ ${prefix}lootbox <quantidade 1-10>
+│ Dica: combine daily + trabalho + missões para evolução estável.
+╰━━━━━━━━━━━━━━━━━━━━╯`,
+      })
+      return true
+    }
+
+    if (submenu === "social") {
+      await sock.sendMessage(from, {
+        text:
+`╭━━━〔 🤝 SUBMENU: SOCIAL 〕━━━╮
+│ Trocas, doações e interação entre jogadores:
+│ ${prefix}doarcoins @user *<quantidade>
+│ ${prefix}doaritem @user <item> *<quantidade>
 │ ${prefix}escambo @user <coins> [item:quantidade...]
 │ ${prefix}escambo resposta <id> <coins> [item:quantidade...]
 │ ${prefix}escambo revisar <id> | ${prefix}escambo aceitar <id>
-│ ${prefix}escambo counter <id> <coins> [item:quantidade...]
-│ ${prefix}escambo rejeitar <id> | ${prefix}escambo cancel <id>
 │ ${prefix}escambo lista | ${prefix}escambo info <id> | ${prefix}escambo disputar <id>
+│ ${prefix}time criar <nome> | ${prefix}time convidar @usuario
+│ ${prefix}time entrar <ID> | ${prefix}time aceitar <ID>
+│ ${prefix}time info | ${prefix}time membros | ${prefix}time estatisticas
+│ ${prefix}time depositarcoins <qtd> | ${prefix}time depositaritem <item> [qtd]
+│ ${prefix}time retirarcoins <qtd> | ${prefix}time retiraritem <item> [qtd]
+│ ${prefix}time promover @usuario | ${prefix}time rebaixar @usuario
+│ ${prefix}time sair | ${prefix}time listar | ${prefix}timeranking
 ╰━━━━━━━━━━━━━━━━━━━━╯`,
       })
       return true
     }
 
-    if (submenu === "times") {
+    if (submenu === "extras") {
       await sock.sendMessage(from, {
         text:
-`╭━━━〔 👥 SUBMENU: TIMES 〕━━━╮
-│ Comandos de organização e pool de equipe:
-│ ${prefix}team info | ${prefix}team stats | ${prefix}team members
-│ ${prefix}team depositarcoins <qtd>
-│ ${prefix}team depositaritem <item> [qtd]
-│ ${prefix}team retirarcoins <qtd>
-│ ${prefix}team retiraritem <item> [qtd]
-│ Dica: contribuições de time entram no loop de progressão.
-╰━━━━━━━━━━━━━━━━━━━━╯`,
-      })
-      return true
-    }
-
-    if (submenu === "progressao" || submenu === "progressão") {
-      await sock.sendMessage(from, {
-        text:
-`╭━━━〔 📈 SUBMENU: PROGRESSÃO 〕━━━╮
-│ XP, níveis e rotas de ganho de coins:
-│ ${prefix}xp
-│ ${prefix}perfil stats
-│ ${prefix}xpranking | ${prefix}coinsranking
-│ ${prefix}missao | ${prefix}missaosemanal
-│ ${prefix}daily | ${prefix}trabalho
-│ ${prefix}guia
-│ Dica: combine daily + trabalho + missões para evolução estável.
+`╭━━━〔 🎁 SUBMENU: EXTRAS/ESPECIAIS 〕━━━╮
+│ Comandos especiais, eventos e utilidades avançadas:
+│ ${prefix}cupom resgatar <codigo>
+│ ${prefix}falsificar <tipo 1-13> *<severidade> *<quantidade> *<S|N>
+│ ${prefix}falsificar tipo <1-13>
+│ ${prefix}loteria entrar (para entrar em sorteios abertos)
+│ ${prefix}usarpasse @user <tipo> <severidade>
 ╰━━━━━━━━━━━━━━━━━━━━╯`,
       })
       return true
@@ -2112,52 +2210,28 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
     await sock.sendMessage(from, {
       text:
-    `╭━━━〔 💰 SUBMENU: ECONOMIA 〕━━━╮
+    `╭━━━〔 💰 MENU: ECONOMIA 〕━━━╮
     │ Comandos de economia
     │ No privado: exige cadastro via ${prefix}register
     │ Submenus:
-    │ ${prefix}economia progressao
-    │ ${prefix}economia escambo
-    │ ${prefix}economia times
+    │ ${prefix}economia geral
+    │ ${prefix}economia rotina
+    │ ${prefix}economia social
+    │ ${prefix}economia extras
     │
-    │ Comandos gerais:
-    │ ${prefix}perfil stats | ${prefix}perfil *@user
-    │ ${prefix}mentions <on|off> | ${prefix}apelido <nome público>
-    │ ${prefix}extrato *@user
-    │ ${prefix}item <item>
-    │
-    │ Comércio e inventário:
+    │ Atalhos úteis:
     │ ${prefix}loja | ${prefix}comprar <item|indice> *<quantidade>
     │ ${prefix}comprarpara @user <item> *<quantidade>
     │ ${prefix}vender <item> *<quantidade>
     │ ${prefix}usaritem <item>
-    │
-    │ Rotina e risco:
-    │ ${prefix}daily | ${prefix}cestabásica
-    │ ${prefix}cassino <valor>
-    │ ${prefix}trabalho <ifood|capinar|lavagem|aposta|minerar|bitcoin>
     │ ${prefix}roubar @user
-    │ ${prefix}lootbox <quantidade 1-10>
-    │
-    │ Social:
-    │ ${prefix}doarcoins @user *<quantidade>
-    │ ${prefix}doaritem @user <item> *<quantidade>
-    │
-    │ Cupons e extras:
-    │ ${prefix}cupom criar <codigo> <moedas> <dias>
-    │ ${prefix}cupom resgatar <codigo>
-    │ ${prefix}cupom remove <codigo>
-    │ ${prefix}falsificar <tipo 1-13> *<severidade> *<quantidade> *<S|N>
-    │ ${prefix}falsificar tipo <1-13>
-    │ ${prefix}loteria "<titulo>" "<recompensas>" <S|N> <qtdVencedores>
-    │ ${prefix}loteria entrar | ${prefix}loteria fechar
-    │ ${prefix}usarpasse @user <tipo> <severidade>
+
     ╰━━━━━━━━━━━━━━━━━━━━╯`,
     })
     return true
   }
 
-  if (cmdName === prefix + "cupom" && isGroup) {
+  if (cmdName === prefix + "cupom") {
     const action = String(cmdArg1 || "").trim().toLowerCase()
     const couponState = getCouponState(storage, from)
 
@@ -2231,15 +2305,27 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         await sock.sendMessage(from, { text: "Use: !cupom resgatar <codigo>" })
         return true
       }
-      const coupon = couponState.codes[codeRaw]
+      let scopedGroupId = from
+      let scopedState = couponState
+      let coupon = couponState.codes[codeRaw]
+
+      if (!coupon && !isGroup) {
+        const resolved = resolveCouponScopeByCode(storage, codeRaw)
+        if (resolved) {
+          scopedGroupId = resolved.groupId
+          scopedState = resolved.state
+          coupon = resolved.coupon
+        }
+      }
+
       if (!coupon) {
         await sock.sendMessage(from, { text: "Cupom inválido ou inexistente." })
         return true
       }
       const expiresAt = Number(coupon.expiresAt) || 0
       if (expiresAt > 0 && Date.now() > expiresAt) {
-        delete couponState.codes[codeRaw]
-        setCouponState(storage, from, couponState)
+        delete scopedState.codes[codeRaw]
+        setCouponState(storage, scopedGroupId, scopedState)
         await sock.sendMessage(from, { text: "Cupom expirado." })
         return true
       }
@@ -2252,15 +2338,15 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const received = economyService.creditCoins(sender, coupon.amount, {
         type: "coupon-redeem",
         details: `Cupom ${codeRaw}`,
-        meta: { code: codeRaw, groupId: from },
+        meta: { code: codeRaw, groupId: scopedGroupId },
       })
       if (!coupon.redeemedBy || typeof coupon.redeemedBy !== "object") coupon.redeemedBy = {}
       coupon.redeemedBy[sender] = Date.now()
-      setCouponState(storage, from, couponState)
+      setCouponState(storage, scopedGroupId, scopedState)
 
       telemetry.incrementCounter("economy.coupon.redeem", 1)
       telemetry.appendEvent("economy.coupon.redeem", {
-        groupId: from,
+        groupId: scopedGroupId,
         code: codeRaw,
         amount: received,
         userId: sender,
@@ -3013,19 +3099,29 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  if (cmd === prefix + "coinsranking" && isGroup) {
-    const metadata = await sock.groupMetadata(from)
-    const members = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
-    const mentionJidByNormalized = new Map((metadata?.participants || [])
-      .map((p) => [jidNormalizedUser(p.id), p.id])
-      .filter(([normalizedId, originalId]) => Boolean(normalizedId && originalId)))
-    const ranking = economyService.getGroupRanking(members, 10)
+  if (cmd === prefix + "coinsranking") {
+    let mentionJidByNormalized = null
+    let members = []
+    if (isGroup) {
+      const metadata = await sock.groupMetadata(from)
+      members = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
+      mentionJidByNormalized = new Map((metadata?.participants || [])
+        .map((p) => [jidNormalizedUser(p.id), p.id])
+        .filter(([normalizedId, originalId]) => Boolean(normalizedId && originalId)))
+    }
+
+    let ranking = []
+    if (typeof economyService.getGlobalRanking === "function") {
+      ranking = economyService.getGlobalRanking(10)
+    } else if (isGroup && typeof economyService.getGroupRanking === "function") {
+      ranking = economyService.getGroupRanking(members, 10)
+    }
     const visibleRanking = ranking
       .map((entry) => ({
         ...entry,
         rankingIdentity: getRankingIdentity(entry.userId, {
           mentionJidByNormalized,
-          requirePublicIdentity: true,
+          requirePublicIdentity: false,
         }),
       }))
       .filter((entry) => entry.rankingIdentity.visible)
@@ -3044,7 +3140,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       .filter(Boolean))]
     await sock.sendMessage(from, {
       text:
-        `🏦 Ranking de ${CURRENCY_LABEL} (grupo)\n` +
+        `🏦 Ranking de ${CURRENCY_LABEL} (global)\n` +
         `${lines.join("\n")}\n\n` +
         `Sua posição global: *${globalPos || "N/A"}*`,
       mentions,
@@ -3052,21 +3148,29 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  if (cmd === prefix + "xpranking" && isGroup) {
-    const metadata = await sock.groupMetadata(from)
-    const members = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
-    const mentionJidByNormalized = new Map((metadata?.participants || [])
-      .map((p) => [jidNormalizedUser(p.id), p.id])
-      .filter(([normalizedId, originalId]) => Boolean(normalizedId && originalId)))
-    const ranking = typeof economyService.getGroupXpRanking === "function"
-      ? economyService.getGroupXpRanking(members, 10)
-      : []
+  if (cmd === prefix + "xpranking") {
+    let mentionJidByNormalized = null
+    let members = []
+    if (isGroup) {
+      const metadata = await sock.groupMetadata(from)
+      members = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
+      mentionJidByNormalized = new Map((metadata?.participants || [])
+        .map((p) => [jidNormalizedUser(p.id), p.id])
+        .filter(([normalizedId, originalId]) => Boolean(normalizedId && originalId)))
+    }
+
+    let ranking = []
+    if (typeof economyService.getGlobalXpRanking === "function") {
+      ranking = economyService.getGlobalXpRanking(10)
+    } else if (isGroup && typeof economyService.getGroupXpRanking === "function") {
+      ranking = economyService.getGroupXpRanking(members, 10)
+    }
     const visibleRanking = ranking
       .map((entry) => ({
         ...entry,
         rankingIdentity: getRankingIdentity(entry.userId, {
           mentionJidByNormalized,
-          requirePublicIdentity: true,
+          requirePublicIdentity: false,
         }),
       }))
       .filter((entry) => entry.rankingIdentity.visible)
@@ -3090,7 +3194,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       .filter(Boolean))]
     await sock.sendMessage(from, {
       text:
-        `⭐ Ranking de XP (grupo)\n` +
+        `⭐ Ranking de XP (global)\n` +
         `${lines.join("\n")}\n\n` +
         `Sua posição global de XP: *${globalPos || "N/A"}*`,
       mentions,
@@ -3471,8 +3575,13 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     }
     const daily = economyService.claimDaily(sender, scaledDailyCoins)
     if (!daily.ok) {
+      const remainingResetMs = typeof economyService.getMsUntilNextDailyReset === "function"
+        ? Math.max(0, Math.floor(Number(economyService.getMsUntilNextDailyReset()) || 0))
+        : getMsUntilNextLocalMidnight()
       await sock.sendMessage(from, {
-        text: "⏰ Você já resgatou seu daily hoje. Volte após o próximo reset global da meia-noite.",
+        text:
+          "⏰ Você já resgatou seu daily hoje.\n" +
+          `Tempo restante para o reset global: *${formatDuration(remainingResetMs)}* (meia-noite).`,
       })
       return true
     }
@@ -3491,7 +3600,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  if (cmdName === prefix + "cestabásica") {
+  if (cmdName === prefix + "cestabásica" || cmdName === prefix + "cestabasica" || cmdName === prefix + "carepackage") {
     const result = economyService.claimCarePackage(sender)
 
     if (!result.ok) {
@@ -3690,16 +3799,18 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  if (cmdName === prefix + "lootbox" && isGroup) {
+  if (cmdName === prefix + "lootbox") {
     const quantity = parseQuantity(cmdArg1, 1)
     if (quantity <= 0) {
       await sock.sendMessage(from, { text: "Use: !lootbox <quantidade>" })
       return true
     }
 
-    // pega membros do grupo para os efeitos da lootbox
-    const metadata = await sock.groupMetadata(from)
-    const groupMembers = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
+    let groupMembers = []
+    if (isGroup) {
+      const metadata = await sock.groupMetadata(from)
+      groupMembers = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
+    }
 
     const result = economyService.openLootbox(sender, quantity, groupMembers)
     if (!result.ok) {

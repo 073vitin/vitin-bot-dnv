@@ -37,6 +37,8 @@ const memória = require("./games/memoria")
 const economyService = require("./services/economyService")
 const registrationService = require("./services/registrationService")
 const telemetry = require("./services/telemetryService")
+const { COMMAND_HELP } = require("./commandHelp")
+const { getLikelyCommandSuggestions } = require("./services/commandSuggestionService")
 const { handleGameCommands, handleGameMessageFlow } = require("./routers/gamesRouter")
 const { handleUtilityCommands } = require("./routers/utilityRouter")
 const { handleModerationCommands } = require("./routers/moderationRouter")
@@ -58,6 +60,7 @@ const OVERRIDE_PENDING_TIMEOUT_MS = 5 * 60 * 1000
 const ECONOMY_WIPE_COMMAND = prefix + "wipeeconomia"
 const ECONOMY_WIPE_COMMAND_ALIAS = prefix + "wipeeconomy"
 const ECONOMY_WIPE_CONFIRM_PHRASE = "CONFIRMAR WIPE ECONOMIA"
+const MASS_MENTION_OPT_OUT_HINT = "Cansado de ser mencionado? Use *!mention off* para o bot utilizar seu apelido ao invés de te mencionar!"
 const DATA_EXPORT_PASSWORD = String(process.env.PROFILER_PASSWORD || "").trim() || crypto.randomBytes(24).toString("hex")
 const pendingBroadcastBySender = new Map()
 const pendingOverrideAddBySender = new Map()
@@ -143,19 +146,28 @@ const perfStats = {
   groupMetadataMs: createMetricBucket(),
   eventLoopLagMs: createMetricBucket(),
   commandHistory: [],
+  lastCommandByUser: {},
   stages: {},
 }
 
 function addCommandHistory(entry = {}) {
+  const normalizedSenderId = registrationService.normalizeUserId(entry.senderId || "")
   const nextEntry = {
     at: Date.now(),
     command: String(entry.command || "").trim(),
+    senderId: normalizedSenderId,
     senderName: String(entry.senderName || "").trim() || "Desconhecido",
     groupName: String(entry.groupName || "").trim() || "DM",
   }
   perfStats.commandHistory.unshift(nextEntry)
   if (perfStats.commandHistory.length > COMMAND_HISTORY_LIMIT) {
     perfStats.commandHistory.length = COMMAND_HISTORY_LIMIT
+  }
+  if (normalizedSenderId && nextEntry.command) {
+    perfStats.lastCommandByUser[normalizedSenderId] = {
+      command: nextEntry.command,
+      at: nextEntry.at,
+    }
   }
 }
 
@@ -737,6 +749,23 @@ function parseBroadcastMentionModeToken(value = "") {
   return null
 }
 
+function shouldAppendMassMentionHint(messageContent = {}) {
+  const mentions = Array.isArray(messageContent?.mentions) ? messageContent.mentions.filter(Boolean) : []
+  if (mentions.length <= 1) return false
+  const text = typeof messageContent?.text === "string" ? messageContent.text : ""
+  if (!text) return false
+
+  const lower = text.toLowerCase()
+  if (lower.includes(MASS_MENTION_OPT_OUT_HINT.toLowerCase())) return false
+
+  // Lobby/raffle messages are exempt from this footer by requirement.
+  if (lower.includes("lobby") || lower.includes("loteria") || lower.includes("raffle") || lower.includes("sorteio")) {
+    return false
+  }
+
+  return true
+}
+
 function isEconomyCommandName(cmdName = "", cmd = "") {
   const economyCommands = new Set([
     prefix + "economia",
@@ -771,7 +800,6 @@ function isEconomyCommandName(cmdName = "", cmd = "") {
     prefix + "removeitem",
     prefix + "trade",
     prefix + "time",
-    prefix + "team",
     prefix + "deletarconta",
     prefix + "deleteconta",
     // Jogos com aposta/entrada/recompensa devem exigir cadastro também.
@@ -834,6 +862,32 @@ function messageTriggersFilter(text = "", filterText = "") {
   const filterNormalized = normalizeFilterComparable(rawFilter)
   if (!filterNormalized) return false
   return messageNormalized.includes(filterNormalized)
+}
+
+function formatUnknownCommandSuggestionText(inputCmd = "", result = { metric: "", suggestions: [] }) {
+  const suggestions = Array.isArray(result?.suggestions) ? result.suggestions : []
+  if (suggestions.length === 0) {
+    return (
+      `Comando não reconhecido: *${String(inputCmd || "").trim()}*\n` +
+      `Use *${prefix}menu* para ver os comandos disponíveis.`
+    )
+  }
+
+  const lines = [
+    `Comando não reconhecido: *${String(inputCmd || "").trim()}*`,
+    "Você quis dizer:",
+  ]
+
+  for (let i = 0; i < suggestions.length; i++) {
+    lines.push(`${i + 1}. *${suggestions[i].text}*`)
+  }
+
+  const metricLabel = result?.metric === "jaro-winkler"
+    ? "Jaro-Winkler"
+    : "Damerau-Levenshtein"
+  lines.push("")
+  lines.push(`(Sugestões por similaridade: ${metricLabel})`)
+  return lines.join("\n")
 }
 
 function collectKnownGroupsFromStorage() {
@@ -1118,9 +1172,42 @@ function getMetricSnapshot(bucket) {
   }
 }
 
+function extractWhatsAppNumber(userId = "") {
+  const normalized = registrationService.normalizeUserId(userId)
+  const userPart = String(normalized || userId || "").split("@")[0] || ""
+  const digits = userPart.replace(/\D+/g, "")
+  return digits || userPart || "-"
+}
+
+function buildRegisteredUsersSnapshot() {
+  const registeredIds = registrationService.getRegisteredUsers()
+  return registeredIds
+    .map((rawUserId) => {
+      const userId = registrationService.normalizeUserId(rawUserId)
+      if (!userId) return null
+      const regEntry = registrationService.getRegisteredEntry(userId)
+      const profile = economyService.getProfile(userId)
+      const waName = String(regEntry?.lastKnownName || getKnownUserName(userId) || userId.split("@")[0] || "").trim()
+      const nickname = String(profile?.preferences?.publicLabel || "").trim()
+      const coins = Math.max(0, Math.floor(Number(economyService.getCoins(userId)) || 0))
+      const lastCommand = perfStats.lastCommandByUser[userId] || null
+      return {
+        userId,
+        waNumber: extractWhatsAppNumber(userId),
+        waName: waName || "-",
+        nickname: nickname || "-",
+        coins,
+        lastCommand,
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.waNumber.localeCompare(b.waNumber))
+}
+
 function getProfilerSnapshot() {
   const now = Date.now()
   const memory = getMemoryUsageMb()
+  const registeredUsers = buildRegisteredUsersSnapshot()
   const stageEntries = Object.entries(perfStats.stages)
     .map(([name, bucket]) => ({ name, ...getMetricSnapshot(bucket) }))
     .sort((a, b) => b.avgMs - a.avgMs)
@@ -1151,18 +1238,27 @@ function getProfilerSnapshot() {
     },
     commandHistory: perfStats.commandHistory,
     terminalLines: terminalMirrorLines.slice(-120),
-    registeredUsers: registrationService.getRegisteredCount(),
+    registeredUsers: registeredUsers.length,
+    registeredUsersList: registeredUsers,
     knownGroups: Array.from(knownGroupIds).map((groupId) => ({ groupId, groupName: getKnownGroupName(groupId) })),
   }
 }
 
-app.get("/profiler-data", (req, res) => {
+function getDashboardPayload() {
   const authReady = Boolean(perfStats.authenticatedAt)
-  res.json({
+  return {
     authReady,
     qrImage: qrImage || null,
     snapshot: authReady ? getProfilerSnapshot() : null,
-  })
+  }
+}
+
+app.get("/profiler-data", (req, res) => {
+  res.json(getDashboardPayload())
+})
+
+app.get("/dashboard-data", (req, res) => {
+  res.json(getDashboardPayload())
 })
 
 app.get("/download-data", async (req, res) => {
@@ -1195,56 +1291,6 @@ app.get("/download-data", async (req, res) => {
 })
 
 app.get("/", (req,res)=>{
-  const authReady = Boolean(perfStats.authenticatedAt)
-  const qrBlock = qrImage
-    ? `<h2>Escaneie o QR Code</h2><img src="${qrImage}" style="max-width:320px;width:100%;height:auto">`
-    : "<h2>Bot conectado</h2>"
-  const perfBlock = authReady ? renderPerfPanelHtml() : ""
-  const snapshot = authReady ? getProfilerSnapshot() : null
-
-  const commandRows = (snapshot?.commandHistory || []).slice(-10).map((entry) => {
-    const at = formatDateTime(entry?.at)
-    const cmd = escapeHtmlServer(entry?.command || "-")
-    const sender = escapeHtmlServer(entry?.senderName || "-")
-    const group = escapeHtmlServer(entry?.groupName || "-")
-    return `<tr><td style="padding:4px;border-bottom:1px solid #ccc">${at}</td><td style="padding:4px;border-bottom:1px solid #ccc">${cmd}</td><td style="padding:4px;border-bottom:1px solid #ccc">${sender}</td><td style="padding:4px;border-bottom:1px solid #ccc">${group}</td></tr>`
-  }).join("")
-
-  const commandBlock = authReady
-    ? `
-    <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
-      <h3 style="margin:0 0 10px 0">Últimos 10 comandos</h3>
-      <table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:12px">
-        <thead>
-          <tr>
-            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Quando</th>
-            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Comando</th>
-            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Usuário</th>
-            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Grupo</th>
-          </tr>
-        </thead>
-        <tbody>${commandRows || '<tr><td colspan="4" style="padding:6px">Sem comandos registrados.</td></tr>'}</tbody>
-      </table>
-    </section>
-    `
-    : ""
-
-  const terminalLines = (snapshot?.terminalLines || []).map((line) => {
-    const at = formatDateTime(line?.at)
-    const source = escapeHtmlServer(line?.source || "log")
-    const text = escapeHtmlServer(line?.line || "")
-    return `[${at}] ${source}: ${text}`
-  }).join("\n") || "Sem saída capturada ainda."
-
-  const terminalBlock = authReady
-    ? `
-    <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
-      <h3 style="margin:0 0 10px 0">Terminal (somente leitura)</h3>
-      <pre style="max-height:260px;overflow:auto;background:#0d1117;color:#c9d1d9;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap">${terminalLines}</pre>
-    </section>
-    `
-    : ""
-
   const downloadBlock = `
     <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
       <h3 style="margin:0 0 10px 0">Download de dados</h3>
@@ -1253,7 +1299,257 @@ app.get("/", (req,res)=>{
   `
 
   res.send(
-    `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>Vitin Bot</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:16px">${qrBlock}${perfBlock}${commandBlock}${terminalBlock}${downloadBlock}</body></html>`
+    `<!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>Vitin Bot</title>
+      </head>
+      <body style="font-family:Segoe UI,Arial,sans-serif;padding:16px">
+        <section style="max-width:980px">
+          <h2 style="margin:0 0 8px 0">Painel Vitin Bot</h2>
+          <p id="polling-status" style="margin:0 0 12px 0;color:#555">Atualizando automaticamente a cada 2000ms.</p>
+        </section>
+
+        <section id="qr-section" style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px;display:none"></section>
+        <section id="perf-section" style="display:none"></section>
+        <section id="users-section" style="display:none"></section>
+        <section id="commands-section" style="display:none"></section>
+        <section id="terminal-section" style="display:none"></section>
+
+        ${downloadBlock}
+
+        <script>
+          const POLLING_MS = 2000
+          const pollingStatusEl = document.getElementById("polling-status")
+          const qrSectionEl = document.getElementById("qr-section")
+          const perfSectionEl = document.getElementById("perf-section")
+          const usersSectionEl = document.getElementById("users-section")
+          const commandsSectionEl = document.getElementById("commands-section")
+          const terminalSectionEl = document.getElementById("terminal-section")
+
+          function escapeHtml(value) {
+            return String(value || "")
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/\"/g, "&quot;")
+              .replace(/'/g, "&#39;")
+          }
+
+          function formatMs(value) {
+            return Number(value || 0).toFixed(1) + " ms"
+          }
+
+          function formatElapsed(ms) {
+            const totalSec = Math.max(0, Math.floor(Number(ms || 0) / 1000))
+            const h = Math.floor(totalSec / 3600)
+            const m = Math.floor((totalSec % 3600) / 60)
+            const s = totalSec % 60
+            return h + "h " + m + "m " + s + "s"
+          }
+
+          function formatDateTime(value) {
+            if (!value) return "-"
+            const shifted = new Date(Number(value) - (3 * 60 * 60 * 1000))
+            return shifted.toISOString().replace("T", " ").slice(0, 19) + " (UTC-3)"
+          }
+
+          function renderMetricRow(label, bucket) {
+            return "<tr>" +
+              "<td style=\"text-align:left;border-bottom:1px solid #eee;padding:4px\">" + escapeHtml(label) + "</td>" +
+              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + Number(bucket?.count || 0) + "</td>" +
+              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(bucket?.lastMs) + "</td>" +
+              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(bucket?.avgMs) + "</td>" +
+              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(bucket?.p95Ms) + "</td>" +
+              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(bucket?.maxMs) + "</td>" +
+            "</tr>"
+          }
+
+          function renderQr(authReady, qrImage) {
+            if (!authReady && qrImage) {
+              qrSectionEl.style.display = "block"
+              qrSectionEl.innerHTML = "<h3 style=\"margin:0 0 10px 0\">Escaneie o QR Code</h3>" +
+                "<img src=\"" + qrImage + "\" style=\"max-width:320px;width:100%;height:auto\">"
+              return
+            }
+            qrSectionEl.style.display = "block"
+            qrSectionEl.innerHTML = "<h3 style=\"margin:0\">" + (authReady ? "Bot conectado" : "Aguardando autenticação") + "</h3>"
+          }
+
+          function renderPerf(snapshot) {
+            if (!snapshot) {
+              perfSectionEl.style.display = "none"
+              return
+            }
+
+            const stageRows = (snapshot.metrics?.stages || []).map((stage) =>
+              renderMetricRow("stage:" + stage.name, stage)
+            ).join("")
+
+            perfSectionEl.style.display = "block"
+            perfSectionEl.innerHTML =
+              "<section style=\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\">" +
+                "<h3 style=\"margin:0 0 10px 0\">Performance</h3>" +
+                "<p style=\"margin:4px 0\">Estado da conexão: <b>" + escapeHtml(snapshot.connectionState) + "</b></p>" +
+                "<p style=\"margin:4px 0\">Uptime do bot: <b>" + formatElapsed(snapshot.uptimeMs) + "</b> | Desde autenticação: <b>" + formatElapsed(snapshot.authUptimeMs) + "</b></p>" +
+                "<p style=\"margin:4px 0\">Autenticado em: <b>" + formatDateTime(snapshot.authenticatedAt) + "</b> | Conectado em: <b>" + formatDateTime(snapshot.connectedAt) + "</b></p>" +
+                "<p style=\"margin:4px 0\">Mensagens recebidas: <b>" + Number(snapshot.messagesReceived || 0) + "</b> | Erros: <b>" + Number(snapshot.messagesErrored || 0) + "</b> | Ignoradas (sem conteúdo): <b>" + Number(snapshot.ignoredNoMessage || 0) + "</b> | Ignoradas (fromMe): <b>" + Number(snapshot.ignoredFromMe || 0) + "</b></p>" +
+                "<p style=\"margin:4px 0\">Último comando: <b>" + escapeHtml(snapshot.lastCommand || "-") + "</b> | Último processamento: <b>" + formatDateTime(snapshot.lastProcessedAt) + "</b> | Reconexões: <b>" + Number(snapshot.reconnects || 0) + "</b></p>" +
+                "<p style=\"margin:4px 0\">Memória: heap <b>" + Number(snapshot.memory?.heapUsed || 0) + " MB</b> | rss <b>" + Number(snapshot.memory?.rss || 0) + " MB</b> | Registrados <b>" + Number(snapshot.registeredUsers || 0) + "</b></p>" +
+                "<table style=\"width:100%;margin-top:12px;border-collapse:collapse;font-family:monospace;font-size:12px\">" +
+                  "<thead>" +
+                    "<tr>" +
+                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Métrica</th>" +
+                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Count</th>" +
+                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Last</th>" +
+                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Avg</th>" +
+                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">P95</th>" +
+                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Max</th>" +
+                    "</tr>" +
+                  "</thead>" +
+                  "<tbody>" +
+                    renderMetricRow("message.processing", snapshot.metrics?.processing) +
+                    renderMetricRow("message.queueDelay", snapshot.metrics?.queueDelay) +
+                    renderMetricRow("sock.sendMessage", snapshot.metrics?.sendMessage) +
+                    renderMetricRow("sock.groupMetadata", snapshot.metrics?.groupMetadata) +
+                    renderMetricRow("eventLoop.lag", snapshot.metrics?.eventLoopLag) +
+                    stageRows +
+                  "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderRegisteredUsers(snapshot) {
+            if (!snapshot) {
+              usersSectionEl.style.display = "none"
+              return
+            }
+
+            const users = Array.isArray(snapshot.registeredUsersList) ? snapshot.registeredUsersList : []
+            const rows = users.map((entry) => {
+              const command = entry?.lastCommand?.command || "-"
+              const commandAt = formatDateTime(entry?.lastCommand?.at)
+              return "<tr>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(entry?.waNumber || "-") + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(entry?.waName || "-") + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(entry?.nickname || "-") + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc;text-align:right\">" + Number(entry?.coins || 0).toLocaleString("pt-BR") + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(command) + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(commandAt) + "</td>" +
+              "</tr>"
+            }).join("")
+
+            usersSectionEl.style.display = "block"
+            usersSectionEl.innerHTML =
+              "<section style=\"margin-top:20px;max-width:980px\">" +
+                "<details open style=\"padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa\">" +
+                  "<summary style=\"cursor:pointer;font-weight:700\">Usuários registrados (" + users.length + ")</summary>" +
+                  "<div style=\"margin-top:10px;overflow:auto\">" +
+                    "<table style=\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\">" +
+                      "<thead>" +
+                        "<tr>" +
+                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">WhatsApp nº</th>" +
+                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Nome WhatsApp</th>" +
+                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Apelido escolhido</th>" +
+                          "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Coins</th>" +
+                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Último comando</th>" +
+                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Quando</th>" +
+                        "</tr>" +
+                      "</thead>" +
+                      "<tbody>" + (rows || "<tr><td colspan=\"6\" style=\"padding:6px\">Sem usuários registrados.</td></tr>") + "</tbody>" +
+                    "</table>" +
+                  "</div>" +
+                "</details>" +
+              "</section>"
+          }
+
+          function renderCommands(snapshot) {
+            if (!snapshot) {
+              commandsSectionEl.style.display = "none"
+              return
+            }
+
+            const rows = (snapshot.commandHistory || []).slice(-10).map((entry) =>
+              "<tr>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + formatDateTime(entry?.at) + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(entry?.command || "-") + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(entry?.senderName || "-") + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(entry?.groupName || "-") + "</td>" +
+              "</tr>"
+            ).join("")
+
+            commandsSectionEl.style.display = "block"
+            commandsSectionEl.innerHTML =
+              "<section style=\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\">" +
+                "<h3 style=\"margin:0 0 10px 0\">Últimos 10 comandos</h3>" +
+                "<table style=\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\">" +
+                  "<thead>" +
+                    "<tr>" +
+                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Quando</th>" +
+                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Comando</th>" +
+                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Usuário</th>" +
+                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Grupo</th>" +
+                    "</tr>" +
+                  "</thead>" +
+                  "<tbody>" + (rows || "<tr><td colspan=\"4\" style=\"padding:6px\">Sem comandos registrados.</td></tr>") + "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderTerminal(snapshot) {
+            if (!snapshot) {
+              terminalSectionEl.style.display = "none"
+              return
+            }
+
+            const terminalText = (snapshot.terminalLines || []).map((line) => {
+              return "[" + formatDateTime(line?.at) + "] " + (line?.source || "log") + ": " + (line?.line || "")
+            }).join("\n") || "Sem saída capturada ainda."
+
+            terminalSectionEl.style.display = "block"
+            terminalSectionEl.innerHTML =
+              "<section style=\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\">" +
+                "<h3 style=\"margin:0 0 10px 0\">Terminal (somente leitura)</h3>" +
+                "<pre style=\"max-height:260px;overflow:auto;background:#0d1117;color:#c9d1d9;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap\">" + escapeHtml(terminalText) + "</pre>" +
+              "</section>"
+          }
+
+          function renderDashboard(payload) {
+            const authReady = Boolean(payload?.authReady)
+            const snapshot = payload?.snapshot || null
+            renderQr(authReady, payload?.qrImage || null)
+            renderPerf(snapshot)
+            renderRegisteredUsers(snapshot)
+            renderCommands(snapshot)
+            renderTerminal(snapshot)
+          }
+
+          let refreshInFlight = false
+          async function refreshDashboard() {
+            if (refreshInFlight) return
+            refreshInFlight = true
+            try {
+              const response = await fetch("/dashboard-data", { cache: "no-store" })
+              if (!response.ok) {
+                throw new Error("HTTP " + response.status)
+              }
+              const payload = await response.json()
+              renderDashboard(payload)
+              pollingStatusEl.textContent = "Atualizando automaticamente a cada 2000ms. Última atualização: " + new Date().toLocaleTimeString("pt-BR")
+            } catch (err) {
+              pollingStatusEl.textContent = "Falha ao atualizar painel: " + String(err?.message || err)
+            } finally {
+              refreshInFlight = false
+            }
+          }
+
+          refreshDashboard()
+          setInterval(refreshDashboard, POLLING_MS)
+        </script>
+      </body>
+    </html>`
   )
 })
 
@@ -1314,6 +1610,12 @@ async function startBot(){
 
   const originalSendMessage = sock.sendMessage.bind(sock)
   sock.sendMessage = async (...args) => {
+    const messageContent = args[1]
+    if (messageContent && typeof messageContent === "object" && shouldAppendMassMentionHint(messageContent)) {
+      const baseText = String(messageContent.text || "").trimEnd()
+      messageContent.text = `${baseText}\n\n${MASS_MENTION_OPT_OUT_HINT}`
+    }
+
     const startedAt = Date.now()
     try {
       return await originalSendMessage(...args)
@@ -2440,6 +2742,7 @@ async function startBot(){
     if (isCommand) {
       addCommandHistory({
         command: cmd,
+        senderId: sender,
         senderName: getKnownUserName(sender),
         groupName: isGroup ? getKnownGroupName(from) : "DM",
       })
@@ -3520,6 +3823,27 @@ async function startBot(){
       })
     )
     if (handledStreakValue) return
+
+    if (isCommand) {
+      const suggestionResult = getLikelyCommandSuggestions({
+        input: cmd,
+        commandHelp: COMMAND_HELP,
+        prefix,
+        maxSuggestions: 3,
+      })
+      await sock.sendMessage(from, {
+        text: formatUnknownCommandSuggestionText(cmd, suggestionResult),
+      })
+      telemetry.incrementCounter("command.unknown", 1)
+      telemetry.appendEvent("command.unknown", {
+        groupId: isGroup ? from : null,
+        userId: sender,
+        input: cmd,
+        metric: suggestionResult.metric,
+        suggestions: suggestionResult.suggestions.map((entry) => entry.text),
+      })
+      return
+    }
 
     } catch (err) {
       perfStats.messagesErrored += 1

@@ -90,6 +90,53 @@ const PUNISHMENT_PASS_BASE_SELL = {
   13: 750,  // max 3 words
 }
 
+const PASS_ITEM_ID_BASE = 100_000
+const PASS_ITEM_ID_TYPE_FACTOR = 1_000
+
+const ITEM_NUMERIC_IDS = {
+  kronosVerdadeira: "0",
+  escudo: "1",
+  escudoReforcado: "2",
+  antiRouboCharm: "3",
+  casinoInsurance: "4",
+  workSafetyToken: "5",
+  rrtokensorte: "6",
+  redutorCooldowns1: "7",
+  questRerollToken: "8",
+  streakSaver: "9",
+  salvageToken: "10",
+  xpBooster: "11",
+  moedaDaSorte: "12",
+  espelhoDeLuz: "13",
+  boosterDeMoedas: "14",
+  questPointBooster: "15",
+  claimMultiplier: "16",
+  cristalDeAmplificacao: "17",
+  joiaDeProtecao: "18",
+  teamContribBooster: "19",
+  artefatoAntigo: "20",
+  joiaDeAssalto: "21",
+  charmeKronos: "22",
+  tesouroClassico: "23",
+  coracaoOssificado: "24",
+  seloLendario: "25",
+  kronosQuebrada: "26",
+  tesouroLendario: "27",
+  pedraClimatica: "28",
+  coracaoDoUniverso: "29",
+  marcaEterna: "30",
+  lootbox: "31",
+  coupon5pct: "32",
+  coupon10pct: "33",
+  coupon25pct: "34",
+  coupon40pct: "35",
+}
+
+const LEGACY_ITEM_KEY_TO_ID = { ...ITEM_NUMERIC_IDS }
+
+const KRONOS_VERDADEIRA_ITEM_ID = ITEM_NUMERIC_IDS.kronosVerdadeira
+const KRONOS_QUEBRADA_ITEM_ID = ITEM_NUMERIC_IDS.kronosQuebrada
+
 function normalizePassSeverity(value, fallback = 1) {
   const parsed = Math.floor(Number(value) || 0)
   return parsed > 0 ? parsed : fallback
@@ -103,15 +150,25 @@ function isValidPunishmentType(type) {
 function buildPunishmentPassKey(type, severity = 1) {
   const safeType = Math.floor(Number(type) || 0)
   const safeSeverity = normalizePassSeverity(severity, 1)
-  return `passPunicao${safeType}x${safeSeverity}`
+  return String(PASS_ITEM_ID_BASE + (safeType * PASS_ITEM_ID_TYPE_FACTOR) + safeSeverity)
 }
 
 function parsePunishmentPassKey(itemKey = "") {
   const raw = String(itemKey || "")
-  const match = raw.match(/^passPunicao(1[0-3]|[1-9])x(\d+)$/i)
-  if (!match) return null
-  const type = Number.parseInt(match[1], 10)
-  const severity = normalizePassSeverity(match[2], 1)
+  const numeric = Number.parseInt(raw, 10)
+  if (/^\d+$/.test(raw) && Number.isFinite(numeric) && numeric >= (PASS_ITEM_ID_BASE + PASS_ITEM_ID_TYPE_FACTOR + 1)) {
+    const remainder = numeric - PASS_ITEM_ID_BASE
+    const type = Math.floor(remainder / PASS_ITEM_ID_TYPE_FACTOR)
+    const severity = remainder % PASS_ITEM_ID_TYPE_FACTOR
+    if (isValidPunishmentType(type) && severity > 0) {
+      return { type, severity, key: buildPunishmentPassKey(type, severity) }
+    }
+  }
+
+  const legacyMatch = raw.match(/^passPunicao(1[0-3]|[1-9])x(\d+)$/i)
+  if (!legacyMatch) return null
+  const type = Number.parseInt(legacyMatch[1], 10)
+  const severity = normalizePassSeverity(legacyMatch[2], 1)
   return { type, severity, key: buildPunishmentPassKey(type, severity) }
 }
 
@@ -524,6 +581,20 @@ const ITEM_DEFINITIONS = {
   },
 
 }
+
+for (const item of Object.values(ITEM_DEFINITIONS)) {
+  const legacyKey = String(item?.key || "").trim()
+  if (!legacyKey) continue
+  item.legacyKey = legacyKey
+  const mapped = LEGACY_ITEM_KEY_TO_ID[legacyKey]
+  if (typeof mapped === "string") {
+    item.key = mapped
+  }
+}
+
+const ITEM_DEFINITIONS_BY_ID = Object.fromEntries(
+  Object.values(ITEM_DEFINITIONS).map((item) => [String(item?.key || ""), item])
+)
 
 const SHIELD_PRICE = ITEM_DEFINITIONS.escudo.price
 
@@ -1031,9 +1102,9 @@ function migrateUserShape(user) {
     }
   }
   
-  // Migrar dados antigos de "kronos" para "kronosQuebrada"
+  // Migrar dados antigos de "kronos" para a Kronos quebrada canônica
   if (user.items.kronos && user.items.kronos > 0) {
-    user.items.kronosQuebrada = (Number(user.items.kronosQuebrada) || 0) + Number(user.items.kronos)
+    user.items[KRONOS_QUEBRADA_ITEM_ID] = (Number(user.items[KRONOS_QUEBRADA_ITEM_ID]) || 0) + Number(user.items.kronos)
     delete user.items.kronos
   }
 
@@ -1046,27 +1117,37 @@ function migrateUserShape(user) {
 
   // Migrar chaves antigas/temporárias de itens para as chaves canônicas atuais
   const ITEM_KEY_MIGRATIONS = {
-    pingenteAntiRoubo: "antiRouboCharm",
-    seguroCassino: "casinoInsurance",
-    seguroTrabalho: "workSafetyToken",
-    tokenSorteRR: "rrtokensorte",
-    rrFocusToken: "rrtokensorte",
-    redutorCooldowns: "redutorCooldowns1",
-    tokenRerolagem: "questRerollToken",
-    salvaStreak: "streakSaver",
-    seguroGeral: "salvageToken",
-    boosterXp: "xpBooster",
-    boosterMissao: "questPointBooster",
-    multiplicadorRotina: "claimMultiplier",
-    multiplicadorTime: "teamContribBooster",
+    pingenteAntiRoubo: LEGACY_ITEM_KEY_TO_ID.antiRouboCharm,
+    seguroCassino: LEGACY_ITEM_KEY_TO_ID.casinoInsurance,
+    seguroTrabalho: LEGACY_ITEM_KEY_TO_ID.workSafetyToken,
+    tokenSorteRR: LEGACY_ITEM_KEY_TO_ID.rrtokensorte,
+    rrFocusToken: LEGACY_ITEM_KEY_TO_ID.rrtokensorte,
+    redutorCooldowns: LEGACY_ITEM_KEY_TO_ID.redutorCooldowns1,
+    tokenRerolagem: LEGACY_ITEM_KEY_TO_ID.questRerollToken,
+    salvaStreak: LEGACY_ITEM_KEY_TO_ID.streakSaver,
+    seguroGeral: LEGACY_ITEM_KEY_TO_ID.salvageToken,
+    boosterXp: LEGACY_ITEM_KEY_TO_ID.xpBooster,
+    boosterMissao: LEGACY_ITEM_KEY_TO_ID.questPointBooster,
+    multiplicadorRotina: LEGACY_ITEM_KEY_TO_ID.claimMultiplier,
+    multiplicadorTime: LEGACY_ITEM_KEY_TO_ID.teamContribBooster,
   }
   for (const [legacyKey, canonicalKey] of Object.entries(ITEM_KEY_MIGRATIONS)) {
+    if (!canonicalKey) continue
     const qty = Math.max(0, Math.floor(Number(user.items[legacyKey]) || 0))
     if (qty > 0) {
       user.items[canonicalKey] = Math.max(0, Math.floor(Number(user.items[canonicalKey]) || 0)) + qty
       delete user.items[legacyKey]
     }
   }
+
+  const migratedItems = {}
+  for (const [rawKey, rawQty] of Object.entries(user.items || {})) {
+    const key = normalizeItemKey(rawKey)
+    const qty = Math.max(0, Math.floor(Number(rawQty) || 0))
+    if (!key || qty <= 0) continue
+    migratedItems[key] = Math.max(0, Math.floor(Number(migratedItems[key]) || 0)) + qty
+  }
+  user.items = migratedItems
   
   if (!user.buffs || typeof user.buffs !== "object") {
     user.buffs = {
@@ -1439,8 +1520,14 @@ function debitCoinsFlexible(userId, amount, transaction = null) {
 }
 
 function normalizeItemKey(itemKey = "") {
-  const normalized = String(itemKey || "").trim().toLowerCase()
-  if (!normalized) return null
+  const raw = String(itemKey || "").trim()
+  if (!raw) return null
+
+  if (/^\d+$/.test(raw)) {
+    return raw
+  }
+
+  const normalized = raw.toLowerCase()
 
   if (["mute", "silenciar", "silencio", "silêncio"].includes(normalized)) {
     return buildPunishmentPassKey(5, 1)
@@ -1458,9 +1545,14 @@ function normalizeItemKey(itemKey = "") {
     return passKey.key
   }
 
+  const mappedLegacy = LEGACY_ITEM_KEY_TO_ID[raw] || LEGACY_ITEM_KEY_TO_ID[normalized]
+  if (mappedLegacy) {
+    return mappedLegacy
+  }
+
   const entries = Object.values(ITEM_DEFINITIONS)
   const found = entries.find((item) => {
-    const canonical = String(item.key || "").toLowerCase()
+    const canonical = String(item.legacyKey || item.key || "").toLowerCase()
     const aliases = (item.aliases || []).map((alias) => String(alias || "").toLowerCase())
     return canonical === normalized || aliases.includes(normalized)
   })
@@ -1474,9 +1566,7 @@ function getItemDefinition(itemKey = "") {
   if (passParsed) {
     return getPunishmentPassDefinition(passParsed.type, passParsed.severity)
   }
-  if (ITEM_DEFINITIONS[key]) return ITEM_DEFINITIONS[key]
-  const fallback = Object.values(ITEM_DEFINITIONS).find((item) => String(item?.key || "") === key)
-  return fallback || null
+  return ITEM_DEFINITIONS_BY_ID[key] || null
 }
 
 function getItemQuantity(userId, itemKey) {
@@ -1550,15 +1640,16 @@ function useItem(userId, itemKey) {
   return useItemEngine(buildItemEffectsDeps(), userId, itemKey)
 }
 
-function grantKronosBenefits(userId, itemKey = "kronosQuebrada", quantity = 1) {
+function grantKronosBenefits(userId, itemKey = KRONOS_QUEBRADA_ITEM_ID, quantity = 1) {
   const user = ensureUser(userId)
   const qty = Math.max(1, Math.floor(Number(quantity) || 1))
-  const def = getItemDefinition(itemKey)
+  const normalizedItemKey = normalizeItemKey(itemKey)
+  const def = getItemDefinition(normalizedItemKey)
   if (!user || !def) return
   
   const now = Date.now()
   
-  if (itemKey === "kronosVerdadeira") {
+  if (normalizedItemKey === KRONOS_VERDADEIRA_ITEM_ID) {
     // Coroa Kronos Verdadeira é permanente
     user.buffs.kronosVerdadeiraActive = true
     touchUser(user)
@@ -1576,7 +1667,7 @@ function syncKronosStateFromInventory(userId) {
   const user = ensureUser(userId)
   if (!user) return
 
-  const hasPermanentCrown = getItemQuantity(userId, "kronosVerdadeira") > 0
+  const hasPermanentCrown = getItemQuantity(userId, KRONOS_VERDADEIRA_ITEM_ID) > 0
   if (!hasPermanentCrown) {
     user.buffs.kronosVerdadeiraActive = false
     user.progression.permanentCrown = false
@@ -1586,7 +1677,7 @@ function syncKronosStateFromInventory(userId) {
   }
 
   const now = Date.now()
-  const hasBrokenCrown = getItemQuantity(userId, "kronosQuebrada") > 0
+  const hasBrokenCrown = getItemQuantity(userId, KRONOS_QUEBRADA_ITEM_ID) > 0
   if (!hasBrokenCrown && (Number(user.buffs.kronosExpiresAt) || 0) > now) {
     user.buffs.kronosExpiresAt = now
   }
@@ -1600,13 +1691,14 @@ function syncKronosStateFromInventory(userId) {
   saveEconomy()
 }
 
-function removeKronosDuration(userId, itemKey = "kronosQuebrada", quantity = 1) {
+function removeKronosDuration(userId, itemKey = KRONOS_QUEBRADA_ITEM_ID, quantity = 1) {
   const user = ensureUser(userId)
   const qty = Math.max(1, Math.floor(Number(quantity) || 1))
-  const def = getItemDefinition(itemKey)
+  const normalizedItemKey = normalizeItemKey(itemKey)
+  const def = getItemDefinition(normalizedItemKey)
   if (!user || !def) return
   
-  if (itemKey === "kronosVerdadeira") {
+  if (normalizedItemKey === KRONOS_VERDADEIRA_ITEM_ID) {
     // Não pode remover Coroa Kronos Verdadeira (é permanente)
     return
   }
@@ -1624,12 +1716,12 @@ function addItem(userId, itemKey, quantity = 1) {
   if (!key || qty <= 0) return 0
   const current = getItemQuantity(userId, key)
   const next = setItemQuantity(userId, key, Math.min(MAX_ITEM_STACK, current + qty))
-  if (key === "kronosQuebrada") {
+  if (key === KRONOS_QUEBRADA_ITEM_ID) {
     const applied = Math.max(0, next - current)
-    if (applied > 0) grantKronosBenefits(userId, "kronosQuebrada", applied)
-  } else if (key === "kronosVerdadeira") {
+    if (applied > 0) grantKronosBenefits(userId, KRONOS_QUEBRADA_ITEM_ID, applied)
+  } else if (key === KRONOS_VERDADEIRA_ITEM_ID) {
     const applied = Math.max(0, next - current)
-    if (applied > 0) grantKronosBenefits(userId, "kronosVerdadeira", applied)
+    if (applied > 0) grantKronosBenefits(userId, KRONOS_VERDADEIRA_ITEM_ID, applied)
   }
   return next
 }
@@ -1641,12 +1733,12 @@ function removeItem(userId, itemKey, quantity = 1) {
   const current = getItemQuantity(userId, key)
   const next = Math.max(0, current - qty)
   setItemQuantity(userId, key, next)
-  if (key === "kronosQuebrada") {
-    removeKronosDuration(userId, "kronosQuebrada", Math.min(current, qty))
-  } else if (key === "kronosVerdadeira") {
+  if (key === KRONOS_QUEBRADA_ITEM_ID) {
+    removeKronosDuration(userId, KRONOS_QUEBRADA_ITEM_ID, Math.min(current, qty))
+  } else if (key === KRONOS_VERDADEIRA_ITEM_ID) {
     syncKronosStateFromInventory(userId)
   }
-  if (key === "kronosQuebrada") {
+  if (key === KRONOS_QUEBRADA_ITEM_ID) {
     syncKronosStateFromInventory(userId)
   }
   return next

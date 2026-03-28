@@ -355,7 +355,7 @@ test("economy router !coinsranking falls back to nickname when mention jid is no
   assert.deepEqual(sent[0].payload?.mentions || [], [])
 })
 
-test("economy router handles !guia command and sends two DM parts", async () => {
+test("economy router handles !guia command and sends three DM sections", async () => {
   const { sock, sent } = createSockCapture()
 
   const handled = await handleEconomyCommands({
@@ -391,27 +391,29 @@ test("economy router handles !guia command and sends two DM parts", async () => 
   })
 
   assert.equal(handled, true)
-  assert.equal(sent.length, 3)
+  assert.equal(sent.length, 4)
   assert.equal(sent[0].to, "autor@s.whatsapp.net")
   assert.equal(sent[1].to, "autor@s.whatsapp.net")
-  assert.equal(sent[2].to, "group@g.us")
-  assert.match(String(sent[0].payload?.text || ""), /GUIA DE ECONOMIA \(1\/2\)/)
-  assert.match(String(sent[1].payload?.text || ""), /GUIA DE ECONOMIA \(2\/2\)/)
-  assert.match(String(sent[2].payload?.text || ""), /guia de economia no privado em 2 partes/i)
+  assert.equal(sent[2].to, "autor@s.whatsapp.net")
+  assert.equal(sent[3].to, "group@g.us")
+  assert.match(String(sent[0].payload?.text || ""), /SECAO 1\/3/)
+  assert.match(String(sent[1].payload?.text || ""), /SECAO 2\/3/)
+  assert.match(String(sent[2].payload?.text || ""), /SECAO 3\/3/)
+  assert.match(String(sent[3].payload?.text || ""), /guia de economia no privado em 3 secoes/i)
 })
 
-test("economy router handles !team create command", async () => {
+test("economy router handles !time criar command", async () => {
   const { sock, sent } = createSockCapture()
 
   const handled = await handleEconomyCommands({
     sock,
     from: "group@g.us",
     sender: "user1@s.whatsapp.net",
-    cmd: "!team",
-    cmdName: "!team",
-    cmdArg1: "create",
+    cmd: "!time",
+    cmdName: "!time",
+    cmdArg1: "criar",
     cmdArg2: "MyTeam",
-    cmdParts: ["!team", "create", "MyTeam"],
+    cmdParts: ["!time", "criar", "MyTeam"],
     mentioned: [],
     prefix: "!",
     isGroup: true,
@@ -444,18 +446,18 @@ test("economy router handles !team create command", async () => {
   assert.match(String(sent[0].payload?.text || ""), /time criado|equipe criada|MyTeam/i)
 })
 
-test("economy router reports !team join as disabled", async () => {
+test("economy router reports !time entrar as disabled", async () => {
   const { sock, sent } = createSockCapture()
 
   const handled = await handleEconomyCommands({
     sock,
     from: "group@g.us",
     sender: "user2@s.whatsapp.net",
-    cmd: "!team",
-    cmdName: "!team",
-    cmdArg1: "join",
+    cmd: "!time",
+    cmdName: "!time",
+    cmdArg1: "entrar",
     cmdArg2: "T12345",
-    cmdParts: ["!team", "join", "T12345"],
+    cmdParts: ["!time", "entrar", "T12345"],
     mentioned: [],
     prefix: "!",
     isGroup: true,
@@ -482,21 +484,21 @@ test("economy router reports !team join as disabled", async () => {
 
   assert.equal(handled, true)
   assert(sent.length > 0)
-  assert.match(String(sent[0].payload?.text || ""), /desativado|accept/i)
+  assert.match(String(sent[0].payload?.text || ""), /desativado|aceitar/i)
 })
 
-test("economy router handles !team members with stats", async () => {
+test("economy router handles !time membros with stats", async () => {
   const { sock, sent } = createSockCapture()
 
   const handled = await handleEconomyCommands({
     sock,
     from: "group@g.us",
     sender: "user1@s.whatsapp.net",
-    cmd: "!team",
-    cmdName: "!team",
-    cmdArg1: "members",
+    cmd: "!time",
+    cmdName: "!time",
+    cmdArg1: "membros",
     cmdArg2: "",
-    cmdParts: ["!team", "members"],
+    cmdParts: ["!time", "membros"],
     mentioned: [],
     prefix: "!",
     isGroup: true,
@@ -536,18 +538,18 @@ test("economy router handles !team members with stats", async () => {
   assert.match(String(sent[0].payload?.text || ""), /membros|integrantes/i)
 })
 
-test("economy router handles !team stats", async () => {
+test("economy router handles !time estatisticas", async () => {
   const { sock, sent } = createSockCapture()
 
   const handled = await handleEconomyCommands({
     sock,
     from: "group@g.us",
     sender: "user1@s.whatsapp.net",
-    cmd: "!team",
-    cmdName: "!team",
-    cmdArg1: "stats",
+    cmd: "!time",
+    cmdName: "!time",
+    cmdArg1: "estatisticas",
     cmdArg2: "",
-    cmdParts: ["!team", "stats"],
+    cmdParts: ["!time", "estatisticas"],
     mentioned: [],
     prefix: "!",
     isGroup: true,
@@ -591,7 +593,7 @@ test("economy router handles !team stats", async () => {
   assert.match(String(sent[0].payload?.text || ""), /estatísticas|stats|TestTeam|membros|moedas/i)
 })
 
-test("economy router handles !team depositarcoins", async () => {
+test("economy router handles !time depositarcoins", async () => {
   const { sock, sent } = createSockCapture()
   let poolDeposit = 0
 
@@ -599,11 +601,11 @@ test("economy router handles !team depositarcoins", async () => {
     sock,
     from: "group@g.us",
     sender: "user1@s.whatsapp.net",
-    cmd: "!team depositarcoins 120",
-    cmdName: "!team",
+    cmd: "!time depositarcoins 120",
+    cmdName: "!time",
     cmdArg1: "depositarcoins",
     cmdArg2: "120",
-    cmdParts: ["!team", "depositarcoins", "120"],
+    cmdParts: ["!time", "depositarcoins", "120"],
     mentioned: [],
     prefix: "!",
     isGroup: true,
@@ -630,7 +632,7 @@ test("economy router handles !team depositarcoins", async () => {
   assert.match(String(sent[0].payload?.text || ""), /depositou/i)
 })
 
-test("economy router handles !team retiraritem", async () => {
+test("economy router handles !time retiraritem", async () => {
   const { sock, sent } = createSockCapture()
   let removedFromPool = false
 
@@ -638,11 +640,11 @@ test("economy router handles !team retiraritem", async () => {
     sock,
     from: "group@g.us",
     sender: "leader@s.whatsapp.net",
-    cmd: "!team retiraritem escudo 2",
-    cmdName: "!team",
+    cmd: "!time retiraritem escudo 2",
+    cmdName: "!time",
     cmdArg1: "retiraritem",
     cmdArg2: "escudo",
-    cmdParts: ["!team", "retiraritem", "escudo", "2"],
+    cmdParts: ["!time", "retiraritem", "escudo", "2"],
     mentioned: [],
     prefix: "!",
     isGroup: true,
@@ -857,6 +859,51 @@ test("economy router grants XP on !daily claim", async () => {
   assert.equal(xpCalls.length, 1)
   assert.equal(xpCalls[0].amount, 45)
   assert.match(String(sent[0].payload?.text || ""), /XP: \+45/)
+})
+
+test("economy router shows global reset remaining time when !daily is already claimed", async () => {
+  const { sock, sent } = createSockCapture()
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "autor@s.whatsapp.net",
+    cmd: "!daily",
+    cmdName: "!daily",
+    cmdArg1: "",
+    cmdArg2: "",
+    cmdParts: ["!daily"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    economyService: {
+      claimDaily: () => ({ ok: false, reason: "already-claimed", dayKey: "2026-03-28" }),
+      getMsUntilNextDailyReset: () => (2 * 60 * 60 * 1000) + (15 * 60 * 1000),
+      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getStatement: () => [],
+      getGroupRanking: () => [],
+      getShopIndexText: () => "shop",
+    },
+    parseQuantity: () => 0,
+    formatDuration: (ms) => `fmt:${ms}`,
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(sent.length, 1)
+  const text = String(sent[0].payload?.text || "")
+  assert.match(text, /já resgatou seu daily/i)
+  assert.match(text, /reset global/i)
+  assert.match(text, /fmt:8100000/)
 })
 
 test("economy router grants XP on failed !roubar", async () => {
@@ -2969,6 +3016,7 @@ test("utility router handles !menu command", async () => {
   assert.equal(sent.length, 1)
   assert.match(sent[0].payload.text, /VITIN BOT/)
   assert.match(sent[0].payload.text, /!ajuda <comando>/i)
+  assert.match(sent[0].payload.text, /!pergunta/i)
   assert.match(sent[0].payload.text, /feedback/i)
 })
 
@@ -3159,6 +3207,161 @@ test("utility router handles !feedbackpriv in DM and forwards command-like next 
   assert.match(String(sent[1].payload?.text || ""), /Comando: S/i)
   assert.match(String(sent[1].payload?.text || ""), /!quero reportar bug no saldo/i)
   assert.equal(sent[2].to, sender)
+})
+
+test("utility router handles !pergunta only in DM", async () => {
+  __resetUtilityRouterStateForTests()
+  const { sock, sent } = createSockCapture()
+
+  const handled = await handleUtilityCommands({
+    sock,
+    from: "group@g.us",
+    sender: "user@s.whatsapp.net",
+    rawText: "!pergunta",
+    isCommand: true,
+    cmd: "!pergunta",
+    prefix: "!",
+    isGroup: true,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(sent.length, 1)
+  assert.match(String(sent[0].payload?.text || ""), /so funciona no privado/i)
+})
+
+test("utility router handles !pergunta ask and override answer flow", async () => {
+  __resetUtilityRouterStateForTests()
+  const { sock, sent } = createSockCapture()
+  const override = "override@s.whatsapp.net"
+  const sender = "user@s.whatsapp.net"
+
+  const armedQuestion = await handleUtilityCommands({
+    sock,
+    from: sender,
+    sender,
+    rawText: "!pergunta",
+    isCommand: true,
+    cmd: "!pergunta",
+    prefix: "!",
+    isGroup: false,
+    overrideJid: override,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  const forwardedQuestion = await handleUtilityCommands({
+    sock,
+    from: sender,
+    sender,
+    rawText: "como ganhar mais moedas rapido?",
+    isCommand: false,
+    cmd: "como ganhar mais moedas rapido?",
+    prefix: "!",
+    isGroup: false,
+    overrideJid: override,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  const overrideMessage = sent.find((entry) => entry.to === override && /PERGUNTA PRIVADA/i.test(String(entry.payload?.text || "")))
+  assert.ok(overrideMessage)
+  const matchedId = String(overrideMessage.payload?.text || "").match(/\(([A-Z0-9]{5})\)/)
+  assert.ok(matchedId)
+  const questionId = matchedId[1]
+
+  const armedAnswer = await handleUtilityCommands({
+    sock,
+    from: override,
+    sender: override,
+    rawText: `!pergunta ${questionId}`,
+    isCommand: true,
+    cmd: `!pergunta ${questionId}`,
+    prefix: "!",
+    isGroup: false,
+    isKnownOverrideSender: true,
+    overrideJid: override,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  const sentAnswer = await handleUtilityCommands({
+    sock,
+    from: override,
+    sender: override,
+    rawText: "faz daily, trabalho e missao todo dia",
+    isCommand: false,
+    cmd: "faz daily, trabalho e missao todo dia",
+    prefix: "!",
+    isGroup: false,
+    isKnownOverrideSender: true,
+    overrideJid: override,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  const reusedProtocol = await handleUtilityCommands({
+    sock,
+    from: override,
+    sender: override,
+    rawText: `!pergunta ${questionId}`,
+    isCommand: true,
+    cmd: `!pergunta ${questionId}`,
+    prefix: "!",
+    isGroup: false,
+    isKnownOverrideSender: true,
+    overrideJid: override,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  const delivered = sent.find((entry) => entry.to === sender && /Resposta da sua pergunta/i.test(String(entry.payload?.text || "")))
+
+  assert.equal(armedQuestion, true)
+  assert.equal(forwardedQuestion, true)
+  assert.equal(armedAnswer, true)
+  assert.equal(sentAnswer, true)
+  assert.equal(reusedProtocol, true)
+  assert.ok(delivered)
+  assert.match(String(delivered.payload?.text || ""), /daily, trabalho e missao/i)
+  assert.match(String(sent[sent.length - 1].payload?.text || ""), /Nao encontrei pergunta com protocolo/i)
 })
 
 test("utility router handles hidden !jid only in DM", async () => {

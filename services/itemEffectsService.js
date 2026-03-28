@@ -138,6 +138,7 @@ function useItemEngine(deps, userId, itemKey) {
   const normalized = deps.normalizeItemKey(itemKey)
   const item = deps.getItemDefinition(normalized)
   if (!normalized || !item) return { ok: false, reason: "invalid-item" }
+  const itemIdentity = String(item.legacyKey || item.key || "")
 
   const available = deps.getItemQuantity(userId, normalized)
   if (available <= 0) return { ok: false, reason: "insufficient-items", itemKey: normalized }
@@ -147,7 +148,7 @@ function useItemEngine(deps, userId, itemKey) {
 
   const now = Date.now()
 
-  if (normalized === "redutorCooldowns1") {
+  if (itemIdentity === "redutorCooldowns1") {
     deps.removeItem(userId, normalized, 1)
     const reduced = applyCooldownReducerEngine(deps, userId, COOLDOWN_REDUCER_MS)
     return {
@@ -159,7 +160,7 @@ function useItemEngine(deps, userId, itemKey) {
     }
   }
 
-  if (normalized === "xpBooster") {
+  if (itemIdentity === "xpBooster") {
     deps.removeItem(userId, normalized, 1)
     const current = Math.max(Number(user.buffs.xpBoosterExpiresAt) || 0, now)
     user.buffs.xpBoosterExpiresAt = current + ITEM_EFFECT_DURATION_MS
@@ -174,7 +175,7 @@ function useItemEngine(deps, userId, itemKey) {
     }
   }
 
-  if (normalized === "questPointBooster") {
+  if (itemIdentity === "questPointBooster") {
     deps.removeItem(userId, normalized, 1)
     user.buffs.questRewardMultiplierCharges = Math.max(0, Math.floor(Number(user.buffs.questRewardMultiplierCharges) || 0)) + 3
     deps.touchUser(user)
@@ -188,7 +189,7 @@ function useItemEngine(deps, userId, itemKey) {
     }
   }
 
-  if (normalized === "claimMultiplier") {
+  if (itemIdentity === "claimMultiplier") {
     deps.removeItem(userId, normalized, 1)
     user.buffs.claimMultiplierCharges = Math.max(0, Math.floor(Number(user.buffs.claimMultiplierCharges) || 0)) + 1
     deps.touchUser(user)
@@ -202,7 +203,7 @@ function useItemEngine(deps, userId, itemKey) {
     }
   }
 
-  if (normalized === "teamContribBooster") {
+  if (itemIdentity === "teamContribBooster") {
     deps.removeItem(userId, normalized, 1)
     const current = Math.max(Number(user.buffs.teamContribExpiresAt) || 0, now)
     user.buffs.teamContribExpiresAt = current + ITEM_EFFECT_DURATION_MS
@@ -218,7 +219,7 @@ function useItemEngine(deps, userId, itemKey) {
     }
   }
 
-  if (normalized === "questRerollToken") {
+  if (itemIdentity === "questRerollToken") {
     deps.removeItem(userId, normalized, 1)
     const currentNonce = Math.max(0, Math.floor(Number(user.progression?.dailyQuestRerollNonce) || 0))
     user.progression.dailyQuestRerollNonce = currentNonce + 1
