@@ -30,10 +30,10 @@ const adivinhacao = require("./games/adivinhacao")
 const batataquente = require("./games/batataquente")
 const dueloDados = require("./games/dueloDados")
 const roletaRussa = require("./games/roletaRussa")
-const reação = require("./games/reacao")
+const reacaoGame = require("./games/reacao")
 const embaralhado = require("./games/embaralhado")
 const comando = require("./games/comando")
-const memória = require("./games/memoria")
+const memoriaGame = require("./games/memoria")
 const economyService = require("./services/economyService")
 const registrationService = require("./services/registrationService")
 const telemetry = require("./services/telemetryService")
@@ -1328,7 +1328,7 @@ app.get("/", (req,res)=>{
               .replace(/&/g, "&amp;")
               .replace(/</g, "&lt;")
               .replace(/>/g, "&gt;")
-              .replace(/\"/g, "&quot;")
+              .replace(/\\"/g, "&quot;")
               .replace(/'/g, "&#39;")
           }
 
@@ -1361,24 +1361,24 @@ app.get("/", (req,res)=>{
 
           function renderMetricRow(label, bucket) {
             return "<tr>" +
-              "<td style=\"text-align:left;border-bottom:1px solid #eee;padding:4px\">" + escapeHtml(label) + "</td>" +
-              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + Number(readPath(bucket, ["count"], 0)) + "</td>" +
-              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(readPath(bucket, ["lastMs"], 0)) + "</td>" +
-              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(readPath(bucket, ["avgMs"], 0)) + "</td>" +
-              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(readPath(bucket, ["p95Ms"], 0)) + "</td>" +
-              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(readPath(bucket, ["maxMs"], 0)) + "</td>" +
+              "<td style=\\"text-align:left;border-bottom:1px solid #eee;padding:4px\\">" + escapeHtml(label) + "</td>" +
+              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + Number(readPath(bucket, ["count"], 0)) + "</td>" +
+              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + formatMs(readPath(bucket, ["lastMs"], 0)) + "</td>" +
+              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + formatMs(readPath(bucket, ["avgMs"], 0)) + "</td>" +
+              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + formatMs(readPath(bucket, ["p95Ms"], 0)) + "</td>" +
+              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + formatMs(readPath(bucket, ["maxMs"], 0)) + "</td>" +
             "</tr>"
           }
 
           function renderQr(authReady, qrImage) {
             if (!authReady && qrImage) {
               qrSectionEl.style.display = "block"
-              qrSectionEl.innerHTML = "<h3 style=\"margin:0 0 10px 0\">Escaneie o QR Code</h3>" +
-                "<img src=\"" + qrImage + "\" style=\"max-width:320px;width:100%;height:auto\">"
+              qrSectionEl.innerHTML = "<h3 style=\\"margin:0 0 10px 0\\">Escaneie o QR Code</h3>" +
+                "<img src=\\"" + qrImage + "\\" style=\\"max-width:320px;width:100%;height:auto\\">"
               return
             }
             qrSectionEl.style.display = "block"
-            qrSectionEl.innerHTML = "<h3 style=\"margin:0\">" + (authReady ? "Bot conectado" : "Aguardando autenticação") + "</h3>"
+            qrSectionEl.innerHTML = "<h3 style=\\"margin:0\\">" + (authReady ? "Bot conectado" : "Aguardando autenticação") + "</h3>"
           }
 
           function renderPerf(snapshot) {
@@ -1393,23 +1393,23 @@ app.get("/", (req,res)=>{
 
             perfSectionEl.style.display = "block"
             perfSectionEl.innerHTML =
-              "<section style=\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\">" +
-                "<h3 style=\"margin:0 0 10px 0\">Performance</h3>" +
-                "<p style=\"margin:4px 0\">Estado da conexão: <b>" + escapeHtml(snapshot.connectionState) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Uptime do bot: <b>" + formatElapsed(snapshot.uptimeMs) + "</b> | Desde autenticação: <b>" + formatElapsed(snapshot.authUptimeMs) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Autenticado em: <b>" + formatDateTime(snapshot.authenticatedAt) + "</b> | Conectado em: <b>" + formatDateTime(snapshot.connectedAt) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Mensagens recebidas: <b>" + Number(snapshot.messagesReceived || 0) + "</b> | Erros: <b>" + Number(snapshot.messagesErrored || 0) + "</b> | Ignoradas (sem conteúdo): <b>" + Number(snapshot.ignoredNoMessage || 0) + "</b> | Ignoradas (fromMe): <b>" + Number(snapshot.ignoredFromMe || 0) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Último comando: <b>" + escapeHtml(snapshot.lastCommand || "-") + "</b> | Último processamento: <b>" + formatDateTime(snapshot.lastProcessedAt) + "</b> | Reconexões: <b>" + Number(snapshot.reconnects || 0) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Memória: heap <b>" + Number(readPath(snapshot, ["memory", "heapUsed"], 0)) + " MB</b> | rss <b>" + Number(readPath(snapshot, ["memory", "rss"], 0)) + " MB</b> | Registrados <b>" + Number(snapshot.registeredUsers || 0) + "</b></p>" +
-                "<table style=\"width:100%;margin-top:12px;border-collapse:collapse;font-family:monospace;font-size:12px\">" +
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">Performance</h3>" +
+                "<p style=\\"margin:4px 0\\">Estado da conexão: <b>" + escapeHtml(snapshot.connectionState) + "</b></p>" +
+                "<p style=\\"margin:4px 0\\">Uptime do bot: <b>" + formatElapsed(snapshot.uptimeMs) + "</b> | Desde autenticação: <b>" + formatElapsed(snapshot.authUptimeMs) + "</b></p>" +
+                "<p style=\\"margin:4px 0\\">Autenticado em: <b>" + formatDateTime(snapshot.authenticatedAt) + "</b> | Conectado em: <b>" + formatDateTime(snapshot.connectedAt) + "</b></p>" +
+                "<p style=\\"margin:4px 0\\">Mensagens recebidas: <b>" + Number(snapshot.messagesReceived || 0) + "</b> | Erros: <b>" + Number(snapshot.messagesErrored || 0) + "</b> | Ignoradas (sem conteúdo): <b>" + Number(snapshot.ignoredNoMessage || 0) + "</b> | Ignoradas (fromMe): <b>" + Number(snapshot.ignoredFromMe || 0) + "</b></p>" +
+                "<p style=\\"margin:4px 0\\">Último comando: <b>" + escapeHtml(snapshot.lastCommand || "-") + "</b> | Último processamento: <b>" + formatDateTime(snapshot.lastProcessedAt) + "</b> | Reconexões: <b>" + Number(snapshot.reconnects || 0) + "</b></p>" +
+                "<p style=\\"margin:4px 0\\">Memória: heap <b>" + Number(readPath(snapshot, ["memory", "heapUsed"], 0)) + " MB</b> | rss <b>" + Number(readPath(snapshot, ["memory", "rss"], 0)) + " MB</b> | Registrados <b>" + Number(snapshot.registeredUsers || 0) + "</b></p>" +
+                "<table style=\\"width:100%;margin-top:12px;border-collapse:collapse;font-family:monospace;font-size:12px\\">" +
                   "<thead>" +
                     "<tr>" +
-                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Métrica</th>" +
-                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Count</th>" +
-                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Last</th>" +
-                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Avg</th>" +
-                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">P95</th>" +
-                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Max</th>" +
+                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Métrica</th>" +
+                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Count</th>" +
+                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Last</th>" +
+                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Avg</th>" +
+                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">P95</th>" +
+                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Max</th>" +
                     "</tr>" +
                   "</thead>" +
                   "<tbody>" +
@@ -1435,33 +1435,33 @@ app.get("/", (req,res)=>{
               const command = readPath(entry, ["lastCommand", "command"], "-")
               const commandAt = formatDateTime(readPath(entry, ["lastCommand", "at"], 0))
               return "<tr>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["waNumber"], "-")) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["waName"], "-")) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["nickname"], "-")) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc;text-align:right\">" + Number(readPath(entry, ["coins"], 0)).toLocaleString("pt-BR") + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(command) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(commandAt) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["waNumber"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["waName"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["nickname"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc;text-align:right\\">" + Number(readPath(entry, ["coins"], 0)).toLocaleString("pt-BR") + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(command) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(commandAt) + "</td>" +
               "</tr>"
             }).join("")
 
             usersSectionEl.style.display = "block"
             usersSectionEl.innerHTML =
-              "<section style=\"margin-top:20px;max-width:980px\">" +
-                "<details open style=\"padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa\">" +
-                  "<summary style=\"cursor:pointer;font-weight:700\">Usuários registrados (" + users.length + ")</summary>" +
-                  "<div style=\"margin-top:10px;overflow:auto\">" +
-                    "<table style=\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\">" +
+              "<section style=\\"margin-top:20px;max-width:980px\\">" +
+                "<details open style=\\"padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa\\">" +
+                  "<summary style=\\"cursor:pointer;font-weight:700\\">Usuários registrados (" + users.length + ")</summary>" +
+                  "<div style=\\"margin-top:10px;overflow:auto\\">" +
+                    "<table style=\\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\\">" +
                       "<thead>" +
                         "<tr>" +
-                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">WhatsApp nº</th>" +
-                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Nome WhatsApp</th>" +
-                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Apelido escolhido</th>" +
-                          "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Coins</th>" +
-                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Último comando</th>" +
-                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Quando</th>" +
+                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">WhatsApp nº</th>" +
+                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Nome WhatsApp</th>" +
+                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Apelido escolhido</th>" +
+                          "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Coins</th>" +
+                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Último comando</th>" +
+                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Quando</th>" +
                         "</tr>" +
                       "</thead>" +
-                      "<tbody>" + (rows || "<tr><td colspan=\"6\" style=\"padding:6px\">Sem usuários registrados.</td></tr>") + "</tbody>" +
+                      "<tbody>" + (rows || "<tr><td colspan=\\"6\\" style=\\"padding:6px\\">Sem usuários registrados.</td></tr>") + "</tbody>" +
                     "</table>" +
                   "</div>" +
                 "</details>" +
@@ -1476,27 +1476,27 @@ app.get("/", (req,res)=>{
 
             const rows = (snapshot.commandHistory || []).slice(-10).map((entry) =>
               "<tr>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + formatDateTime(readPath(entry, ["at"], 0)) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["command"], "-")) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["senderName"], "-")) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["groupName"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + formatDateTime(readPath(entry, ["at"], 0)) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["command"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["senderName"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["groupName"], "-")) + "</td>" +
               "</tr>"
             ).join("")
 
             commandsSectionEl.style.display = "block"
             commandsSectionEl.innerHTML =
-              "<section style=\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\">" +
-                "<h3 style=\"margin:0 0 10px 0\">Últimos 10 comandos</h3>" +
-                "<table style=\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\">" +
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">Últimos 10 comandos</h3>" +
+                "<table style=\\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\\">" +
                   "<thead>" +
                     "<tr>" +
-                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Quando</th>" +
-                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Comando</th>" +
-                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Usuário</th>" +
-                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Grupo</th>" +
+                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Quando</th>" +
+                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Comando</th>" +
+                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Usuário</th>" +
+                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Grupo</th>" +
                     "</tr>" +
                   "</thead>" +
-                  "<tbody>" + (rows || "<tr><td colspan=\"4\" style=\"padding:6px\">Sem comandos registrados.</td></tr>") + "</tbody>" +
+                  "<tbody>" + (rows || "<tr><td colspan=\\"4\\" style=\\"padding:6px\\">Sem comandos registrados.</td></tr>") + "</tbody>" +
                 "</table>" +
               "</section>"
           }
@@ -1513,9 +1513,9 @@ app.get("/", (req,res)=>{
 
             terminalSectionEl.style.display = "block"
             terminalSectionEl.innerHTML =
-              "<section style=\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\">" +
-                "<h3 style=\"margin:0 0 10px 0\">Terminal (somente leitura)</h3>" +
-                "<pre style=\"max-height:260px;overflow:auto;background:#0d1117;color:#c9d1d9;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap\">" + escapeHtml(terminalText) + "</pre>" +
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">Terminal (somente leitura)</h3>" +
+                "<pre style=\\"max-height:260px;overflow:auto;background:#0d1117;color:#c9d1d9;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap\\">" + escapeHtml(terminalText) + "</pre>" +
               "</section>"
           }
 
@@ -2370,9 +2370,10 @@ async function startBot(){
       }
 
       const lines = matches.map((entry, index) => {
-        const userId = String(entry?.userId || "")
-        const number = userId.split("@")[0] || userId
-        return `${index + 1}. ${entry.publicLabel} -> ${number}`
+        const normalizedUserId = String(entry?.userId || "").trim().toLowerCase().split(":")[0]
+        const userPart = normalizedUserId.split("@")[0] || normalizedUserId
+        const phone = userPart.replace(/\D+/g, "") || userPart
+        return `${index + 1}. ${entry.publicLabel} -> ${phone || "sem numero"}`
       })
 
       await sock.sendMessage(from, {
@@ -3339,7 +3340,7 @@ async function startBot(){
       if (gameType === "reação") {
         const participants = Array.isArray(reactionParticipants) ? reactionParticipants : []
         const restrictToPlayers = participants.length > 0
-        const state = reação.start(from, participants, { restrictToPlayers })
+        const state = reacaoGame.start(from, participants, { restrictToPlayers })
         storage.setGameState(from, "reaçãoActive", state)
 
         const participantText = restrictToPlayers
@@ -3355,7 +3356,7 @@ async function startBot(){
           const currentState = storage.getGameState(from, "reaçãoActive")
           if (!currentState || currentState.started || currentState.winner) return
 
-          reação.markStarted(currentState)
+          reacaoGame.markStarted(currentState)
           storage.setGameState(from, "reaçãoActive", currentState)
 
           await sock.sendMessage(from, {
@@ -3366,11 +3367,11 @@ async function startBot(){
             const finalState = storage.getGameState(from, "reaçãoActive")
             if (!finalState || finalState.winner) return
 
-            const results = reação.getResults(finalState)
+            const results = reacaoGame.getResults(finalState)
             const resenhaOn = isResenhaModeEnabled()
             const reactionMentions = Array.from(new Set((results.reactions || []).map((r) => r.playerId)))
             await sock.sendMessage(from, {
-              text: reação.formatResults(finalState, results, resenhaOn),
+              text: reacaoGame.formatResults(finalState, results, resenhaOn),
               mentions: reactionMentions,
             })
 
@@ -3472,10 +3473,10 @@ async function startBot(){
       }
 
       if (gameType === "memória") {
-        const state = memória.start(from, triggeredBy)
+        const state = memoriaGame.start(from, triggeredBy)
         storage.setGameState(from, "memóriaActive", state)
         const sequenceMessage = await sock.sendMessage(from, {
-          text: memória.formatSequence(state)
+          text: memoriaGame.formatSequence(state)
         })
 
         setTimeout(async () => {
@@ -3489,7 +3490,7 @@ async function startBot(){
               }
             }
             await sock.sendMessage(from, {
-              text: memória.formatHidden(finalState)
+              text: memoriaGame.formatHidden(finalState)
             })
           }
         }, 5000)
@@ -3569,7 +3570,7 @@ async function startBot(){
 
         sock.sendMessage(groupId, {
           text:
-            `⌛ Lobby *${gameId}* foi fechado por inatividade.\n` +
+            `❌: Lobby *${gameId}* foi fechado por inatividade.\n` +
             `Use *!começar ${gameType}* para abrir um novo lobby.`,
           mentions: players,
         }).catch(() => {})
@@ -3681,9 +3682,9 @@ async function startBot(){
         isCommand,
         storage,
         gameManager,
-        reação,
+        "reação": reacaoGame,
         embaralhado,
-        memória,
+        "memória": memoriaGame,
         comando,
         startPeriodicGame,
         GAME_REWARDS,
@@ -3896,3 +3897,5 @@ async function startBot(){
 } 
 
 startBot()
+
+
