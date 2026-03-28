@@ -2895,7 +2895,7 @@ async function startBot(){
     }
 
     async function startPeriodicGame(gameType, options = {}) {
-      const { triggeredBy = null, automatic = false, reactionParticipants = null } = options
+      const { triggeredBy = null, automatic = false, reactionParticipants = null, comandoParticipants = null } = options
 
       const activePeriodic = getActivePeriodicGame()
       if (activePeriodic) {
@@ -2986,7 +2986,9 @@ async function startBot(){
       }
 
       if (gameType === "comando") {
-        const state = comando.start(from, triggeredBy)
+        const participants = Array.isArray(comandoParticipants) ? comandoParticipants : []
+        const restrictToPlayers = participants.length > 0
+        const state = comando.start(from, triggeredBy, { players: participants, restrictToPlayers })
         storage.setGameState(from, "comandoActive", state)
         await sock.sendMessage(from, {
           text: "⚠️ O desafio *Comando* vai começar em 10 segundos. Preparem-se para obedecer na hora certa!"
