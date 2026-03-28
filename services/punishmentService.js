@@ -338,7 +338,6 @@ function clearPunishment(groupId, userId) {
   const timerId = activePunishments[groupId][userId]?.timerId
   if (timerId) clearTimeout(timerId)
   delete activePunishments[groupId][userId]
-  if (Object.keys(activePunishments[groupId]).length === 0) delete activePunishments[groupId]
   storage.setActivePunishments(activePunishments)
 }
 
@@ -571,7 +570,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
   })
 }
 
-async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGroup, skipForCommand = false) {
+async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGroup, skipForCommand = false, botIsAdmin = true) {
   if (!isGroup) return false
   if (skipForCommand) return false
 
@@ -744,6 +743,8 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
   }
 
   if (!shouldDelete) return false
+
+  if (!botIsAdmin) return false
 
   telemetry.incrementCounter("punishment.enforcement", 1, {
     type: punishment.type,
