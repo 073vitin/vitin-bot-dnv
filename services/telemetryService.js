@@ -300,6 +300,11 @@ function getMetricsSnapshot() {
 
 loadMetrics()
 
+function flushMetrics() {
+  clearTimeout(saveTimeout)
+  saveMetrics(true)
+}
+
 module.exports = {
   appendEvent,
   incrementCounter,
@@ -308,4 +313,5 @@ module.exports = {
   setIdentityResolvers,
   getMetricsSnapshot,
   saveMetrics,
+  flushMetrics,
 }

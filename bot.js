@@ -1,6 +1,3 @@
-process.on("uncaughtException", console.error)
-process.on("unhandledRejection", console.error)
-
 const { 
   default: makeWASocket, 
   useMultiFileAuthState, 
@@ -38,6 +35,34 @@ const economyService = require("./services/economyService")
 const registrationService = require("./services/registrationService")
 const telemetry = require("./services/telemetryService")
 const { COMMAND_HELP } = require("./commandHelp")
+
+// Ensure telemetry is flushed on exit
+process.on("SIGINT", () => {
+  console.log("SIGINT recebido, salvando telemetria...")
+  telemetry.flushMetrics()
+  process.exit(0)
+})
+
+process.on("SIGTERM", () => {
+  console.log("SIGTERM recebido, salvando telemetria...")
+  telemetry.flushMetrics()
+  process.exit(0)
+})
+
+// Update exception handlers to flush telemetry
+const originalUncaughtException = console.error
+process.removeAllListeners("uncaughtException")
+process.on("uncaughtException", (err) => {
+  originalUncaughtException(err)
+  telemetry.flushMetrics()
+})
+
+const originalUnhandledRejection = console.error
+process.removeAllListeners("unhandledRejection")
+process.on("unhandledRejection", (err) => {
+  originalUnhandledRejection(err)
+  telemetry.flushMetrics()
+})
 const { getLikelyCommandSuggestions } = require("./services/commandSuggestionService")
 const { handleGameCommands, handleGameMessageFlow } = require("./routers/gamesRouter")
 const { handleUtilityCommands } = require("./routers/utilityRouter")
@@ -136,6 +161,7 @@ const perfStats = {
   reconnects: 0,
   messagesReceived: 0,
   messagesErrored: 0,
+  messagesSuccessful: 0,
   ignoredNoMessage: 0,
   ignoredFromMe: 0,
   lastProcessedAt: 0,
@@ -148,6 +174,15 @@ const perfStats = {
   commandHistory: [],
   lastCommandByUser: {},
   stages: {},
+  errorLog: [],
+  alertQueue: [],
+  commandFrequency: {},
+  groupActivityMap: {},
+  connectionEvents: [],
+  economySnapshot: null,
+  gameStats: {},
+  punishmentStats: {},
+  storageMetrics: {},
 }
 
 function addCommandHistory(entry = {}) {
@@ -190,6 +225,297 @@ function getStageBucket(stageName) {
     perfStats.stages[stageName] = createMetricBucket()
   }
   return perfStats.stages[stageName]
+}
+
+function recordError(source = "", message = "", details = {}) {
+  const errorEntry = {
+    at: Date.now(),
+    source: String(source).slice(0, 50),
+    message: String(message).slice(0, 200),
+    details: details || {}
+  }
+  perfStats.errorLog.unshift(errorEntry)
+  if (perfStats.errorLog.length > 100) perfStats.errorLog.pop()
+  recordAlert({
+    type: "error",
+    severity: "high",
+    title: `Error in ${source}`,
+    message: message
+  })
+}
+
+function recordAlert(alert = {}) {
+  const alertEntry = {
+    at: Date.now(),
+    type: alert.type || "info",
+    severity: alert.severity || "low",
+    title: String(alert.title || "").slice(0, 100),
+    message: String(alert.message || "").slice(0, 200),
+  }
+  perfStats.alertQueue.unshift(alertEntry)
+  if (perfStats.alertQueue.length > 50) perfStats.alertQueue.pop()
+}
+
+function trackCommandUsage(command = "", userId = "", groupId = "") {
+  const cmdKey = String(command).toLowerCase().trim() || "unknown"
+  if (!perfStats.commandFrequency[cmdKey]) {
+    perfStats.commandFrequency[cmdKey] = { count: 0, lastUsed: 0 }
+  }
+  perfStats.commandFrequency[cmdKey].count += 1
+  perfStats.commandFrequency[cmdKey].lastUsed = Date.now()
+
+  const groupKey = String(groupId || "dm").toLowerCase()
+  if (!perfStats.groupActivityMap[groupKey]) {
+    perfStats.groupActivityMap[groupKey] = { 
+      commands: 0, 
+      messages: 0, 
+      users: new Set(),
+      lastActivity: 0
+    }
+  }
+  perfStats.groupActivityMap[groupKey].commands += 1
+  perfStats.groupActivityMap[groupKey].lastActivity = Date.now()
+  if (userId) perfStats.groupActivityMap[groupKey].users.add(String(userId))
+}
+
+function recordConnectionEvent(state = "", reason = "") {
+  const event = {
+    at: Date.now(),
+    state: String(state),
+    reason: String(reason)
+  }
+  perfStats.connectionEvents.unshift(event)
+  if (perfStats.connectionEvents.length > 100) perfStats.connectionEvents.pop()
+}
+
+function updateStorageMetrics() {
+  try {
+    const dataDir = path.join(__dirname, ".data")
+    if (fs.existsSync(dataDir)) {
+      const files = fs.readdirSync(dataDir)
+      let totalSize = 0
+      for (const file of files) {
+        const filePath = path.join(dataDir, file)
+        const stat = fs.statSync(filePath)
+        totalSize += stat.size
+      }
+      perfStats.storageMetrics = {
+        totalSizeMb: (totalSize / (1024 * 1024)).toFixed(2),
+        fileCount: files.length,
+        lastUpdated: Date.now()
+      }
+    }
+  } catch (err) {
+    recordError("updateStorageMetrics", err.message)
+  }
+}
+
+function checkHealthConditions() {
+  const memory = getMemoryUsageMb()
+  const eventLoopLag = getMetricSnapshot(perfStats.eventLoopLagMs)
+  const successRate = perfStats.messagesReceived > 0
+    ? (perfStats.messagesSuccessful / perfStats.messagesReceived) * 100
+    : 100
+  const recentErrors = perfStats.errorLog.slice(0, 30).length
+  
+  // Check memory usage
+  if (memory.heapUsed > 500) {
+    recordAlert({
+      type: "warning",
+      severity: "medium",
+      title: "Alto Uso de Memória",
+      message: `Heap usando ${memory.heapUsed} MB`
+    })
+  }
+  
+  // Check event loop lag
+  if (eventLoopLag.avgMs > 50) {
+    recordAlert({
+      type: "warning",
+      severity: "medium",
+      title: "Event Loop Degradado",
+      message: `Lag médio: ${eventLoopLag.avgMs.toFixed(1)} ms`
+    })
+  }
+  
+  // Check success rate
+  if (successRate < 80) {
+    recordAlert({
+      type: "error",
+      severity: "high",
+      title: "Taxa de Sucesso Crítica",
+      message: `Apenas ${successRate.toFixed(1)}% de mensagens bem-sucedidas`
+    })
+  }
+  
+  // Check for recent errors
+  if (recentErrors > 10) {
+    recordAlert({
+      type: "error",
+      severity: "high",
+      title: "Muitos Erros Recentes",
+      message: `${recentErrors} erros nos últimos registros`
+    })
+  }
+  
+  // Check connection state
+  if (perfStats.connectionState !== "open") {
+    recordAlert({
+      type: "warning",
+      severity: "high",
+      title: "Bot Desconectado",
+      message: `Estado atual: ${perfStats.connectionState}`
+    })
+  }
+}
+
+function buildActivityHeatmap() {
+  const heatmap = {}
+  for (let hour = 0; hour < 24; hour++) {
+    heatmap[hour] = 0
+  }
+  for (const entry of perfStats.commandHistory) {
+    const hour = new Date(entry.at).getHours()
+    heatmap[hour] = (heatmap[hour] || 0) + 1
+  }
+  return heatmap
+}
+
+function getConnectionHealthTimeline() {
+  return perfStats.connectionEvents.slice(-50).map(event => ({
+    at: event.at,
+    state: event.state,
+    reason: event.reason
+  }))
+}
+
+function getEconomySnapshot() {
+  try {
+    const economyData = storage.getEconomyData ? storage.getEconomyData() : {}
+    const users = economyData.users || {}
+    const entries = Object.entries(users)
+      .map(([userId, data]) => ({
+        userId,
+        coins: data?.coins || 0,
+        lastUpdate: data?.lastUpdate || 0
+      }))
+      .sort((a, b) => b.coins - a.coins)
+    
+    const totalCoins = entries.reduce((sum, entry) => sum + entry.coins, 0)
+    const topRich = entries.slice(0, 10)
+    
+    return {
+      totalCoins,
+      userCount: entries.length,
+      topRichest: topRich,
+      averageCoins: entries.length > 0 ? totalCoins / entries.length : 0
+    }
+  } catch (err) {
+    return { totalCoins: 0, userCount: 0, topRichest: [], averageCoins: 0 }
+  }
+}
+
+function getActivePunishmentsList() {
+  try {
+    const punishments = storage.getActivePunishments ? storage.getActivePunishments() : {}
+    const activePunishList = []
+    
+    for (const [groupId, groupPunishments] of Object.entries(punishments)) {
+      for (const [userId, punishmentList] of Object.entries(groupPunishments)) {
+        if (Array.isArray(punishmentList)) {
+          for (const punishment of punishmentList) {
+            activePunishList.push({
+              groupId,
+              userId,
+              type: punishment.type || 0,
+              startedAt: punishment.startedAt || 0,
+              durationMs: punishment.durationMs || 0,
+              reason: punishment.reason || ""
+            })
+          }
+        }
+      }
+    }
+    return activePunishList.slice(0, 50)
+  } catch (err) {
+    return []
+  }
+}
+
+function getPunishmentStatistics() {
+  try {
+    const punishments = storage.getActivePunishments ? storage.getActivePunishments() : {}
+    const stats = {}
+    let totalActive = 0
+    
+    for (const groupPunishments of Object.values(punishments)) {
+      for (const punishmentList of Object.values(groupPunishments)) {
+        if (Array.isArray(punishmentList)) {
+          for (const p of punishmentList) {
+            const typeId = p.type || 0
+            stats[typeId] = (stats[typeId] || 0) + 1
+            totalActive += 1
+          }
+        }
+      }
+    }
+    return { stats, totalActive }
+  } catch (err) {
+    return { stats: {}, totalActive: 0 }
+  }
+}
+
+function getMostActiveUsers() {
+  const userActivity = {}
+  for (const entry of perfStats.commandHistory) {
+    const userId = entry.senderId
+    if (!userActivity[userId]) {
+      userActivity[userId] = { name: entry.senderName, commands: 0 }
+    }
+    userActivity[userId].commands += 1
+  }
+  return Object.entries(userActivity)
+    .map(([userId, data]) => ({ userId, ...data }))
+    .sort((a, b) => b.commands - a.commands)
+    .slice(0, 15)
+}
+
+function getProcessingBottlenecks() {
+  const stages = Object.entries(perfStats.stages)
+    .map(([name, bucket]) => ({
+      name,
+      ...getMetricSnapshot(bucket)
+    }))
+    .sort((a, b) => b.avgMs - a.avgMs)
+  return stages.slice(0, 10)
+}
+
+function getOverrideProfilesStatus() {
+  try {
+    const profiles = getOverrideProfiles()
+    const positiveProfiles = profiles?.positivo || {}
+    return Object.entries(positiveProfiles).map(([profileName, identities]) => ({
+      name: profileName,
+      identities: Array.isArray(identities) ? identities.length : 0,
+      groupsAllowed: isOverrideProfileAllowedInGroup(profileName, "") ? "all" : "specific"
+    }))
+  } catch (err) {
+    return []
+  }
+}
+
+function getReconnectTrend() {
+  const timeWindow = 60 * 60 * 1000
+  const now = Date.now()
+  const recentConnections = perfStats.connectionEvents.filter(e => now - e.at < timeWindow)
+  const reconnectCount = recentConnections.filter(e => e.state === "reconnecting").length
+  const stableCount = recentConnections.filter(e => e.state === "open").length
+  
+  return {
+    recentHourReconnects: reconnectCount,
+    stableConnections: stableCount,
+    trend: reconnectCount > 3 ? "degrading" : "stable"
+  }
 }
 
 function parseMessageTimestampMs(msg) {
@@ -321,6 +647,12 @@ setInterval(() => {
   recordMetric(perfStats.eventLoopLagMs, lag)
   eventLoopLagExpectedAt = now + 1000
 }, 1000).unref()
+
+// Periodic background updates
+setInterval(() => {
+  updateStorageMetrics()
+  checkHealthConditions()
+}, 10000).unref()
 
 const {
   getPunishmentChoiceFromText,
@@ -1207,6 +1539,39 @@ function getProfilerSnapshot() {
     .sort((a, b) => b.avgMs - a.avgMs)
     .slice(0, 12)
 
+  const successRate = perfStats.messagesReceived > 0
+    ? ((perfStats.messagesSuccessful / perfStats.messagesReceived) * 100).toFixed(1)
+    : 0
+
+  const topCommands = Object.entries(perfStats.commandFrequency)
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 10)
+    .map(([cmd, data]) => ({ command: cmd, count: data.count, lastUsed: data.lastUsed }))
+
+  const groupActivity = Object.entries(perfStats.groupActivityMap)
+    .map(([groupId, data]) => ({
+      groupId,
+      commands: data.commands,
+      messages: data.messages,
+      uniqueUsers: data.users.size,
+      lastActivity: data.lastActivity,
+      groupName: getKnownGroupName(groupId === "dm" ? "" : groupId)
+    }))
+    .sort((a, b) => b.commands - a.commands)
+    .slice(0, 15)
+
+  const recentAlerts = perfStats.alertQueue.slice(0, 20)
+  const recentErrors = perfStats.errorLog.slice(0, 20)
+  const activityHeatmap = buildActivityHeatmap()
+  const connectionTimeline = getConnectionHealthTimeline()
+  const economyData = getEconomySnapshot()
+  const activePunishments = getActivePunishmentsList()
+  const punishmentStats = getPunishmentStatistics()
+  const mostActiveUsers = getMostActiveUsers()
+  const bottlenecks = getProcessingBottlenecks()
+  const profilesStatus = getOverrideProfilesStatus()
+  const reconnectTrend = getReconnectTrend()
+
   return {
     now,
     authenticatedAt: perfStats.authenticatedAt,
@@ -1216,7 +1581,9 @@ function getProfilerSnapshot() {
     uptimeMs: now - perfStats.bootAt,
     authUptimeMs: perfStats.authenticatedAt ? now - perfStats.authenticatedAt : 0,
     messagesReceived: perfStats.messagesReceived,
+    messagesSuccessful: perfStats.messagesSuccessful,
     messagesErrored: perfStats.messagesErrored,
+    successRate: parseFloat(successRate),
     ignoredNoMessage: perfStats.ignoredNoMessage,
     ignoredFromMe: perfStats.ignoredFromMe,
     lastProcessedAt: perfStats.lastProcessedAt,
@@ -1235,6 +1602,22 @@ function getProfilerSnapshot() {
     registeredUsers: registeredUsers.length,
     registeredUsersList: registeredUsers,
     knownGroups: Array.from(knownGroupIds).map((groupId) => ({ groupId, groupName: getKnownGroupName(groupId) })),
+    topCommands,
+    groupActivity,
+    alerts: recentAlerts,
+    errors: recentErrors,
+    storage: perfStats.storageMetrics,
+    connectionEvents: perfStats.connectionEvents.slice(0, 30),
+    maintenanceMode: getMaintenanceModeState().enabled,
+    activityHeatmap,
+    connectionTimeline,
+    economyData,
+    activePunishments,
+    punishmentStats,
+    mostActiveUsers,
+    processingBottlenecks: bottlenecks,
+    overrideProfiles: profilesStatus,
+    reconnectTrend,
   }
 }
 
@@ -1253,6 +1636,42 @@ app.get("/profiler-data", (req, res) => {
 
 app.get("/dashboard-data", (req, res) => {
   res.json(getDashboardPayload())
+})
+
+app.post("/control/toggle-maintenance", (req, res) => {
+  if (!isProfilerAuthorized(req)) {
+    res.status(403).json({ ok: false, error: "unauthorized" })
+    return
+  }
+  try {
+    const currentState = getMaintenanceModeState()
+    const newState = !currentState.enabled
+    setMaintenanceModeState({ enabled: newState })
+    res.json({ ok: true, maintenanceMode: newState })
+  } catch (err) {
+    recordError("toggle-maintenance", err.message)
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+app.get("/control/system-status", (req, res) => {
+  if (!isProfilerAuthorized(req)) {
+    res.status(403).json({ ok: false, error: "unauthorized" })
+    return
+  }
+  try {
+    const status = {
+      maintenanceMode: getMaintenanceModeState().enabled,
+      connectionState: perfStats.connectionState,
+      checkHelper: getOverrideChecksEnabled(),
+      memory: getMemoryUsageMb(),
+      uptime: Date.now() - perfStats.bootAt,
+    }
+    res.json({ ok: true, status })
+  } catch (err) {
+    recordError("system-status", err.message)
+    res.status(500).json({ ok: false, error: err.message })
+  }
 })
 
 app.get("/download-data", async (req, res) => {
@@ -1292,6 +1711,17 @@ app.get("/", (req,res)=>{
     </section>
   `
 
+  const controlsBlock = `
+    <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
+      <h3 style="margin:0 0 10px 0">⚙️ Controles do Sistema</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <button id="btn-maintenance-toggle" style="padding:8px 12px;background:#f59e0b;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:500">Modo Manutenção: Desconhecido</button>
+        <button onclick="location.reload()" style="padding:8px 12px;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:500">Atualizar Painel</button>
+      </div>
+      <p id="control-message" style="margin:10px 0 0 0;font-size:12px;color:#666;display:none"></p>
+    </section>
+  `
+
   res.send(
     `<!doctype html>
     <html>
@@ -1307,21 +1737,52 @@ app.get("/", (req,res)=>{
         </section>
 
         <section id="qr-section" style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px;display:none"></section>
+        <section id="alerts-section" style="display:none"></section>
+        <section id="health-section" style="display:none"></section>
         <section id="perf-section" style="display:none"></section>
+        <section id="commands-freq-section" style="display:none"></section>
+        <section id="group-activity-section" style="display:none"></section>
+        <section id="storage-section" style="display:none"></section>
+        <section id="errors-section" style="display:none"></section>
         <section id="users-section" style="display:none"></section>
         <section id="commands-section" style="display:none"></section>
         <section id="terminal-section" style="display:none"></section>
+        <section id="connection-health-section" style="display:none"></section>
+        <section id="activity-heatmap-section" style="display:none"></section>
+        <section id="economy-dashboard-section" style="display:none"></section>
+        <section id="active-punishments-section" style="display:none"></section>
+        <section id="punishment-stats-section" style="display:none"></section>
+        <section id="most-active-users-section" style="display:none"></section>
+        <section id="bottleneck-section" style="display:none"></section>
+        <section id="override-profiles-section" style="display:none"></section>
+        <section id="reconnect-trend-section" style="display:none"></section>
 
+        ${controlsBlock}
         ${downloadBlock}
 
         <script>
           const POLLING_MS = 1000
           const pollingStatusEl = document.getElementById("polling-status")
           const qrSectionEl = document.getElementById("qr-section")
+          const alertsSectionEl = document.getElementById("alerts-section")
+          const healthSectionEl = document.getElementById("health-section")
           const perfSectionEl = document.getElementById("perf-section")
+          const commandsFreqSectionEl = document.getElementById("commands-freq-section")
+          const groupActivitySectionEl = document.getElementById("group-activity-section")
+          const storageSectionEl = document.getElementById("storage-section")
+          const errorsSectionEl = document.getElementById("errors-section")
           const usersSectionEl = document.getElementById("users-section")
           const commandsSectionEl = document.getElementById("commands-section")
           const terminalSectionEl = document.getElementById("terminal-section")
+          const connectionHealthSectionEl = document.getElementById("connection-health-section")
+          const activityHeatmapSectionEl = document.getElementById("activity-heatmap-section")
+          const economyDashboardSectionEl = document.getElementById("economy-dashboard-section")
+          const activePunishmentsSectionEl = document.getElementById("active-punishments-section")
+          const punishmentStatsSectionEl = document.getElementById("punishment-stats-section")
+          const mostActiveUsersSectionEl = document.getElementById("most-active-users-section")
+          const bottleneckSectionEl = document.getElementById("bottleneck-section")
+          const overrideProfilesSectionEl = document.getElementById("override-profiles-section")
+          const reconnectTrendSectionEl = document.getElementById("reconnect-trend-section")
 
           function escapeHtml(value) {
             return String(value || "")
@@ -1519,15 +1980,585 @@ app.get("/", (req,res)=>{
               "</section>"
           }
 
+          function renderAlerts(snapshot) {
+            if (!snapshot) {
+              alertsSectionEl.style.display = "none"
+              return
+            }
+            const alerts = readPath(snapshot, ["alerts"], [])
+            if (!alerts || alerts.length === 0) {
+              alertsSectionEl.style.display = "none"
+              return
+            }
+            const alertRows = alerts.slice(0, 15).map((alert) => {
+              const severity = readPath(alert, ["severity"], "low")
+              const severityColor = severity === "high" ? "#dc2626" : severity === "medium" ? "#f59e0b" : "#6b7280"
+              return "<tr style=\\"border-bottom:1px solid #eee\\">" +
+                "<td style=\\"padding:4px;color:" + severityColor + ";font-weight:700\\">" + escapeHtml(readPath(alert, ["type"], "info")) + "</td>" +
+                "<td style=\\"padding:4px;font-weight:500\\">" + escapeHtml(readPath(alert, ["title"], "-")) + "</td>" +
+                "<td style=\\"padding:4px\\">" + escapeHtml(readPath(alert, ["message"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;text-align:right;color:#999;font-size:11px\\">" + formatDateTime(readPath(alert, ["at"], 0)) + "</td>" +
+              "</tr>"
+            }).join("")
+            alertsSectionEl.style.display = "block"
+            alertsSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #fca5a5;border-radius:8px;background:#fef2f2;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0;color:#991b1b\\">⚠️ Alertas e Avisos (" + alerts.length + ")</h3>" +
+                "<table style=\\"width:100%;font-size:12px;border-collapse:collapse\\">" +
+                  "<thead><tr style=\\"border-bottom:2px solid #fca5a5\\">" +
+                    "<th style=\\"text-align:left;padding:4px\\">Tipo</th>" +
+                    "<th style=\\"text-align:left;padding:4px\\">Título</th>" +
+                    "<th style=\\"text-align:left;padding:4px\\">Mensagem</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Quando</th>" +
+                  "</tr></thead>" +
+                  "<tbody>" + alertRows + "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderHealth(snapshot) {
+            if (!snapshot) {
+              healthSectionEl.style.display = "none"
+              return
+            }
+            const connState = readPath(snapshot, ["connectionState"], "unknown")
+            const successRate = readPath(snapshot, ["successRate"], 0)
+            const recentErrors = readPath(snapshot, ["errors"], [])
+            const eventLoopLag = readPath(snapshot, ["metrics", "eventLoopLag", "avgMs"], 0)
+            const connStateColor = connState === "open" ? "#22c55e" : "#ef4444"
+            const healthColor = successRate > 95 ? "#22c55e" : successRate > 80 ? "#f59e0b" : "#ef4444"
+            
+            let statusText = connState === "open" ? "✓ Conectado" : "✗ Desconectado"
+            let healthStatus = successRate > 95 ? "Saudável" : successRate > 80 ? "Degradado" : "Crítico"
+            
+            healthSectionEl.style.display = "block"
+            healthSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">📊 Status de Saúde do Sistema</h3>" +
+                "<div style=\\"display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px\\">" +
+                  "<div style=\\"padding:12px;background:white;border-radius:6px;border-left:4px solid " + connStateColor + "\\">" +
+                    "<p style=\\"margin:0 0 4px 0;font-size:11px;color:#666\\">Conexão WhatsApp</p>" +
+                    "<p style=\\"margin:0;font-size:14px;font-weight:700;color:" + connStateColor + "\\">" + statusText + "</p>" +
+                  "</div>" +
+                  "<div style=\\"padding:12px;background:white;border-radius:6px;border-left:4px solid " + healthColor + "\\">" +
+                    "<p style=\\"margin:0 0 4px 0;font-size:11px;color:#666\\">Taxa de Sucesso</p>" +
+                    "<p style=\\"margin:0;font-size:14px;font-weight:700;color:" + healthColor + "\\">" + Number(successRate).toFixed(1) + "%</p>" +
+                  "</div>" +
+                  "<div style=\\"padding:12px;background:white;border-radius:6px;border-left:4px solid #3b82f6\\">" +
+                    "<p style=\\"margin:0 0 4px 0;font-size:11px;color:#666\\">Event Loop Lag</p>" +
+                    "<p style=\\"margin:0;font-size:14px;font-weight:700;color:#3b82f6\\">" + formatMs(eventLoopLag) + "</p>" +
+                  "</div>" +
+                "</div>" +
+                (recentErrors.length > 0 ? "<p style=\\"margin:12px 0 0 0;color:#991b1b\\">⚠️ " + recentErrors.length + " erro(s) recente(s)</p>" : "") +
+              "</section>"
+          }
+
+          function renderCommandsFrequency(snapshot) {
+            if (!snapshot) {
+              commandsFreqSectionEl.style.display = "none"
+              return
+            }
+            const topCommands = readPath(snapshot, ["topCommands"], [])
+            if (!topCommands || topCommands.length === 0) {
+              commandsFreqSectionEl.style.display = "none"
+              return
+            }
+            const rows = topCommands.map((cmd) => {
+              return "<tr>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee\\">" + escapeHtml("!" + readPath(cmd, ["command"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right\\">" + Number(readPath(cmd, ["count"], 0)).toLocaleString("pt-BR") + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right;font-size:11px;color:#999\\">" + formatDateTime(readPath(cmd, ["lastUsed"], 0)) + "</td>" +
+              "</tr>"
+            }).join("")
+            commandsFreqSectionEl.style.display = "block"
+            commandsFreqSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">Top 10 Comandos</h3>" +
+                "<table style=\\"width:100%;border-collapse:collapse;font-size:12px\\">" +
+                  "<thead><tr style=\\"border-bottom:2px solid #ccc\\">" +
+                    "<th style=\\"text-align:left;padding:4px\\">Comando</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Usos</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Último Uso</th>" +
+                  "</tr></thead>" +
+                  "<tbody>" + rows + "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderGroupActivity(snapshot) {
+            if (!snapshot) {
+              groupActivitySectionEl.style.display = "none"
+              return
+            }
+            const groups = readPath(snapshot, ["groupActivity"], [])
+            if (!groups || groups.length === 0) {
+              groupActivitySectionEl.style.display = "none"
+              return
+            }
+            const rows = groups.slice(0, 15).map((group) => {
+              return "<tr>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee\\">" + escapeHtml(readPath(group, ["groupName"], readPath(group, ["groupId"], "DM"))) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right\\">" + Number(readPath(group, ["commands"], 0)).toLocaleString("pt-BR") + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right\\">" + Number(readPath(group, ["uniqueUsers"], 0)) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right;font-size:11px;color:#999\\">" + formatDateTime(readPath(group, ["lastActivity"], 0)) + "</td>" +
+              "</tr>"
+            }).join("")
+            groupActivitySectionEl.style.display = "block"
+            groupActivitySectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">Atividade por Grupo</h3>" +
+                "<table style=\\"width:100%;border-collapse:collapse;font-size:12px\\">" +
+                  "<thead><tr style=\\"border-bottom:2px solid #ccc\\">" +
+                    "<th style=\\"text-align:left;padding:4px\\">Grupo</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Comandos</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Usuários Únicos</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Última Atividade</th>" +
+                  "</tr></thead>" +
+                  "<tbody>" + rows + "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderStorageHealth(snapshot) {
+            if (!snapshot) {
+              storageSectionEl.style.display = "none"
+              return
+            }
+            const storage = readPath(snapshot, ["storage"], {})
+            if (!storage || !storage.totalSizeMb) {
+              storageSectionEl.style.display = "none"
+              return
+             }
+            storageSectionEl.style.display = "block"
+            storageSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">💾 Armazenamento</h3>" +
+                "<div style=\\"display:grid;grid-template-columns:1fr 1fr;gap:12px\\">" +
+                  "<div style=\\"padding:12px;background:white;border-radius:6px\\">" +
+                    "<p style=\\"margin:0 0 4px 0;font-size:11px;color:#666\\">Tamanho Total</p>" +
+                    "<p style=\\"margin:0;font-size:16px;font-weight:700\\">" + Number(storage.totalSizeMb).toFixed(2) + " MB</p>" +
+                  "</div>" +
+                  "<div style=\\"padding:12px;background:white;border-radius:6px\\">" +
+                    "<p style=\\"margin:0 0 4px 0;font-size:11px;color:#666\\">Arquivos</p>" +
+                    "<p style=\\"margin:0;font-size:16px;font-weight:700\\">" + Number(storage.fileCount || 0) + "</p>" +
+                  "</div>" +
+                "</div>" +
+              "</section>"
+          }
+
+          function renderErrors(snapshot) {
+            if (!snapshot) {
+              errorsSectionEl.style.display = "none"
+              return
+            }
+            const errors = readPath(snapshot, ["errors"], [])
+            if (!errors || errors.length === 0) {
+              errorsSectionEl.style.display = "none"
+              return
+            }
+            const rows = errors.slice(0, 15).map((err) => {
+              return "<tr>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;font-weight:500\\">" + escapeHtml(readPath(err, ["source"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee\\">" + escapeHtml(readPath(err, ["message"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right;font-size:11px;color:#999\\">" + formatDateTime(readPath(err, ["at"], 0)) + "</td>" +
+              "</tr>"
+            }).join("")
+            errorsSectionEl.style.display = "block"
+            errorsSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0;color:#991b1b\\">🔴 Erros Recentes (" + errors.length + ")</h3>" +
+                "<table style=\\"width:100%;border-collapse:collapse;font-size:12px\\">" +
+                  "<thead><tr style=\\"border-bottom:2px solid #fecaca\\">" +
+                    "<th style=\\"text-align:left;padding:4px\\">Fonte</th>" +
+                    "<th style=\\"text-align:left;padding:4px\\">Mensagem</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Quando</th>" +
+                  "</tr></thead>" +
+                  "<tbody>" + rows + "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderConnectionHealth(snapshot) {
+            if (!snapshot) {
+              connectionHealthSectionEl.style.display = "none"
+              return
+            }
+            const timeline = readPath(snapshot, ["connectionTimeline"], [])
+            if (!timeline || timeline.length === 0) {
+              connectionHealthSectionEl.style.display = "none"
+              return
+            }
+            const rows = timeline.slice(-20).reverse().map((event) => {
+              const stateColor = event.state === "open" ? "#22c55e" : event.state === "connecting" ? "#f59e0b" : "#ef4444"
+              return "<tr>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;color:" + stateColor + ";font-weight:700\\">" + escapeHtml(event.state.toUpperCase()) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee\\">" + escapeHtml(event.reason || "-") + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right;font-size:11px;color:#999\\">" + formatDateTime(event.at) + "</td>" +
+              "</tr>"
+            }).join("")
+            connectionHealthSectionEl.style.display = "block"
+            connectionHealthSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">🔗 Timeline de Conexão</h3>" +
+                "<table style=\\"width:100%;border-collapse:collapse;font-size:12px\\">" +
+                  "<thead><tr style=\\"border-bottom:2px solid #ccc\\">" +
+                    "<th style=\\"text-align:left;padding:4px\\">Estado</th>" +
+                    "<th style=\\"text-align:left;padding:4px\\">Razão</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Quando</th>" +
+                  "</tr></thead>" +
+                  "<tbody>" + rows + "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderActivityHeatmap(snapshot) {
+            if (!snapshot) {
+              activityHeatmapSectionEl.style.display = "none"
+              return
+            }
+            const heatmap = readPath(snapshot, ["activityHeatmap"], {})
+            if (!heatmap || Object.keys(heatmap).length === 0) {
+              activityHeatmapSectionEl.style.display = "none"
+              return
+            }
+            const maxCount = Math.max(...Object.values(heatmap))
+            const bars = Array.from({length: 24}, (_, i) => {
+              const count = heatmap[i] || 0
+              const intensity = maxCount > 0 ? Math.floor((count / maxCount) * 255) : 0
+              const color = "rgb(" + intensity + ", 100, " + (255 - intensity) + ")"
+              const height = maxCount > 0 ? Math.max(20, (count / maxCount) * 100) : 20
+              return "<div style=\\"display:inline-block;width:30px;height:" + height + "px;background:" + color + ";margin:2px;border-radius:4px;title='" + count + " às " + i + ":00'\\"></div>"
+            }).join("")
+            activityHeatmapSectionEl.style.display = "block"
+            activityHeatmapSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">📈 Atividade por Hora (Últimas 24h)</h3>" +
+                "<div style=\\"overflow-x:auto;padding:10px 0\\">" + bars + "</div>" +
+                "<p style=\\"margin:8px 0 0 0;font-size:11px;color:#666\\">Verde = Alta atividade | Vermelho = Baixa atividade</p>" +
+              "</section>"
+          }
+
+          function renderEconomyDashboard(snapshot) {
+            if (!snapshot) {
+              economyDashboardSectionEl.style.display = "none"
+              return
+            }
+            const economy = readPath(snapshot, ["economyData"], {})
+            if (!economy || !economy.totalCoins) {
+              economyDashboardSectionEl.style.display = "none"
+              return
+            }
+            const topRich = readPath(economy, ["topRichest"], [])
+            const richRows = topRich.slice(0, 10).map((user, idx) => {
+              return "<tr>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:center;font-weight:700\\">#" + (idx + 1) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee\\">" + escapeHtml(user.userId) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right;color:#22c55e;font-weight:500\\">" + Number(user.coins).toLocaleString("pt-BR") + "</td>" +
+              "</tr>"
+            }).join("")
+            economyDashboardSectionEl.style.display = "block"
+            economyDashboardSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">💰 Dashboard Economia</h3>" +
+                "<div style=\\"display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px\\">" +
+                  "<div style=\\"padding:12px;background:white;border-radius:6px\\">" +
+                    "<p style=\\"margin:0 0 4px 0;font-size:11px;color:#666\\">Total em Circulação</p>" +
+                    "<p style=\\"margin:0;font-size:16px;font-weight:700;color:#22c55e\\">" + Number(economy.totalCoins).toLocaleString("pt-BR") + "</p>" +
+                  "</div>" +
+                  "<div style=\\"padding:12px;background:white;border-radius:6px\\">" +
+                    "<p style=\\"margin:0 0 4px 0;font-size:11px;color:#666\\">Usuários</p>" +
+                    "<p style=\\"margin:0;font-size:16px;font-weight:700\\">" + Number(economy.userCount) + "</p>" +
+                  "</div>" +
+                  "<div style=\\"padding:12px;background:white;border-radius:6px\\">" +
+                    "<p style=\\"margin:0 0 4px 0;font-size:11px;color:#666\\">Média por Usuário</p>" +
+                    "<p style=\\"margin:0;font-size:16px;font-weight:700\\">" + Number(economy.averageCoins).toLocaleString("pt-BR", {maximumFractionDigits: 0}) + "</p>" +
+                  "</div>" +
+                "</div>" +
+                "<h4 style=\\"margin:0 0 8px 0;font-size:13px\\">Top 10 Mais Ricos</h4>" +
+                "<table style=\\"width:100%;border-collapse:collapse;font-size:12px\\">" +
+                  "<thead><tr style=\\"border-bottom:2px solid #ccc\\">" +
+                    "<th style=\\"text-align:center;padding:4px\\">Pos</th>" +
+                    "<th style=\\"text-align:left;padding:4px\\">Usuário</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Moedas</th>" +
+                  "</tr></thead>" +
+                  "<tbody>" + richRows + "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderActivePunishments(snapshot) {
+            if (!snapshot) {
+              activePunishmentsSectionEl.style.display = "none"
+              return
+            }
+            const punishments = readPath(snapshot, ["activePunishments"], [])
+            if (!punishments || punishments.length === 0) {
+              activePunishmentsSectionEl.style.display = "none"
+              return
+            }
+            const rows = punishments.slice(0, 20).map((p) => {
+              const endTime = p.startedAt + p.durationMs
+              const remainingMs = endTime - Date.now()
+              const remaining = remainingMs > 0 ? formatElapsed(remainingMs) : "Expirado"
+              return "<tr>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee\\">" + escapeHtml(p.userId) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee\\">" + p.type + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee\\">" + (p.reason ? escapeHtml(p.reason) : "-") + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;color:" + (remainingMs > 0 ? "#ef4444" : "#999") + "\\">" + remaining + "</td>" +
+              "</tr>"
+            }).join("")
+            activePunishmentsSectionEl.style.display = "block"
+            activePunishmentsSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0;color:#991b1b\\">⏱️ Punições Ativas (" + punishments.length + ")</h3>" +
+                "<table style=\\"width:100%;border-collapse:collapse;font-size:12px\\">" +
+                  "<thead><tr style=\\"border-bottom:2px solid #fecaca\\">" +
+                    "<th style=\\"text-align:left;padding:4px\\">Usuário</th>" +
+                    "<th style=\\"text-align:left;padding:4px\\">Tipo</th>" +
+                    "<th style=\\"text-align:left;padding:4px\\">Razão</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Tempo Restante</th>" +
+                  "</tr></thead>" +
+                  "<tbody>" + rows + "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderPunishmentStats(snapshot) {
+            if (!snapshot) {
+              punishmentStatsSectionEl.style.display = "none"
+              return
+            }
+            const stats = readPath(snapshot, ["punishmentStats"], {})
+            if (!stats || !stats.totalActive) {
+              punishmentStatsSectionEl.style.display = "none"
+              return
+            }
+            const typeStats = readPath(stats, ["stats"], {})
+            const rows = Object.entries(typeStats).map(([typeId, count]) => {
+              const percentage = stats.totalActive > 0 ? ((count / stats.totalActive) * 100).toFixed(1) : 0
+              return "<tr>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee\\">Tipo " + typeId + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right\\">" + count + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right;color:#3b82f6\\">" + percentage + "%</td>" +
+              "</tr>"
+            }).join("")
+            punishmentStatsSectionEl.style.display = "block"
+            punishmentStatsSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">📊 Estatísticas de Punições</h3>" +
+                "<p style=\\"margin:0 0 12px 0;font-size:13px\\">Total de Punições Ativas: <b>" + stats.totalActive + "</b></p>" +
+                "<table style=\\"width:100%;border-collapse:collapse;font-size:12px\\">" +
+                  "<thead><tr style=\\"border-bottom:2px solid #ccc\\">" +
+                    "<th style=\\"text-align:left;padding:4px\\">Tipo de Punição</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Quantidade</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Percentual</th>" +
+                  "</tr></thead>" +
+                  "<tbody>" + rows + "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderMostActiveUsers(snapshot) {
+            if (!snapshot) {
+              mostActiveUsersSectionEl.style.display = "none"
+              return
+            }
+            const users = readPath(snapshot, ["mostActiveUsers"], [])
+            if (!users || users.length === 0) {
+              mostActiveUsersSectionEl.style.display = "none"
+              return
+            }
+            const rows = users.map((user, idx) => {
+              return "<tr>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:center;font-weight:700\\">#" + (idx + 1) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee\\">" + escapeHtml(user.name) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right\\">" + user.commands + " comandos</td>" +
+              "</tr>"
+            }).join("")
+            mostActiveUsersSectionEl.style.display = "block"
+            mostActiveUsersSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">👥 Usuários Mais Ativos</h3>" +
+                "<table style=\\"width:100%;border-collapse:collapse;font-size:12px\\">" +
+                  "<thead><tr style=\\"border-bottom:2px solid #ccc\\">" +
+                    "<th style=\\"text-align:center;padding:4px\\">Pos</th>" +
+                    "<th style=\\"text-align:left;padding:4px\\">Usuário</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Atividade</th>" +
+                  "</tr></thead>" +
+                  "<tbody>" + rows + "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderBottlenecks(snapshot) {
+            if (!snapshot) {
+              bottleneckSectionEl.style.display = "none"
+              return
+            }
+            const bottlenecks = readPath(snapshot, ["processingBottlenecks"], [])
+            if (!bottlenecks || bottlenecks.length === 0) {
+              bottleneckSectionEl.style.display = "none"
+              return
+            }
+            const rows = bottlenecks.slice(0, 10).map((stage) => {
+              return "<tr>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee\\">stage:" + escapeHtml(stage.name) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right\\">" + stage.count + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right;color:#ef4444;font-weight:500\\">" + formatMs(stage.avgMs) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:right;color:#f59e0b\\">" + formatMs(stage.p95Ms) + "</td>" +
+              "</tr>"
+            }).join("")
+            bottleneckSectionEl.style.display = "block"
+            bottleneckSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #fecaca;border-radius:8px;background:#fef8f8;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0;color:#7c2d12\\">🔥 Gargalos de Processamento</h3>" +
+                "<p style=\\"margin:0 0 12px 0;font-size:12px;color:#666\\">Estágios mais lentos de processamento de mensagens</p>" +
+                "<table style=\\"width:100%;border-collapse:collapse;font-size:12px\\">" +
+                  "<thead><tr style=\\"border-bottom:2px solid #fecaca\\">" +
+                    "<th style=\\"text-align:left;padding:4px\\">Estágio</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Count</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">Média</th>" +
+                    "<th style=\\"text-align:right;padding:4px\\">P95</th>" +
+                  "</tr></thead>" +
+                  "<tbody>" + rows + "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderOverrideProfiles(snapshot) {
+            if (!snapshot) {
+              overrideProfilesSectionEl.style.display = "none"
+              return
+            }
+            const profiles = readPath(snapshot, ["overrideProfiles"], [])
+            if (!profiles || profiles.length === 0) {
+              overrideProfilesSectionEl.style.display = "none"
+              return
+            }
+            const rows = profiles.map((profile) => {
+              return "<tr>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;font-weight:500\\">" + escapeHtml(profile.name) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee;text-align:center\\">" + profile.identities + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #eee\\">" + profile.groupsAllowed + "</td>" +
+              "</tr>"
+            }).join("")
+            overrideProfilesSectionEl.style.display = "block"
+            overrideProfilesSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #7c3aed;border-radius:8px;background:#faf5ff;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0;color:#5b21b6\\">🔐 Perfis de Acesso</h3>" +
+                "<table style=\\"width:100%;border-collapse:collapse;font-size:12px\\">" +
+                  "<thead><tr style=\\"border-bottom:2px solid #7c3aed\\">" +
+                    "<th style=\\"text-align:left;padding:4px\\">Perfil</th>" +
+                    "<th style=\\"text-align:center;padding:4px\\">IDs</th>" +
+                    "<th style=\\"text-align:left;padding:4px\\">Acesso</th>" +
+                  "</tr></thead>" +
+                  "<tbody>" + rows + "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderReconnectTrend(snapshot) {
+            if (!snapshot) {
+              reconnectTrendSectionEl.style.display = "none"
+              return
+            }
+            const trend = readPath(snapshot, ["reconnectTrend"], {})
+            if (!trend) {
+              reconnectTrendSectionEl.style.display = "none"
+              return
+            }
+            const trendColor = trend.trend === "degrading" ? "#ef4444" : "#22c55e"
+            const trendText = trend.trend === "degrading" ? "Degradando" : "Estável"
+            reconnectTrendSectionEl.style.display = "block"
+            reconnectTrendSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">📉 Tendência de Reconexão (Última Hora)</h3>" +
+                "<div style=\\"display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px\\">" +
+                  "<div style=\\"padding:12px;background:white;border-radius:6px;border-left:4px solid #ef4444\\">" +
+                    "<p style=\\"margin:0 0 4px 0;font-size:11px;color:#666\\">Reconexões</p>" +
+                    "<p style=\\"margin:0;font-size:16px;font-weight:700;color:#ef4444\\">" + trend.recentHourReconnects + "</p>" +
+                  "</div>" +
+                  "<div style=\\"padding:12px;background:white;border-radius:6px;border-left:4px solid #22c55e\\">" +
+                    "<p style=\\"margin:0 0 4px 0;font-size:11px;color:#666\\">Conexões Estáveis</p>" +
+                    "<p style=\\"margin:0;font-size:16px;font-weight:700;color:#22c55e\\">" + trend.stableConnections + "</p>" +
+                  "</div>" +
+                  "<div style=\\"padding:12px;background:white;border-radius:6px;border-left:4px solid " + trendColor + "\\">" +
+                    "<p style=\\"margin:0 0 4px 0;font-size:11px;color:#666\\">Tendência</p>" +
+                    "<p style=\\"margin:0;font-size:16px;font-weight:700;color:" + trendColor + "\\">" + trendText + "</p>" +
+                  "</div>" +
+                "</div>" +
+              "</section>"
+          }
+
           function renderDashboard(payload) {
             const authReady = Boolean(readPath(payload, ["authReady"], false))
             const snapshot = readPath(payload, ["snapshot"], null)
             renderQr(authReady, readPath(payload, ["qrImage"], null))
+            renderAlerts(snapshot)
+            renderHealth(snapshot)
             renderPerf(snapshot)
+            renderConnectionHealth(snapshot)
+            renderActivityHeatmap(snapshot)
+            renderCommandsFrequency(snapshot)
+            renderGroupActivity(snapshot)
+            renderStorageHealth(snapshot)
+            renderEconomyDashboard(snapshot)
+            renderActivePunishments(snapshot)
+            renderPunishmentStats(snapshot)
+            renderMostActiveUsers(snapshot)
+            renderBottlenecks(snapshot)
+            renderOverrideProfiles(snapshot)
+            renderReconnectTrend(snapshot)
+            renderErrors(snapshot)
             renderRegisteredUsers(snapshot)
             renderCommands(snapshot)
             renderTerminal(snapshot)
           }
+
+          async function toggleMaintenanceMode() {
+            const btn = document.getElementById("btn-maintenance-toggle")
+            const msgEl = document.getElementById("control-message")
+            try {
+              const response = await fetch("/control/toggle-maintenance", { method: "POST" })
+              if (!response.ok) {
+                msgEl.textContent = "Falha ao alternar modo manutenção: HTTP " + response.status
+                msgEl.style.display = "block"
+                msgEl.style.color = "#dc2626"
+                return
+              }
+              const data = await response.json()
+              const newState = data.maintenanceMode ? "Ativo" : "Desativo"
+              const newColor = data.maintenanceMode ? "#dc2626" : "#22c55e"
+              btn.style.background = newColor
+              btn.textContent = "Modo Manutenção: " + newState
+              msgEl.textContent = "Modo manutenção " + (data.maintenanceMode ? "ativado" : "desativado")
+              msgEl.style.display = "block"
+              msgEl.style.color = newColor
+            } catch (err) {
+              msgEl.textContent = "Erro ao alternar: " + String(err.message)
+              msgEl.style.display = "block"
+              msgEl.style.color = "#dc2626"
+            }
+          }
+
+          async function loadSystemStatus() {
+            try {
+              const response = await fetch("/control/system-status")
+              if (!response.ok) return
+              const data = await response.json()
+              if (data.ok && data.status) {
+                const btn = document.getElementById("btn-maintenance-toggle")
+                const statusColor = data.status.maintenanceMode ? "#dc2626" : "#22c55e"
+                btn.style.background = statusColor
+                btn.textContent = "Modo Manutenção: " + (data.status.maintenanceMode ? "Ativo" : "Desativo")
+              }
+            } catch (err) {
+              // Silently fail
+            }
+          }
+
+          document.getElementById("btn-maintenance-toggle").addEventListener("click", toggleMaintenanceMode)
+          loadSystemStatus()
 
           let refreshInFlight = false
           async function refreshDashboard() {
@@ -1681,6 +2712,7 @@ async function startBot(){
   sock.ev.on("messages.upsert", async ({ messages })=>{
     const processingStartedAt = Date.now()
     perfStats.messagesReceived += 1
+    let messageErrored = false
 
     const measureStage = async (stageName, task) => {
       const stageStart = Date.now()
@@ -2833,6 +3865,7 @@ async function startBot(){
         senderName: getKnownUserName(sender),
         groupName: isGroup ? getKnownGroupName(from) : "DM",
       })
+      trackCommandUsage(cmd, sender, from)
     }
 
     // =========================
@@ -3934,7 +4967,12 @@ async function startBot(){
     }
 
     } catch (err) {
+      messageErrored = true
       perfStats.messagesErrored += 1
+      recordError("messages.upsert", String(err?.message || err || "unknown error"), {
+        command: cmd,
+        sender: sender
+      })
       telemetry.incrementCounter("command.error", 1, {
         scope: "messages.upsert",
         scope: "messages.upsert.processing",
@@ -3947,6 +4985,9 @@ async function startBot(){
       })
       console.error("Erro no processamento de messages.upsert", err)
     } finally {
+      if (!messageErrored && perfStats.messagesReceived > perfStats.ignoredNoMessage + perfStats.ignoredFromMe + perfStats.messagesErrored) {
+        perfStats.messagesSuccessful += 1
+      }
       perfStats.lastProcessedAt = Date.now()
       recordMetric(perfStats.processingMs, perfStats.lastProcessedAt - processingStartedAt)
     }
