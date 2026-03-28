@@ -1303,7 +1303,7 @@ app.get("/", (req,res)=>{
       <body style="font-family:Segoe UI,Arial,sans-serif;padding:16px">
         <section style="max-width:980px">
           <h2 style="margin:0 0 8px 0">Painel Vitin Bot</h2>
-          <p id="polling-status" style="margin:0 0 12px 0;color:#555">Atualizando automaticamente a cada 2000ms.</p>
+          <p id="polling-status" style="margin:0 0 12px 0;color:#555">Atualizando automaticamente a cada 1000ms.</p>
         </section>
 
         <section id="qr-section" style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px;display:none"></section>
@@ -1315,7 +1315,7 @@ app.get("/", (req,res)=>{
         ${downloadBlock}
 
         <script>
-          const POLLING_MS = 2000
+          const POLLING_MS = 1000
           const pollingStatusEl = document.getElementById("polling-status")
           const qrSectionEl = document.getElementById("qr-section")
           const perfSectionEl = document.getElementById("perf-section")
@@ -1540,7 +1540,7 @@ app.get("/", (req,res)=>{
               }
               const payload = await response.json()
               renderDashboard(payload)
-              pollingStatusEl.textContent = "Atualizando automaticamente a cada 2000ms. Última atualização: " + new Date().toLocaleTimeString("pt-BR")
+              pollingStatusEl.textContent = "Atualizando automaticamente a cada 1000ms. Última atualização: " + new Date().toLocaleTimeString("pt-BR")
             } catch (err) {
               const errMessage = err && err.message ? err.message : err
               pollingStatusEl.textContent = "Falha ao atualizar painel: " + String(errMessage)
@@ -2370,10 +2370,12 @@ async function startBot(){
       }
 
       const lines = matches.map((entry, index) => {
-        const normalizedUserId = String(entry?.userId || "").trim().toLowerCase().split(":")[0]
-        const userPart = normalizedUserId.split("@")[0] || normalizedUserId
-        const phone = userPart.replace(/\D+/g, "") || userPart
-        return `${index + 1}. ${entry.publicLabel} -> ${phone || "sem numero"}`
+        // Extract phone number from userId (format: phone@s.whatsapp.net or phone:something@s.whatsapp.net)
+        const userId = String(entry?.userId || "").trim().toLowerCase()
+        const phoneOrJid = userId.split(":")[0].split("@")[0] || userId
+        const phoneDigitsOnly = phoneOrJid.replace(/\D+/g, "")
+        const displayPhone = phoneDigitsOnly || phoneOrJid
+        return `${index + 1}. ${entry.publicLabel} -> *${displayPhone}*`
       })
 
       await sock.sendMessage(from, {
@@ -2381,6 +2383,62 @@ async function startBot(){
           `Resultado do whois para *${nicknameQuery}* (${matches.length}):\n` +
           lines.join("\n"),
       })
+      return
+    }
+
+    if (cmdName === prefix + "find") {
+      if (!isGroup) {
+        await sock.sendMessage(from, { text: "Use !find apenas em grupos." })
+        return
+      }
+      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) return
+
+      const jidQuery = String(cmdParts.slice(1).join(" ") || "").trim()
+      if (!jidQuery) {
+        await sock.sendMessage(from, { text: `Use: ${prefix}find <jid ou numero>` })
+        return
+      }
+
+      // Normalize the query to a proper JID format
+      let searchJid = jidQuery.toLowerCase().trim()
+      if (!searchJid.includes("@")) {
+        // If it's just a phone number, add the WhatsApp format
+        const digitsOnly = searchJid.replace(/\D+/g, "")
+        if (digitsOnly) {
+          searchJid = digitsOnly + "@s.whatsapp.net"
+        }
+      }
+
+      try {
+        const groupMetadata = await sock.groupMetadata(from)
+        const participants = Array.isArray(groupMetadata?.participants) ? groupMetadata.participants : []
+        
+        // Find if the user is in the group
+        const userInGroup = participants.find(p => {
+          const normalizedParticipant = jidNormalizedUser(p?.id || "")
+          const normalizedSearch = jidNormalizedUser(searchJid)
+          return normalizedParticipant === normalizedSearch
+        })
+
+        if (userInGroup) {
+          const userJid = jidNormalizedUser(userInGroup.id)
+          const userName = userNameCache[userJid] || userJid.split("@")[0]
+          await sock.sendMessage(from, {
+            text: `✅ Usuário encontrado neste grupo: *${userName}*`,
+            mentions: [userJid],
+          })
+        } else {
+          const phoneDisplay = searchJid.split("@")[0]
+          await sock.sendMessage(from, {
+            text: `❌ Nenhum usuário com JID ou número *${phoneDisplay}* foi encontrado neste grupo.`,
+          })
+        }
+      } catch (err) {
+        console.error("Erro ao executar !find", err)
+        await sock.sendMessage(from, {
+          text: "❌ Erro ao buscar usuário no grupo.",
+        })
+      }
       return
     }
 
