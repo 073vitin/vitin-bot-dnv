@@ -881,12 +881,6 @@ function formatUnknownCommandSuggestionText(inputCmd = "", result = { metric: ""
   for (let i = 0; i < suggestions.length; i++) {
     lines.push(`${i + 1}. *${suggestions[i].text}*`)
   }
-
-  const metricLabel = result?.metric === "jaro-winkler"
-    ? "Jaro-Winkler"
-    : "Damerau-Levenshtein"
-  lines.push("")
-  lines.push(`(Sugestões por similaridade: ${metricLabel})`)
   return lines.join("\n")
 }
 
