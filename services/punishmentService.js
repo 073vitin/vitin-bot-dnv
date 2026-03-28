@@ -571,7 +571,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
   })
 }
 
-async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGroup, skipForCommand = false) {
+async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGroup, skipForCommand = false, botIsAdmin = true) {
   if (!isGroup) return false
   if (skipForCommand) return false
 
@@ -744,6 +744,8 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
   }
 
   if (!shouldDelete) return false
+
+  if (!botIsAdmin) return false
 
   telemetry.incrementCounter("punishment.enforcement", 1, {
     type: punishment.type,
