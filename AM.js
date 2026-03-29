@@ -727,10 +727,10 @@ async function ativarAM(ctx){
 // =========================
 // COMANDO: !desligarAM
 // =========================
-async function desligarAM(ctx, senderIsAdmin){
-  const { sock, from, sender, isGroup } = ctx
+async function desligarAM(ctx){
+  const { sock, from, sender, isGroup, isOverride } = ctx
 
-  if (isGroup && !senderIsAdmin) {
+  if (isGroup && !isOverride) {
     return await enviarQuebrado(sock, from, [
       "Você tenta interferir...",
       "mas não tem autoridade para isso.",
@@ -803,17 +803,18 @@ async function AM_Bug(ctx){
 async function handleAM(ctx){
   if (!ctx.isGroup) return
 
-  const { from, sender, text, sock, isAdmin: senderIsAdmin } = ctx
+  const { from, sender, text, sock, isOverride } = ctx
 
   try {
     // COMANDO: !am (ativa)
     if (text === "!am") {
+      console.log("AM ativo")
       return await ativarAM(ctx)
     }
 
     // COMANDO: !desligarAM
     if (text === "!desligarAM") {
-      return await desligarAM(ctx, senderIsAdmin)
+      return await desligarAM(ctx)
     }
 
     // Se AM não está ativado neste grupo, ignora tudo
