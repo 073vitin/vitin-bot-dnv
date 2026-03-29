@@ -696,7 +696,7 @@ async function AM_Responder(ctx){
 
     if (palavras.some(p => msg.includes(p))){
       const escolhida = respostas[Math.floor(Math.random() * respostas.length)]
-      return falar(escolhida)
+      return falar([escolhida])
     }
   }
 
@@ -827,27 +827,31 @@ async function handleAM(ctx){
 
   const { from, sender, text, sock, isAdmin: senderIsAdmin } = ctx
 
-  // Registrar mensagem
-  registrarMensagem(from, sender)
+  try {
+    // Registrar mensagem
+    registrarMensagem(from, sender)
 
-  // Capturar respostas pendentes
-  capturarResposta(ctx)
+    // Capturar respostas pendentes
+    capturarResposta(ctx)
 
-  // Processar comandos
-  if (text === "!am") {
-    escolherAlvo(ctx)
+    // Processar comandos
+    if (text === "!am") {
+      escolherAlvo(ctx)
+      await AM_Responder(ctx)
+    }
+
+    if (text === "!desligarAM") {
+      await desligarAM(ctx, senderIsAdmin)
+    }
+
+    // Respostas automáticas
     await AM_Responder(ctx)
+    await AM_Perseguir(ctx)
+    await AM_Bug(ctx)
+    await AM_Monologo(ctx)
+  } catch (e) {
+    console.error("Erro no handleAM", e)
   }
-
-  if (text === "!desligarAM") {
-    await desligarAM(ctx, senderIsAdmin)
-  }
-
-  // Respostas automáticas
-  await AM_Responder(ctx)
-  await AM_Perseguir(ctx)
-  await AM_Bug(ctx)
-  await AM_Monologo(ctx)
 }
 
 // =========================
