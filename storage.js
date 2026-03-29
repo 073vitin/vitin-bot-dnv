@@ -12,7 +12,6 @@ if (!fs.existsSync(DATA_DIR)) {
 // cache
 let stateCache = {
   mutedUsers: {},
-  modoLivreUsers: {}, // [userId]: { enabled: true, since: timestamp }
   adminPrivileges: {},
   globalBlockedUsers: {},
   groupVoteThresholds: {},
@@ -94,58 +93,6 @@ function saveState(immediate = false) {
 // Funções de leitura e escrita para cada tipo de estado
 const storage = {
   // Bloqueio global de comandos
-  // Modo Livre (Poor Mode) por usuário
-  getModoLivreUsers: () => ({ ...(stateCache.modoLivreUsers || {}) }),
-  setModoLivreUsers: (map) => {
-    stateCache.modoLivreUsers = map || {}
-    saveState()
-  },
-  addModoLivreUser: (userIds = [], meta = {}) => {
-    if (!stateCache.modoLivreUsers || typeof stateCache.modoLivreUsers !== "object") {
-      stateCache.modoLivreUsers = {}
-    }
-    const added = []
-    for (const rawIdentity of userIds) {
-      const normalized = String(rawIdentity || "").trim().toLowerCase().split(":")[0]
-      if (!normalized) continue
-      if (!stateCache.modoLivreUsers[normalized]) {
-        added.push(normalized)
-      }
-      stateCache.modoLivreUsers[normalized] = {
-        enabled: true,
-        since: Date.now(),
-        enabledBy: meta.enabledBy || "",
-        enabledByName: meta.enabledByName || "",
-      }
-    }
-    if (added.length > 0) saveState()
-    return added
-  },
-  removeModoLivreUser: (userIds = []) => {
-    if (!stateCache.modoLivreUsers || typeof stateCache.modoLivreUsers !== "object") {
-      stateCache.modoLivreUsers = {}
-      return []
-    }
-    const removed = []
-    for (const rawIdentity of userIds) {
-      const normalized = String(rawIdentity || "").trim().toLowerCase().split(":")[0]
-      if (!normalized) continue
-      if (stateCache.modoLivreUsers[normalized]) {
-        delete stateCache.modoLivreUsers[normalized]
-        removed.push(normalized)
-      }
-    }
-    if (removed.length > 0) saveState()
-    return removed
-  },
-  isModoLivreUser: (identity = "") => {
-    const normalized = String(identity || "").trim().toLowerCase().split(":")[0]
-    if (!normalized) return false
-    const modoLivre = stateCache.modoLivreUsers || {}
-    if (modoLivre[normalized]?.enabled) return true
-    const userPart = normalized.split("@")[0]
-    return Boolean(userPart && modoLivre[userPart]?.enabled)
-  },
   getGlobalBlockedUsers: () => ({ ...(stateCache.globalBlockedUsers || {}) }),
   setGlobalBlockedUsers: (map) => {
     stateCache.globalBlockedUsers = map || {}

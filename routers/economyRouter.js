@@ -2444,7 +2444,8 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
           `- !escambo rejeitar <tradeId> | !escambo cancel <tradeId>\n` +
           `- !escambo lista\n` +
           `- !escambo info <tradeId>\n` +
-          `- !escambo disputar <tradeId>`
+          `- !escambo disputar <tradeId>\n` +
+          `Alias mantido: !troca`
       })
     }
 
@@ -3069,10 +3070,6 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     } else if (profile?.buffs?.kronosActive) {
       kronosInfo = `\nCoroa Kronos (Quebrada) ativa até: *${new Date(profile.buffs.kronosExpiresAt).toLocaleString()}*`
     }
-    let modoLivreMsg = ""
-    if (storage.isModoLivreUser(targetUser)) {
-      modoLivreMsg = "\n\n⚠️ *Modo Livre* está ativado para este usuário! Não ganha nem gasta moedas nos jogos (exceto apostas de cassino)."
-    }
     await sock.sendMessage(from, {
       text:
         `💳 Carteira global de @${targetUser.split("@")[0]}\n` +
@@ -3082,7 +3079,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         `XP: *${xp.xpNow}/${xp.xpToNext}*\n` +
         `Pontos de temporada: *${xp.seasonPoints}*\n` +
         `Posição global XP: *${xp.globalPosition || "N/A"}*\n` +
-        `Inventário:\n${buildInventoryText(profile)}${kronosInfo}${modoLivreMsg}`,
+        `Inventário:\n${buildInventoryText(profile)}${kronosInfo}`,
       mentions: [targetUser],
     })
     telemetry.incrementCounter("economy.profile.view", 1, {
@@ -4318,14 +4315,12 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       if (sessionId && activeSession.id !== sessionId) return false
       activeRafflesByGroup.delete(from)
 
-      const botJid = jidNormalizedUser(sock.user?.id || "")
-
       if (activeSession.timeoutId) {
         clearTimeout(activeSession.timeoutId)
       }
 
       const candidates = Array.from(activeSession.participants)
-        .filter((participantId) => participantId && participantId !== activeSession.createdBy && participantId !== botJid)
+        .filter((participantId) => participantId && participantId !== activeSession.createdBy)
 
       if (!candidates.length) {
         await sock.sendMessage(from, {
@@ -4392,13 +4387,6 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       if (!activeSession || !activeSession.optIn) {
         await sock.sendMessage(from, {
           text: "Não há loteria com opt-in ativa neste grupo.",
-        })
-        return true
-      }
-      const botJid = jidNormalizedUser(sock.user?.id || "")
-      if (sender === botJid) {
-        await sock.sendMessage(from, {
-          text: "O bot não participa do sorteio.",
         })
         return true
       }

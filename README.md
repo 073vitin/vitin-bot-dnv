@@ -80,43 +80,33 @@ npm test
 - Responsável: bot.js (useMultiFileAuthState)
 - Sobrescrita opcional: variável de ambiente BOT_AUTH_DIR
 
-
-## Novidades e Sistema de Ajuda
-
-### Novo sistema de ajuda: `!ajuda` / `!duvida`
-Agora você pode usar `!ajuda <comando>` ou `!duvida <comando>` para receber explicações detalhadas sobre qualquer comando do bot, direto na sua DM. Use `!ajuda` sozinho para ver a lista de comandos disponíveis.
-
-- **Menu de ajuda:** `!ajuda`, `!duvida`
-- **Comandos utilitários:** `!menu`, `!feedback`, `!feedbackpriv`, `!pergunta`, `!jid`, entre outros.
-
 ## Comandos (visão geral)
 
 ### Jogos
 - !jogos
-- !criar <adivinhacao|batata|dados|rr|embaralhado|memória|reação|comando>
-- !criar <LobbyID> [aposta]
+- !começar <adivinhacao|batata|dados|rr> / !comecar / !start
 - !entrar <LobbyID> / !join <LobbyID>
-- !lobbies
+- !começar <LobbyID> / !comecar <LobbyID> / !start <LobbyID>
+- !começar <embaralhado|memória|reação|comando> / !comecar <embaralhado|memoria|reacao|comando>
 - !resposta / !passa / !rolar / !atirar
 - !moeda [1-10] / !moeda dobroounada
 - !streak / !streakranking
 
 Observações de lobby:
-- O criador entra automaticamente no lobby ao usar !criar <jogo>.
+- O criador entra automaticamente no lobby ao usar !começar <jogo>.
 - O buy-in (quando existir) é cobrado ao iniciar a partida de todos os jogadores no lobby, incluindo o criador.
 - O LobbyID pode ser informado em maiúsculas ou minúsculas para entrar/iniciar.
 
 ### Economia
-- !register / !unregister / !deletarconta / !deleteconta
+- !register / !unregister
 - !perfil / !perfil @user / !perfil stats
 - !economia
 - !coinsranking
 - !xpranking
 - !xp
 - !guia
-- !missao / !missoes / !missaosemanal
+- !missao / !missoes
 - !missao claim <Q1|Q2|Q3>
-- !missaosemanal claim <W1|W2|W3|W4|W5>
 - !extrato
 - !loja
 - !comprar <item|id> / !comprarpara
@@ -129,13 +119,18 @@ Observações de lobby:
 - !lootbox <quantidade>
 - !falsificar <tipo 1-13> [severidade] [quantidade] [S|N]
 - !loteria "<titulo>" "<recompensas>" <S|N> <qtdVencedores>
-- !loteria entrar / !loteria fechar
-- !trabalho <ifood|capinar|lavagem|aposta|minerar|bitcoin>
+- !loteria entrar
+- !loteria fechar
+- !trabalho
 - !usarpasse @user <tipo> <severidade>
-- !team create <nome> / !team invite <@user> / !team accept <teamID> / !team members / !team stats / !team leave / !team list
-- !item <nome_do_item>
-- !carepackage / !cestabásica
-- !cupom / !criarcupom / !usarcupom
+- !team create <nome>
+- !team invite <@user>
+- !team accept <teamID>
+- !team members
+- !team stats
+- !team leave
+- !team list
+- !deletarconta / !deleteconta
 
 Observações de economia:
 - !register e !unregister funcionam somente em grupos.
@@ -153,23 +148,6 @@ Observações de economia:
 - !team create cria um novo time (max 1 por usuário).
 - !team invite convida um jogador para o time (requer estar em um time).
 - !team accept aceita um convite pendente de entrada.
-
-### Moderação
-- !mute / !unmute / !ban / !block / !unblock
-- !punicoes / !punicoesadd / !punicoesclr / !punicoeslista
-- !filtros / !filtroadd / !filtroremove
-- !vote / !voteset / !votos
-- !adm / !adminadd / !adminrm / !bloqueados / !jidsgrupo / !resenha
-
-### Utilidade e Diversão
-- !ajuda / !duvida
-- !menu
-- !feedback / !feedbackpriv / !pergunta
-- !jid
-- !roleta / !bombardeio / !gay / !gado / !ship / !treta
-- !sticker / !s / !fig / !f
-
-Veja o comando !ajuda para detalhes e exemplos de uso de cada comando.
 - !team members lista integrantes e seus níveis.
 - !team stats mostra estatísticas do time (membros, moedas, itens do pool).
 - !team leave sai do time (se vazio, o time é deletado).
