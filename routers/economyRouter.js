@@ -2444,8 +2444,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
           `- !escambo rejeitar <tradeId> | !escambo cancel <tradeId>\n` +
           `- !escambo lista\n` +
           `- !escambo info <tradeId>\n` +
-          `- !escambo disputar <tradeId>\n` +
-          `Alias mantido: !troca`
+          `- !escambo disputar <tradeId>`
       })
     }
 

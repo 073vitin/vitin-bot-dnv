@@ -10,13 +10,15 @@ Adicionado novo comando `!ajuda` e seu alias `!duvida` que permite usuários obt
 - **Resposta**: Sempre enviada na DM (mensagem privada) do usuário
 - **Funcionamento**: Se usado em grupo, bot notifica no grupo que enviou a ajuda no privado
 
+
 ### Exemplos de Uso
 
 ```
-!ajuda economia    → Mostra como usar o sistema de economia
-!duvida daily      → Mostra como funciona o comando !daily
-!ajuda time        → Mostra como criar e gerenciar times
-!ajuda              → Lista todos os comandos disponíveis para ajuda
+!ajuda criar      → Mostra como criar lobbies e iniciar jogos
+!ajuda economia   → Mostra como usar o sistema de economia
+!duvida daily     → Mostra como funciona o comando !daily
+!ajuda time       → Mostra como criar e gerenciar times
+!ajuda            → Lista todos os comandos disponíveis para ajuda
 ```
 
 ### Resposta Padrão
@@ -52,25 +54,28 @@ A economia é o sistema de progressão principal. Você ganha coins, XP e itens 
 • progressao
 ```
 
+
 ## Comandos Documentados
 
-### Economia (20 comandos)
+### Economia
 - economia, perfil, xp, missao, missaosemanal, guia, daily, trabalho, extrato
 - coinsranking, xpranking, cassino, loja, comprar, vender, doarcoins, doaritem
 - roubar, lootbox, falsificar, trade, time, mentions, apelido, cupom, loteria
-- register, unregister, deletarconta
+- register, unregister, deletarconta, item, carepackage, cestabásica, usarpasse, usarcupom, criarcupom
 
-### Jogos (7 comandos)
+### Jogos
 - jogos, brincadeiras, começar, entrar, lobbies
+- comando (Último a Obedecer), embaralhado, memoria, reacao, batataquente, dueloDados, roletaRussa, resposta, passa, rolar, atirar
 
-### Moderação (14 comandos)
-- mute, unmute, ban, block, unblock, punicoes, punicoesadd, punicoesclr
-- filtros, filtroadd, filtroremove, vote, voteset, adm
+### Moderação
+- mute, unmute, ban, block, unblock, punicoes, punicoesadd, punicoesclr, punicoeslista
+- filtros, filtroadd, filtroremove, vote, voteset, adm, adminadd, adminrm, votos, bloqueados, jidsgrupo, resenha
 
-### Utilidade (2 comandos)
-- ajuda, ping
+### Utilidade e Diversão
+- ajuda, duvida, menu, feedback, feedbackpriv, pergunta, jid
+- roleta, bombardeio, gay, gado, ship, treta, sticker, s, fig, f
 
-**Total: ~50 comandos documentados**
+**Total: ~70 comandos documentados**
 
 ## Restrições Implementadas
 
@@ -99,9 +104,9 @@ A economia é o sistema de progressão principal. Você ganha coins, XP e itens 
 ✅ Sem erros de sintaxe
 ✅ Pronto para produção
 
-## Extensão Futura
+## Como expandir a documentação
 
-Para adicionar documentação de novos comandos, edite `commandHelp.js` e adicione uma entrada em `COMMAND_HELP`:
+Para adicionar ou atualizar comandos documentados, edite `commandHelp.js` e adicione uma entrada em `COMMAND_HELP`:
 
 ```javascript
 nomeDoComando: {

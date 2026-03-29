@@ -270,8 +270,8 @@ const COMMAND_HELP = {
   },
 
   trade: {
-    name: "Trade (Escambo)",
-    aliases: ["trade", "troca", "escambo"],
+    name: "Escambo",
+    aliases: ["troca", "escambo"],
     description: "Sistema de troca de coins e itens com outro usuário",
     usage: "!trade @user <coins> [item:quantidade...]",
     commonUsage: [
@@ -403,17 +403,23 @@ const COMMAND_HELP = {
     details: "Comandos leves como roleta, bombardeio, gay, gado, ship, treta.",
   },
 
-  começar: {
-    name: "Começar Jogo",
-    aliases: ["começar", "comecar", "start"],
-    description: "Inicia um jogo de lobby ou rápido",
-    usage: "!começar <tipo|LobbyID> [args]",
+  criar: {
+    name: "Criar Jogo/Lobby",
+    aliases: ["criar"],
+    description: "Cria um lobby ou inicia um jogo rápido",
+    usage: "!criar <jogo> [aposta]",
     commonUsage: [
-      "!começar adivinhacao - Criar lobby de adivinhação",
-      "!começar LOBBY123 - Iniciar lobby existente",
-      "!começar embaralhado - Iniciar jogo rápido",
+      "!criar adivinhacao - Criar lobby de adivinhação",
+      "!criar batata - Criar lobby de batata quente",
+      "!criar dados - Criar lobby de duelo de dados",
+      "!criar rr - Criar lobby de roleta russa",
+      "!criar embaralhado - Iniciar jogo rápido de embaralhado",
+      "!criar memoria - Iniciar jogo rápido de memória",
+      "!criar reacao - Iniciar jogo rápido de reação",
+      "!criar comando - Iniciar jogo rápido de comando",
+      "!criar <LobbyID> [aposta] - Iniciar lobby existente (quando aplicável)",
     ],
-    details: "Diferentes sintaxes para jogos de lobby vs. rápidos.",
+    details: "Use !criar para criar lobbies de jogos de grupo ou iniciar jogos rápidos. Para lobbies já criados, use !criar <LobbyID> para iniciar a partida.",
   },
 
   entrar: {
