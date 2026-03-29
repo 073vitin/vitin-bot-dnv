@@ -4127,6 +4127,18 @@ async function startBot(){
     )
     if (handledStreakValue) return
 
+    const handledAM = await AM.handleAM({
+      sock,
+      from,
+      sender,
+      text,
+      cmd,
+      cmdName,
+      isGroup,
+      isOverride: isOverrideSender,
+    })
+    if (handledAM) return
+
     if (isCommand) {
       const suggestionResult = getLikelyCommandSuggestions({
         input: cmd,
