@@ -803,17 +803,17 @@ async function AM_Bug(ctx){
 async function handleAM(ctx){
   if (!ctx.isGroup) return
 
-  const { from, sender, text, sock, isOverride } = ctx
+  const { from, sender, text, sock, isOverride, cmd, cmdName } = ctx
 
   try {
     // COMANDO: !am (ativa)
-    if (text === "!am") {
+    if (cmd === "am") {
       console.log("AM ativo")
       return await ativarAM(ctx)
     }
 
     // COMANDO: !desligarAM
-    if (text === "!desligarAM") {
+    if (cmd === "desligaram") {
       return await desligarAM(ctx)
     }
 

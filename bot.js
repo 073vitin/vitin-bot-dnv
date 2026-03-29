@@ -4155,6 +4155,8 @@ async function startBot(){
       from,
       sender,
       text,
+      cmd,
+      cmdName,
       isGroup,
       isOverride: isOverrideSender,
     })
