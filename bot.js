@@ -150,6 +150,45 @@ const perfStats = {
   stages: {},
 }
 
+function safeLifetimeInteger(value, fallback = 0) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback
+}
+
+function loadLifetimeStats() {
+  const raw = typeof storage.getProfilerLifetimeStats === "function"
+    ? storage.getProfilerLifetimeStats()
+    : {}
+  const now = Date.now()
+  return {
+    sinceAt: safeLifetimeInteger(raw.sinceAt, now),
+    bootCount: safeLifetimeInteger(raw.bootCount, 0),
+    reconnects: safeLifetimeInteger(raw.reconnects, 0),
+    messagesReceived: safeLifetimeInteger(raw.messagesReceived, 0),
+    messagesErrored: safeLifetimeInteger(raw.messagesErrored, 0),
+    ignoredNoMessage: safeLifetimeInteger(raw.ignoredNoMessage, 0),
+    ignoredFromMe: safeLifetimeInteger(raw.ignoredFromMe, 0),
+    commandsExecuted: safeLifetimeInteger(raw.commandsExecuted, 0),
+    authUptimeTotalMs: safeLifetimeInteger(raw.authUptimeTotalMs, 0),
+    authSessionStartedAt: safeLifetimeInteger(raw.authSessionStartedAt, 0),
+    lastSeenAt: safeLifetimeInteger(raw.lastSeenAt, 0),
+  }
+}
+
+const lifetimeStats = loadLifetimeStats()
+
+function persistLifetimeStats() {
+  if (typeof storage.setProfilerLifetimeStats !== "function") return
+  lifetimeStats.lastSeenAt = Date.now()
+  storage.setProfilerLifetimeStats(lifetimeStats)
+}
+
+lifetimeStats.bootCount += 1
+if (!lifetimeStats.sinceAt) {
+  lifetimeStats.sinceAt = Date.now()
+}
+persistLifetimeStats()
+
 function addCommandHistory(entry = {}) {
   const normalizedSenderId = registrationService.normalizeUserId(entry.senderId || "")
   const nextEntry = {
@@ -168,6 +207,10 @@ function addCommandHistory(entry = {}) {
       command: nextEntry.command,
       at: nextEntry.at,
     }
+  }
+  if (nextEntry.command) {
+    lifetimeStats.commandsExecuted += 1
+    persistLifetimeStats()
   }
 }
 
@@ -1213,6 +1256,10 @@ function getProfilerSnapshot() {
     .sort((a, b) => b.avgMs - a.avgMs)
     .slice(0, 12)
 
+  const lifetimeAuthUptimeMs = lifetimeStats.authUptimeTotalMs + (lifetimeStats.authSessionStartedAt > 0
+    ? Math.max(0, now - lifetimeStats.authSessionStartedAt)
+    : 0)
+
   return {
     now,
     authenticatedAt: perfStats.authenticatedAt,
@@ -1241,6 +1288,18 @@ function getProfilerSnapshot() {
     registeredUsers: registeredUsers.length,
     registeredUsersList: registeredUsers,
     knownGroups: Array.from(knownGroupIds).map((groupId) => ({ groupId, groupName: getKnownGroupName(groupId) })),
+    lifetime: {
+      sinceAt: lifetimeStats.sinceAt,
+      bootCount: lifetimeStats.bootCount,
+      reconnects: lifetimeStats.reconnects,
+      messagesReceived: lifetimeStats.messagesReceived,
+      messagesErrored: lifetimeStats.messagesErrored,
+      ignoredNoMessage: lifetimeStats.ignoredNoMessage,
+      ignoredFromMe: lifetimeStats.ignoredFromMe,
+      commandsExecuted: lifetimeStats.commandsExecuted,
+      authUptimeMs: lifetimeAuthUptimeMs,
+      lastSeenAt: lifetimeStats.lastSeenAt,
+    },
   }
 }
 
@@ -1402,9 +1461,10 @@ app.get("/", (req,res)=>{
               "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
                 "<h3 style=\\"margin:0 0 10px 0\\">Performance</h3>" +
                 "<p style=\\"margin:4px 0\\">Estado da conexão: <b>" + escapeHtml(snapshot.connectionState) + "</b></p>" +
-                "<p style=\\"margin:4px 0\\">Uptime do bot: <b>" + formatElapsed(snapshot.uptimeMs) + "</b> | Desde autenticação: <b>" + formatElapsed(snapshot.authUptimeMs) + "</b></p>" +
+                "<p style=\"margin:4px 0\">Uptime do bot (sessão atual): <b>" + formatElapsed(snapshot.uptimeMs) + "</b> | Desde autenticação atual: <b>" + formatElapsed(snapshot.authUptimeMs) + "</b></p>" +
                 "<p style=\\"margin:4px 0\\">Autenticado em: <b>" + formatDateTime(snapshot.authenticatedAt) + "</b> | Conectado em: <b>" + formatDateTime(snapshot.connectedAt) + "</b></p>" +
                 "<p style=\\"margin:4px 0\\">Mensagens recebidas: <b>" + Number(snapshot.messagesReceived || 0) + "</b> | Erros: <b>" + Number(snapshot.messagesErrored || 0) + "</b> | Ignoradas (sem conteúdo): <b>" + Number(snapshot.ignoredNoMessage || 0) + "</b> | Ignoradas (fromMe): <b>" + Number(snapshot.ignoredFromMe || 0) + "</b></p>" +
+                "<p style=\"margin:4px 0\">Lifetime desde <b>" + formatDateTime(readPath(snapshot, [\"lifetime\", \"sinceAt\"], 0)) + "</b>: mensagens <b>" + Number(readPath(snapshot, [\"lifetime\", \"messagesReceived\"], 0)) + "</b>, erros <b>" + Number(readPath(snapshot, [\"lifetime\", \"messagesErrored\"], 0)) + "</b>, ignoradas sem conteúdo <b>" + Number(readPath(snapshot, [\"lifetime\", \"ignoredNoMessage\"], 0)) + "</b>, ignoradas fromMe <b>" + Number(readPath(snapshot, [\"lifetime\", \"ignoredFromMe\"], 0)) + "</b>, comandos <b>" + Number(readPath(snapshot, [\"lifetime\", \"commandsExecuted\"], 0)) + "</b>, reconexões <b>" + Number(readPath(snapshot, [\"lifetime\", \"reconnects\"], 0)) + "</b>, uptime autenticado <b>" + formatElapsed(readPath(snapshot, [\"lifetime\", \"authUptimeMs\"], 0)) + "</b>, boots <b>" + Number(readPath(snapshot, [\"lifetime\", \"bootCount\"], 0)) + "</b></p>" +
                 "<p style=\\"margin:4px 0\\">Último comando: <b>" + escapeHtml(snapshot.lastCommand || "-") + "</b> | Último processamento: <b>" + formatDateTime(snapshot.lastProcessedAt) + "</b> | Reconexões: <b>" + Number(snapshot.reconnects || 0) + "</b></p>" +
                 "<p style=\\"margin:4px 0\\">Memória: heap <b>" + Number(readPath(snapshot, ["memory", "heapUsed"], 0)) + " MB</b> | rss <b>" + Number(readPath(snapshot, ["memory", "rss"], 0)) + " MB</b> | Registrados <b>" + Number(snapshot.registeredUsers || 0) + "</b></p>" +
                 "<table style=\\"width:100%;margin-top:12px;border-collapse:collapse;font-family:monospace;font-size:12px\\">" +
@@ -1672,10 +1732,20 @@ async function startBot(){
       if (!perfStats.authenticatedAt) {
         perfStats.authenticatedAt = perfStats.connectedAt
       }
+      if (!lifetimeStats.authSessionStartedAt) {
+        lifetimeStats.authSessionStartedAt = perfStats.connectedAt
+        persistLifetimeStats()
+      }
     }
 
     if(connection === "close"){
       perfStats.reconnects += 1
+      lifetimeStats.reconnects += 1
+      if (lifetimeStats.authSessionStartedAt) {
+        lifetimeStats.authUptimeTotalMs += Math.max(0, Date.now() - lifetimeStats.authSessionStartedAt)
+        lifetimeStats.authSessionStartedAt = 0
+      }
+      persistLifetimeStats()
       const reason = lastDisconnect?.error?.output?.statusCode
       if(reason !== DisconnectReason.loggedOut){
         console.log("Reconectando...")
@@ -1687,6 +1757,8 @@ async function startBot(){
   sock.ev.on("messages.upsert", async ({ messages })=>{
     const processingStartedAt = Date.now()
     perfStats.messagesReceived += 1
+    lifetimeStats.messagesReceived += 1
+    persistLifetimeStats()
 
     const measureStage = async (stageName, task) => {
       const stageStart = Date.now()
@@ -1702,10 +1774,14 @@ async function startBot(){
     const msg = messages[0]
     if(!msg?.message) {
       perfStats.ignoredNoMessage += 1
+      lifetimeStats.ignoredNoMessage += 1
+      persistLifetimeStats()
       return
     }
     if(msg.key.fromMe) {
       perfStats.ignoredFromMe += 1
+      lifetimeStats.ignoredFromMe += 1
+      persistLifetimeStats()
       return
     }
 
@@ -3999,6 +4075,8 @@ async function startBot(){
 
     } catch (err) {
       perfStats.messagesErrored += 1
+      lifetimeStats.messagesErrored += 1
+      persistLifetimeStats()
       telemetry.incrementCounter("command.error", 1, {
         scope: "messages.upsert",
         scope: "messages.upsert.processing",

@@ -4695,7 +4695,23 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         return sock.sendMessage(from, { text: "Use: !mudarapelido @user <apelido-novo>" })
       }
 
-      const label = String(cmdParts.slice(2).join(" ") || "").trim().slice(0, 30)
+      let label = ""
+      const rawInput = String(rawText || "").trim()
+      const commandToken = `${prefix}mudarapelido`
+      if (rawInput) {
+        const startsWithCommand = rawInput.toLowerCase().startsWith(commandToken.toLowerCase())
+        const afterCommand = startsWithCommand
+          ? rawInput.slice(commandToken.length).trimStart()
+          : rawInput
+        const mentionAndLabelMatch = afterCommand.match(/^@\S+\s+([\s\S]+)$/)
+        if (mentionAndLabelMatch?.[1]) {
+          label = String(mentionAndLabelMatch[1]).trim()
+        }
+      }
+      if (!label) {
+        label = String(cmdParts.slice(2).join(" ") || "").trim()
+      }
+      label = label.slice(0, 30)
       if (!label) {
         return sock.sendMessage(from, { text: "Use: !mudarapelido @user <apelido-novo>" })
       }

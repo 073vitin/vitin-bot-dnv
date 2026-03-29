@@ -2792,6 +2792,50 @@ test("economy router allows override to change another user nickname with !mudar
   assert.deepEqual(sent[0].payload?.mentions, [target])
 })
 
+test("economy router !mudarapelido captures everything after mention from raw text", async () => {
+  const { sock } = createSockCapture()
+  const target = "alvo@s.whatsapp.net"
+  const updates = []
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "override@s.whatsapp.net",
+    rawText: "!mudarapelido @alvo   Rei Do Caos #1",
+    cmd: "!mudarapelido @alvo   rei do caos #1",
+    cmdName: "!mudarapelido",
+    cmdArg1: "@alvo",
+    cmdArg2: "rei",
+    cmdParts: ["!mudarapelido", "@alvo", "rei", "do", "caos", "#1"],
+    mentioned: [target],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    isOverrideSender: true,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    economyService: {
+      setPublicLabel: (userId, label) => {
+        updates.push({ userId, label })
+        return true
+      },
+    },
+    parseQuantity: () => 1,
+    formatDuration: () => "0m",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(updates.length, 1)
+  assert.equal(updates[0].userId, target)
+  assert.equal(updates[0].label, "Rei Do Caos #1")
+})
+
 test("economy router blocks !mudarapelido for non-override sender", async () => {
   const { sock, sent } = createSockCapture()
   const target = "alvo@s.whatsapp.net"

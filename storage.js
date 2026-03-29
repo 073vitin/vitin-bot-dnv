@@ -36,6 +36,19 @@ let stateCache = {
   teams: {}, // [teamId]: { name, createdBy, lieutenants:[userId], members: [userId], createdAt, poolCoins, poolItems: {}, lastWithdrawAtByUser:{} }
   teamMembers: {}, // [userId]: teamId (for quick lookup)
   teamInvites: {}, // [teamId]: { [userId]: inviteStatus }
+  profilerLifetimeStats: {
+    sinceAt: Date.now(),
+    bootCount: 0,
+    reconnects: 0,
+    messagesReceived: 0,
+    messagesErrored: 0,
+    ignoredNoMessage: 0,
+    ignoredFromMe: 0,
+    commandsExecuted: 0,
+    authUptimeTotalMs: 0,
+    authSessionStartedAt: 0,
+    lastSeenAt: 0,
+  },
 }
 
 // Carrega estado do disco ao iniciar
@@ -393,6 +406,51 @@ const storage = {
     }
     saveState()
     return { ...stateCache.seasonState }
+  },
+
+  // Estatísticas de vida útil do profiler/dashboard
+  getProfilerLifetimeStats: () => {
+    const raw = stateCache.profilerLifetimeStats && typeof stateCache.profilerLifetimeStats === "object"
+      ? stateCache.profilerLifetimeStats
+      : {}
+    const safeInt = (value, fallback = 0) => {
+      const parsed = Number(value)
+      return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback
+    }
+    const now = Date.now()
+    const sinceAt = safeInt(raw.sinceAt, now)
+    return {
+      sinceAt,
+      bootCount: safeInt(raw.bootCount, 0),
+      reconnects: safeInt(raw.reconnects, 0),
+      messagesReceived: safeInt(raw.messagesReceived, 0),
+      messagesErrored: safeInt(raw.messagesErrored, 0),
+      ignoredNoMessage: safeInt(raw.ignoredNoMessage, 0),
+      ignoredFromMe: safeInt(raw.ignoredFromMe, 0),
+      commandsExecuted: safeInt(raw.commandsExecuted, 0),
+      authUptimeTotalMs: safeInt(raw.authUptimeTotalMs, 0),
+      authSessionStartedAt: safeInt(raw.authSessionStartedAt, 0),
+      lastSeenAt: safeInt(raw.lastSeenAt, 0),
+    }
+  },
+  setProfilerLifetimeStats: (stats = {}) => {
+    const current = storage.getProfilerLifetimeStats()
+    const next = {
+      sinceAt: Number.isFinite(stats.sinceAt) && stats.sinceAt > 0 ? Math.floor(stats.sinceAt) : current.sinceAt,
+      bootCount: Number.isFinite(stats.bootCount) && stats.bootCount >= 0 ? Math.floor(stats.bootCount) : current.bootCount,
+      reconnects: Number.isFinite(stats.reconnects) && stats.reconnects >= 0 ? Math.floor(stats.reconnects) : current.reconnects,
+      messagesReceived: Number.isFinite(stats.messagesReceived) && stats.messagesReceived >= 0 ? Math.floor(stats.messagesReceived) : current.messagesReceived,
+      messagesErrored: Number.isFinite(stats.messagesErrored) && stats.messagesErrored >= 0 ? Math.floor(stats.messagesErrored) : current.messagesErrored,
+      ignoredNoMessage: Number.isFinite(stats.ignoredNoMessage) && stats.ignoredNoMessage >= 0 ? Math.floor(stats.ignoredNoMessage) : current.ignoredNoMessage,
+      ignoredFromMe: Number.isFinite(stats.ignoredFromMe) && stats.ignoredFromMe >= 0 ? Math.floor(stats.ignoredFromMe) : current.ignoredFromMe,
+      commandsExecuted: Number.isFinite(stats.commandsExecuted) && stats.commandsExecuted >= 0 ? Math.floor(stats.commandsExecuted) : current.commandsExecuted,
+      authUptimeTotalMs: Number.isFinite(stats.authUptimeTotalMs) && stats.authUptimeTotalMs >= 0 ? Math.floor(stats.authUptimeTotalMs) : current.authUptimeTotalMs,
+      authSessionStartedAt: Number.isFinite(stats.authSessionStartedAt) && stats.authSessionStartedAt >= 0 ? Math.floor(stats.authSessionStartedAt) : current.authSessionStartedAt,
+      lastSeenAt: Number.isFinite(stats.lastSeenAt) && stats.lastSeenAt >= 0 ? Math.floor(stats.lastSeenAt) : current.lastSeenAt,
+    }
+    stateCache.profilerLifetimeStats = next
+    saveState()
+    return { ...next }
   },
 
   // Estados genéricos de jogos
