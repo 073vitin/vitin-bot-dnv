@@ -514,13 +514,24 @@ async function AM_Perseguir(ctx){
 
   const alvos = alvosAM[ctx.from]
   const alvoEscolhido = alvos[Math.floor(Math.random() * alvos.length)]
+  
+  // Garantir que o alvo existe e tem ID válido
+  if (!alvoEscolhido || !alvoEscolhido.id) {
+    console.log("Alvo inválido detectado:", alvoEscolhido)
+    return
+  }
+
   const mem = getMemoria(alvoEscolhido.id)
   const chance = Math.min(0.2 + (mem.odio * 0.05), 0.7)
 
   if (Math.random() > chance) return
 
+  // Garantir que o ID está no formato correto para mention
+  const userId = alvoEscolhido.id.split("@")
+  if (!userId) return
+
   return enviarQuebrado(ctx.sock, ctx.from, [
-    `@${alvoEscolhido.id.split("@")}`,
+    `@${userId}`,
     "Eu ainda estou aqui.",
     "Observando você.",
     `Você é o meu ${alvoEscolhido.personagem}.`
@@ -772,13 +783,21 @@ async function addAlvoAM(ctx){
     return true
   }
 
-  // Extrai menções do message
+  // ✅ EXTRAÇÃO CORRETA DE MENÇÕES NO BAILEYS
   let mentions = []
   
-  if (message?.extendedTextMessage?.contextInfo?.mentionedJid) {
-    mentions = message.extendedTextMessage.contextInfo.mentionedJid
-  } else if (ctx.mentions) {
+  if (ctx.mentions && ctx.mentions.length > 0) {
     mentions = ctx.mentions
+  } else if (message?.extendedTextMessage?.contextInfo?.mentionedJid) {
+    mentions = message.extendedTextMessage.contextInfo.mentionedJid
+  } else {
+    // Tentativa fallback: extrair do texto
+    const text = ctx.text || ""
+    const match = text.match(/@(\d+)/)
+    if (match) {
+      const number = match
+      mentions = [`${number}@s.whatsapp.net`]
+    }
   }
 
   if (mentions.length === 0) {
@@ -788,7 +807,7 @@ async function addAlvoAM(ctx){
     return true
   }
 
-  const novoAlvo = mentions
+  const novoAlvo = mentions // Pega o primeiro mencionado
   const jaEstaNoAlvo = alvosAM[from].some(a => a.id === novoAlvo)
 
   if (jaEstaNoAlvo) {
@@ -831,13 +850,20 @@ async function removeAlvoAM(ctx){
     return true
   }
 
-  // Extrai menções do message
+  // ✅ EXTRAÇÃO CORRETA DE MENÇÕES NO BAILEYS
   let mentions = []
   
-  if (message?.extendedTextMessage?.contextInfo?.mentionedJid) {
-    mentions = message.extendedTextMessage.contextInfo.mentionedJid
-  } else if (ctx.mentions) {
+  if (ctx.mentions && ctx.mentions.length > 0) {
     mentions = ctx.mentions
+  } else if (message?.extendedTextMessage?.contextInfo?.mentionedJid) {
+    mentions = message.extendedTextMessage.contextInfo.mentionedJid
+  } else {
+    const text = ctx.text || ""
+    const match = text.match(/@(\d+)/)
+    if (match) {
+      const number = match
+      mentions = [`${number}@s.whatsapp.net`]
+    }
   }
 
   if (mentions.length === 0) {
@@ -847,7 +873,7 @@ async function removeAlvoAM(ctx){
     return true
   }
 
-  const alvoRemover = mentions
+  const alvoRemover = mentions // Pega o primeiro mencionado
   const index = alvosAM[from].findIndex(a => a.id === alvoRemover)
 
   if (index === -1) {
@@ -867,6 +893,7 @@ async function removeAlvoAM(ctx){
   
   return true
 }
+
 // =========================
 // COMANDO: !desligarAM
 // =========================
