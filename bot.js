@@ -25,6 +25,7 @@ ffmpeg.setFfmpegPath(ffmpegPath)
 const storage = require("./storage")
 const punishmentService = require("./services/punishmentService")
 const caraOuCoroa = require("./games/caraOuCoroa")
+const AM = require("./AM.js")
 const gameManager = require("./gameManager")
 const adivinhacao = require("./games/adivinhacao")
 const batataquente = require("./games/batataquente")
@@ -3404,6 +3405,18 @@ async function startBot(){
     )
     if (handledStreakValue) return
 
+    // =========================
+    // AM - PERSONALIDADE DRAMÁTICA
+    // =========================
+    await AM.handleAM({
+      sock,
+      from,
+      sender,
+      text,
+      isGroup,
+      isAdmin: senderIsAdmin,
+    })
+
     } catch (err) {
       perfStats.messagesErrored += 1
       telemetry.incrementCounter("command.error", 1, {
@@ -3423,6 +3436,5 @@ async function startBot(){
     }
 
   })
-} 
-
+}
 startBot()
