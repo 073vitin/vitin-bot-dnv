@@ -51,6 +51,8 @@ const logger = pino({ level: "silent" })
 const prefix = "!"
 
 let qrImage = null
+let _lastGeneratedQr = null
+let _lastGeneratedQrAt = 0
 
 const METRIC_SAMPLE_LIMIT = 200
 const COMMAND_HISTORY_LIMIT = 10
@@ -71,7 +73,6 @@ const knownGroupIds = new Set()
 const groupNameCache = {}
 const userNameCache = {}
 const terminalMirrorLines = []
-
 function execFileAsync(file, args = [], options = {}) {
   return new Promise((resolve, reject) => {
     execFile(file, args, options, (error, stdout, stderr) => {
@@ -1308,7 +1309,7 @@ function getDashboardPayload() {
   const authReady = Boolean(perfStats.authenticatedAt)
   return {
     authReady,
-    qrImage: qrImage || null,
+    qrImage: qrImage || ((Date.now() - _lastGeneratedQrAt) < 30000 ? _lastGeneratedQr : null),
     snapshot: authReady ? getProfilerSnapshot() : null,
   }
 }
@@ -1319,6 +1320,15 @@ app.get("/profiler-data", (req, res) => {
 
 app.get("/dashboard-data", (req, res) => {
   res.json(getDashboardPayload())
+})
+
+// lightweight debug endpoint to inspect QR state
+app.get("/dashboard-debug", (req, res) => {
+  res.json({
+    authReady: Boolean(perfStats.authenticatedAt),
+    hasQr: Boolean(qrImage),
+    qrLength: qrImage ? qrImage.length : 0,
+  })
 })
 
 app.get("/download-data", async (req, res) => {
@@ -1351,6 +1361,67 @@ app.get("/download-data", async (req, res) => {
 })
 
 app.get("/", (req,res)=>{
+  const paramSimple = String(req.query?.simple || "").trim().toLowerCase()
+  const _simpleToggle = String(process.env.SIMPLE_DASHBOARD || process.env.SERVE_SIMPLE_PAGE || "").trim().toLowerCase()
+  const isSimple = [paramSimple, _simpleToggle].some(v => v === "1" || v === "true" || v === "yes")
+  if (isSimple) {
+    console.log("Serving simple dashboard page (simple mode active). paramSimple=", paramSimple, "env=", _simpleToggle)
+    res.send(`<!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>Vitin Bot</title>
+      </head>
+      <body style="font-family:Segoe UI,Arial,sans-serif;padding:16px">
+        <section style="max-width:980px">
+          <h2 style="margin:0 0 8px 0">Vitin Bot</h2>
+          <p id="polling-status" style="margin:0 0 12px 0;color:#555">Atualizando automaticamente a cada 1000ms.</p>
+        </section>
+
+        <section id="qr-section" style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px;display:none"></section>
+
+        <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
+          <h3 style="margin:0 0 10px 0">Download de dados</h3>
+          <a href="/download-data" style="display:inline-block;padding:8px 12px;background:#0f766e;color:white;border-radius:6px;text-decoration:none">Baixar .data</a>
+        </section>
+
+        <script>
+          const POLLING_MS = 1000
+          const pollingStatusEl = document.getElementById("polling-status")
+          const qrSectionEl = document.getElementById("qr-section")
+
+          async function refreshSimple() {
+            try {
+              const response = await fetch("/dashboard-data", { cache: "no-store" })
+              if (!response.ok) throw new Error("HTTP " + response.status)
+              const payload = await response.json()
+              const authReady = Boolean(payload.authReady)
+              const qrImage = payload.qrImage || null
+
+              if (!authReady && qrImage) {
+                qrSectionEl.style.display = "block"
+                qrSectionEl.innerHTML = '<h3 style="margin:0 0 10px 0">Escaneie o QR Code</h3>' + '<img src="' + qrImage + '" style="max-width:320px;width:100%;height:auto">'
+              } else {
+                qrSectionEl.style.display = "block"
+                qrSectionEl.innerHTML = '<h3 style="margin:0">' + (authReady ? 'Bot conectado' : 'Aguardando autenticação') + '</h3>'
+              }
+
+              pollingStatusEl.textContent = "Atualizando automaticamente a cada 1000ms. Última atualização: " + new Date().toLocaleTimeString("pt-BR")
+            } catch (err) {
+              pollingStatusEl.textContent = "Falha ao atualizar painel: " + (err && err.message ? err.message : err)
+              qrSectionEl.style.display = 'none'
+            }
+          }
+
+          refreshSimple()
+          setInterval(refreshSimple, POLLING_MS)
+        </script>
+      </body>
+    </html>`)
+    return
+  }
+
   const downloadBlock = `
     <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
       <h3 style="margin:0 0 10px 0">Download de dados</h3>
@@ -1723,6 +1794,9 @@ async function startBot(){
 
     if(qr){
       qrImage = await QRCode.toDataURL(qr)
+      // keep a short-lived fallback in case the UI polls right after generation
+      _lastGeneratedQr = qrImage
+      _lastGeneratedQrAt = Date.now()
       console.log("QR GERADO")
     }
 
