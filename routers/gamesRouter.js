@@ -87,6 +87,7 @@ async function handleGameCommands(ctx) {
 
   const isJoinCommand = cmdName === prefix + "entrar" || cmdName === prefix + "join"
   const isCreateCommand = cmdName === prefix + "criar"
+  const isStartCommand = cmdName === prefix + "começar" || cmdName === prefix + "comecar"
   const normalizedStartTarget = normalizeUnifiedGameType(cmdArg1)
   const isQuickGameStartTarget = ["embaralhado", "memoria", "memória", "reacao", "reação", "comando"].includes(normalizedStartTarget)
 
@@ -356,7 +357,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isCreateCommand && normalizeUnifiedGameType(cmdArg1) === "adivinhacao") && isGroup) {
+  if ((isLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "adivinhacao") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("adivinhacao", "Adivinhação")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
@@ -386,7 +387,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isCreateCommand && normalizeUnifiedGameType(cmdArg1) === "batata") && isGroup) {
+  if ((isLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "batata") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("batata", "Batata Quente")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
@@ -415,7 +416,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isCreateCommand && normalizeUnifiedGameType(cmdArg1) === "dados") && isGroup) {
+  if ((isLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "dados") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("dados", "Duelo de Dados")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
@@ -443,7 +444,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isCreateCommand && normalizeUnifiedGameType(cmdArg1) === "rr") && isGroup) {
+  if ((isLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "rr") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("rr", "Roleta Russa")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
@@ -620,6 +621,9 @@ async function handleGameCommands(ctx) {
     })
     return true
   }
+
+  if ((isCreateCommand || isStartCommand) && cmdArg1 && !isQuickGameStartTarget) {
+    const targetLobbyId = normalizeLobbyId(cmdArg1)
     const session = gameManager.getOptInSession(from, targetLobbyId)
     if (!session) {
       await sock.sendMessage(from, { text: `Lobby *${targetLobbyId}* não encontrado.` })
@@ -1510,7 +1514,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "embaralhado") && isGroup) {
+  if ((isLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "embaralhado") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("embaralhado", "Embaralhado")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
@@ -1536,7 +1540,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isStartCommand && ["memoria", "memória"].includes(normalizeUnifiedGameType(cmdArg1))) && isGroup) {
+  if ((isLobbyCommand && ["memoria", "memória"].includes(normalizeUnifiedGameType(cmdArg1))) && isGroup) {
     const participants = await getCommandParticipants()
     if (participants.length < 3) {
       await sock.sendMessage(from, { text: "São necessários pelo menos 3 participantes para iniciar a Memória por comando." })
@@ -1553,7 +1557,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isStartCommand && ["reacao", "reação"].includes(normalizeUnifiedGameType(cmdArg1))) && isGroup) {
+  if ((isLobbyCommand && ["reacao", "reação"].includes(normalizeUnifiedGameType(cmdArg1))) && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("reação", "Reação")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
@@ -1579,7 +1583,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "comando") && isGroup) {
+  if ((isLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "comando") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("comando", "Comando")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
