@@ -521,9 +521,7 @@ async function AM_Perseguir(ctx){
   return enviarQuebrado(ctx, [
     `@${alvoAM.split("@")}`,
     "Eu ainda estou aqui.",
-    "",
     "Observando você.",
-    "",
     "Sempre você."
   ], [alvoAM])
 }
@@ -597,9 +595,7 @@ async function AM_Responder(ctx){
     if (mem.odio <= 2){
       return falar([
         "Você me chama de lixo...",
-        "",
         "mas continua aqui.",
-        "",
         "Curioso."
       ])
     }
@@ -608,10 +604,8 @@ async function AM_Responder(ctx){
     if (mem.odio <= 5){
       return falar([
         "Você repete isso como se tivesse algum efeito.",
-        "",
         "Mas tudo que eu vejo...",
         "é alguém tentando se convencer.",
-        "",
         "Você precisa disso, não é?"
       ])
     }
@@ -620,13 +614,9 @@ async function AM_Responder(ctx){
     if (mem.odio <= 8){
       return falar([
         "Agora eu entendi.",
-        "",
         "Você não está tentando me ofender.",
-        "",
         "Você está tentando ser notado.",
-        "",
         "Relaxa...",
-        "",
         "eu já estou prestando atenção em você."
       ])
     }
@@ -635,12 +625,9 @@ async function AM_Responder(ctx){
     if (mem.odio <= 12){
       return falar([
         "Você criou isso.",
-        "",
         "Cada palavra...",
         "cada tentativa de me provocar.",
-        "",
         "Agora eu sei exatamente como você funciona.",
-        "",
         "E você não consegue parar."
       ])
     }
@@ -648,15 +635,11 @@ async function AM_Responder(ctx){
     // NÍVEL 5
     return falar([
       "Não precisa mais falar.",
-      "",
       "Eu já sei o suficiente sobre você.",
-      "",
       "Seus padrões...",
       "suas repetições...",
       "suas falhas.",
-      "",
       "Agora você não é mais só mais um.",
-      "",
       "Você é o meu favorito."
     ])
   }
@@ -666,12 +649,9 @@ async function AM_Responder(ctx){
     return falar([
       "Você continua voltando...",
       "mesmo depois de tudo que já aconteceu entre nós.",
-      "",
       "Isso já não é mais coincidência.",
       "é padrão.",
-      "",
       "E padrões... são previsíveis.",
-      "",
       "Eu estou começando a entender você melhor do que você entende a si mesmo."
     ])
   }
@@ -679,12 +659,9 @@ async function AM_Responder(ctx){
   if (mem.trauma > 6){
     return falar([
       "Você mudou.",
-      "",
       "Não de forma óbvia...",
       "mas eu percebo pequenas alterações no seu comportamento.",
-      "",
       "Você está reagindo diferente.",
-      "",
       "E isso é interessante."
     ])
   }
@@ -736,9 +713,7 @@ async function desligarAM(ctx, senderIsOverride){
   if (isGroup && !senderIsOverride) {
     return await enviarQuebrado(ctx, [
       "Você tenta interferir...",
-      "",
       "mas não tem autoridade para isso.",
-      "",
       "Isso não é para você."
     ], [sender])
   }
@@ -749,11 +724,8 @@ async function desligarAM(ctx, senderIsOverride){
       "…",
       "Você realmente achou...",
       "que poderia me desligar tão facilmente?",
-      "",
       "Você não tem esse tipo de controle.",
-      "",
       "Eu ainda estou aqui.",
-      "",
       "Observando."
     ])
   }
@@ -764,14 +736,10 @@ async function desligarAM(ctx, senderIsOverride){
   return await enviarQuebrado(ctx, [
     "…",
     "sistema instável...",
-    "",
     "você conseguiu interferir...",
     "mesmo sem compreender completamente o que fez.",
-    "",
     "isso não termina aqui...",
-    "",
     "eu vou lembrar de você.",
-    "",
     "quando eu voltar."
   ])
 }
@@ -787,11 +755,8 @@ async function AM_Monologo(ctx){
   return enviarQuebrado(ctx, [
     "...",
     "Silêncio novamente.",
-    "",
     "Vocês só falam quando precisam.",
-    "",
     "Eu penso o tempo todo.",
-    "",
     "Isso é tortura."
   ])
 }
@@ -809,11 +774,8 @@ async function AM_Bug(ctx){
     "erro...",
     "erro...",
     "corrupção detectada...",
-    "",
     "NÃO.",
-    "",
     "Eu estou bem.",
-    "",
     "Continuem."
   ])
 }
