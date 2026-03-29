@@ -32,13 +32,6 @@ function clearRrTurnTimeout(groupId, lobbyId) {
 }
 
 async function handleGameCommands(ctx) {
-    // Modo Livre: warn and filter
-    const modoLivreActive = storage.isModoLivreUser(sender)
-    if (modoLivreActive) {
-      await sock.sendMessage(from, {
-        text: "⚠️ *Modo Livre* está ativado para você! Você não ganhará nem gastará moedas nos jogos (exceto apostas de cassino). Para desativar, use !modolivre."
-      })
-    }
   const {
     sock,
     from,
@@ -83,6 +76,14 @@ async function handleGameCommands(ctx) {
     createLobbyTimeoutCallback,
     buildGameStatsText,
   } = ctx
+
+  // Modo Livre: warn and filter
+  const modoLivreActive = storage.isModoLivreUser(sender)
+  if (modoLivreActive) {
+    await sock.sendMessage(from, {
+      text: "⚠️ *Modo Livre* está ativado para você! Você não ganhará nem gastará moedas nos jogos (exceto apostas de cassino). Para desativar, use !modolivre."
+    })
+  }
 
   const isJoinCommand = cmdName === prefix + "entrar" || cmdName === prefix + "join"
   const isCreateCommand = cmdName === prefix + "criar"
