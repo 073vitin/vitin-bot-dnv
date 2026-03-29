@@ -1,5 +1,5 @@
 const telemetry = require("../services/telemetryService")
-
+const storageModule = require(".../storage.js")
 const RR_TURN_TIMEOUT_MS = 60_000
 const RR_TURN_TIMEOUT_SECONDS = Math.floor(RR_TURN_TIMEOUT_MS / 1000)
 const LOBBY_BET_GRACE_MS = 15_000
@@ -52,7 +52,7 @@ async function handleGameCommands(ctx) {
     isGroup,
     text,
     msg,
-    storage,
+    storage = storageModule,
     gameManager,
     economyService,
     caraOuCoroa,
