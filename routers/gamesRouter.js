@@ -77,6 +77,14 @@ async function handleGameCommands(ctx) {
     buildGameStatsText,
   } = ctx
 
+  // Modo Livre: warn and filter
+  const modoLivreActive = storage.isModoLivreUser(sender)
+  if (modoLivreActive) {
+    await sock.sendMessage(from, {
+      text: "⚠️ *Modo Livre* está ativado para você! Você não ganhará nem gastará moedas nos jogos (exceto apostas de cassino). Para desativar, use !modolivre."
+    })
+  }
+
   const isJoinCommand = cmdName === prefix + "entrar" || cmdName === prefix + "join"
   const isStartCommand = (
     cmdName === prefix + "começar" ||
@@ -627,17 +635,17 @@ async function handleGameCommands(ctx) {
 
     const session = gameManager.getOptInSession(from, lobbyId)
     if (!session) {
-      await sock.sendMessage(from, { text: `Lobby *${lobbyId}* não encontrado.` })
+      await sock.sendMessage(from, { text: `Lobby *${targetLobbyId}* não encontrado.` })
       return true
     }
 
-    const stateKey = activeGameKey(session.gameType, lobbyId)
+    const stateKey = activeGameKey(session.gameType, targetLobbyId)
     if (storage.getGameState(from, stateKey)) {
-      await sock.sendMessage(from, { text: `O lobby *${lobbyId}* já está em andamento.` })
+      await sock.sendMessage(from, { text: `O lobby *${targetLobbyId}* já está em andamento.` })
       return true
     }
 
-    const graceStateKey = getLobbyGraceStateKey(lobbyId)
+    const graceStateKey = getLobbyGraceStateKey(targetLobbyId)
     const existingGraceState = storage.getGameState(from, graceStateKey)
     if (!existingGraceState?.forceStart) {
       if (existingGraceState) {
@@ -1518,7 +1526,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "embaralhado") && isGroup) {
+  if ((isLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "embaralhado") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("embaralhado", "Embaralhado")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
@@ -1544,7 +1552,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isStartCommand && ["memoria", "memória"].includes(normalizeUnifiedGameType(cmdArg1))) && isGroup) {
+  if ((isLobbyCommand && ["memoria", "memória"].includes(normalizeUnifiedGameType(cmdArg1))) && isGroup) {
     const participants = await getCommandParticipants()
     if (participants.length < 3) {
       await sock.sendMessage(from, { text: "São necessários pelo menos 3 participantes para iniciar a Memória por comando." })
@@ -1561,7 +1569,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isStartCommand && ["reacao", "reação"].includes(normalizeUnifiedGameType(cmdArg1))) && isGroup) {
+  if ((isLobbyCommand && ["reacao", "reação"].includes(normalizeUnifiedGameType(cmdArg1))) && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("reação", "Reação")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
@@ -1587,7 +1595,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "comando") && isGroup) {
+  if ((isLobbyCommand && normalizeUnifiedGameType(cmdArg1) === "comando") && isGroup) {
     const blockedReason = getLobbyCreateBlockMessage("comando", "Comando")
     if (blockedReason) {
       await sock.sendMessage(from, { text: blockedReason })
@@ -1765,8 +1773,8 @@ async function handleGameMessageFlow(ctx) {
 // Retrocompatibilidade: alguns ambientes ainda referenciam handleGamesCommand.
 const handleGamesCommand = handleGameCommands
 
-module.exports = {
+  module.exports = {
   handleGameCommands,
-  handleGamesCommand,
   handleGameMessageFlow,
+  }
 }
