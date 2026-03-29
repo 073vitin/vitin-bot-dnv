@@ -245,6 +245,90 @@ test("pending punishment choice is rejected when eligibility metadata is invalid
   assert.ok(sent.some((m) => /expirou por elegibilidade de aposta/i.test(String(m.payload?.text || ""))))
 })
 
+test("applyPunishment applies all punishment types with numeric IDs", async () => {
+  const groupId = `__all_punishments_${Date.now()}@g.us`
+  const target = "target@s.whatsapp.net"
+  const { sock } = createSockCapture()
+
+  const expectedById = {
+    1: "max5chars",
+    2: "rate20s",
+    3: "lettersBlock",
+    4: "emojiOnly",
+    5: "mute5m",
+    6: "noVowels",
+    7: "urgentPrefix",
+    8: "wordListRequired",
+    9: "allCaps",
+    10: "deleteAndRepost",
+    11: "sexualReaction",
+    12: "randomDeleteChance",
+    13: "max3wordsStrict",
+  }
+
+  for (const [punishmentId, expectedType] of Object.entries(expectedById)) {
+    await punishmentService.applyPunishment(sock, groupId, target, Number(punishmentId), {
+      origin: "admin",
+      severityMultiplier: 1,
+    })
+    const active = storage.getActivePunishments()
+    assert.equal(active[groupId]?.[target]?.type, expectedType)
+  }
+
+  punishmentService.clearPunishment(groupId, target)
+})
+
+test("punishment enforcement resolves sender JID variants consistently", async () => {
+  const groupId = `__punishment_jid_norm_${Date.now()}@g.us`
+  const targetWithDevice = "5511999999999:5@s.whatsapp.net"
+  const targetCanonical = "5511999999999@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+
+  await punishmentService.applyPunishment(sock, groupId, targetWithDevice, "1", {
+    origin: "admin",
+    severityMultiplier: 1,
+  })
+
+  const enforced = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-1", remoteJid: groupId, fromMe: false, participant: targetCanonical } },
+    groupId,
+    targetCanonical,
+    "mensagem muito longa",
+    true,
+    false,
+    true
+  )
+
+  assert.equal(enforced, true)
+  assert.ok(sent.some((entry) => Boolean(entry.payload?.delete)))
+  punishmentService.clearPunishment(groupId, targetCanonical)
+})
+
+test("punishment linear 1.5x scaling is applied instead of exponential growth", async () => {
+  const groupId = `__punishment_linear_scale_${Date.now()}@g.us`
+  const target = "target@s.whatsapp.net"
+  const { sock } = createSockCapture()
+
+  const targetDurationMs = 10 * 60_000 // severity 3 => 5min * 2.0x (linear), not 11.25min (exponential)
+  const toleranceMs = 2_000
+  const idsWithLinearScaling = ["6", "7", "8", "11"]
+
+  for (const punishmentId of idsWithLinearScaling) {
+    const before = Date.now()
+    await punishmentService.applyPunishment(sock, groupId, target, punishmentId, {
+      origin: "admin",
+      severityMultiplier: 3,
+    })
+    const active = storage.getActivePunishments()
+    const endsAt = Number(active[groupId]?.[target]?.endsAt || 0)
+    const duration = endsAt - before
+    assert.ok(duration >= (targetDurationMs - toleranceMs) && duration <= (targetDurationMs + toleranceMs))
+  }
+
+  punishmentService.clearPunishment(groupId, target)
+})
+
 test("adivinhacao resolves with closest players and punishments", () => {
   const players = ["a@s.whatsapp.net", "b@s.whatsapp.net", "c@s.whatsapp.net"]
   const state = adivinhacao.start("g@g.us", players)

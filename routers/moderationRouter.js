@@ -930,6 +930,7 @@ async function handleModerationCommands(ctx) {
 │ !unmute @user
 │ !ban @user
 │ !punições / !punicoes @user
+│ !punicoeslista
 │ !puniçõesclr / !punicoesclr @user
 │ !puniçõesadd / !punicoesadd [@user] <1-13> [severidade]
 │ !filtros

@@ -133,6 +133,7 @@ async function handleUtilityCommands(ctx) {
         { cmd: `${prefix}removecoins`, usage: `${prefix}removecoins [@usuario] <qtd>`, effect: "remove moedas", badges: ["GRUPO", "OVERRIDE"] },
         { cmd: `${prefix}additem`, usage: `${prefix}additem [@usuario] <item> <qtd>`, effect: "adiciona item", badges: ["GRUPO", "OVERRIDE"] },
         { cmd: `${prefix}removeitem`, usage: `${prefix}removeitem [@usuario] <item> <qtd>`, effect: "remove item", badges: ["GRUPO", "OVERRIDE"] },
+        { cmd: `${prefix}mudarapelido`, usage: `${prefix}mudarapelido @usuario <novo apelido>`, effect: "altera apelido publico de usuario", badges: ["GRUPO", "OVERRIDE"] },
         { cmd: `${prefix}adm`, usage: `${prefix}adm`, effect: "menu admin", badges: ["GRUPO", "ADMIN"] },
         { cmd: `${prefix}admeconomia`, usage: `${prefix}admeconomia`, effect: "menu admin economia", badges: ["GRUPO", "OVERRIDE"] },
         { cmd: `${prefix}mute/unmute/ban`, usage: `${prefix}mute|unmute|ban @usuario`, effect: "modera usuario", badges: ["GRUPO", "ADMIN"] },
@@ -260,7 +261,6 @@ async function handleUtilityCommands(ctx) {
 │ ${prefix}brincadeiras
 │ ${prefix}jogos 
 │ ${prefix}economia 
-│ ${prefix}punicoeslista
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 👤 CONTA 〕━━━╮

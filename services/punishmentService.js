@@ -43,20 +43,32 @@ function getRandomPunishmentChoice() {
   return choices[crypto.randomInt(0, choices.length)]
 }
 
+function normalizePunishmentId(value = "") {
+  const parsed = Number.parseInt(String(value || "").trim(), 10)
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 13) return ""
+  return String(parsed)
+}
+
+function getLinear15xSeverityScale(severityMultiplier = 1) {
+  const level = Math.max(1, Math.floor(Number(severityMultiplier) || 1))
+  return 1 + (level - 1) * 0.5
+}
+
 function getPunishmentNameById(punishmentId) {
-  if (punishmentId === "1") return "máx. 5 caracteres"
-  if (punishmentId === "2") return "1 mensagem/20s"
-  if (punishmentId === "3") return "bloqueio por 2 letras (indefinido)"
-  if (punishmentId === "4") return "somente emojis e figurinhas"
-  if (punishmentId === "5") return "mute total"
-  if (punishmentId === "6") return "sem vogais"
-  if (punishmentId === "7") return "prefixo obrigatório"
-  if (punishmentId === "8") return "palavras da lista"
-  if (punishmentId === "9") return "somente caixa alta"
-  if (punishmentId === "10") return "repost pelo bot"
-  if (punishmentId === "11") return "reação sugestiva"
-  if (punishmentId === "12") return "chance de apagar"
-  if (punishmentId === "13") return "máx. 3 palavras"
+  const normalizedId = normalizePunishmentId(punishmentId)
+  if (normalizedId === "1") return "máx. 5 caracteres"
+  if (normalizedId === "2") return "1 mensagem/20s"
+  if (normalizedId === "3") return "bloqueio por 2 letras (indefinido)"
+  if (normalizedId === "4") return "somente emojis e figurinhas"
+  if (normalizedId === "5") return "mute total"
+  if (normalizedId === "6") return "sem vogais"
+  if (normalizedId === "7") return "prefixo obrigatório"
+  if (normalizedId === "8") return "palavras da lista"
+  if (normalizedId === "9") return "somente caixa alta"
+  if (normalizedId === "10") return "repost pelo bot"
+  if (normalizedId === "11") return "reação sugestiva"
+  if (normalizedId === "12") return "chance de apagar"
+  if (normalizedId === "13") return "máx. 3 palavras"
   return "desconhecida"
 }
 
@@ -320,8 +332,12 @@ async function resendPunishedContent(sock, from, sender, msg, text = "") {
 function normalizeUserId(value = "") {
   const raw = String(value || "").trim()
   if (!raw) return ""
-  const [withoutDevice] = raw.split(":")
-  return withoutDevice.toLowerCase()
+  const lowered = raw.toLowerCase()
+  const jidMatch = lowered.match(/^([^@\s:]+)(?::\d+)?@([^@\s]+)$/)
+  if (jidMatch) {
+    return `${jidMatch[1]}@${jidMatch[2]}`
+  }
+  return lowered
 }
 
 function clearPendingPunishment(groupId, playerId) {
@@ -333,23 +349,56 @@ function clearPendingPunishment(groupId, playerId) {
 }
 
 function clearPunishment(groupId, userId) {
+  const normalizedUser = normalizeUserId(userId) || String(userId || "")
   const activePunishments = storage.getActivePunishments()
-  if (!activePunishments[groupId]?.[userId]) return
-  const timerId = activePunishments[groupId][userId]?.timerId
+  if (!activePunishments[groupId]?.[normalizedUser]) return
+  const timerId = activePunishments[groupId][normalizedUser]?.timerId
   if (timerId) clearTimeout(timerId)
-  delete activePunishments[groupId][userId]
+  delete activePunishments[groupId][normalizedUser]
   storage.setActivePunishments(activePunishments)
 }
 
 async function applyPunishment(sock, groupId, userId, punishmentId, options = {}) {
   const origin = options?.origin || "admin"
   const normalizedTarget = normalizeUserId(userId)
+  const targetUserId = normalizedTarget || String(userId || "")
+  const normalizedPunishmentId = normalizePunishmentId(punishmentId)
   const normalizedBot = normalizeUserId(options?.botUserId || sock?.user?.id || "")
+  if (!targetUserId) {
+    telemetry.incrementCounter("punishment.blocked", 1, {
+      origin,
+      reason: "invalid-target",
+      punishmentId: String(punishmentId || ""),
+    })
+    telemetry.appendEvent("punishment.blocked", {
+      groupId,
+      userId,
+      origin,
+      punishmentId,
+      reason: "invalid-target",
+    })
+    return { blocked: true, reason: "invalid-target" }
+  }
+  if (!normalizedPunishmentId) {
+    telemetry.incrementCounter("punishment.blocked", 1, {
+      origin,
+      reason: "invalid-id",
+      punishmentId: String(punishmentId || ""),
+    })
+    telemetry.appendEvent("punishment.blocked", {
+      groupId,
+      userId,
+      origin,
+      punishmentId,
+      reason: "invalid-id",
+    })
+    return { blocked: true, reason: "invalid-id" }
+  }
   if (normalizedTarget && normalizedBot && normalizedTarget === normalizedBot) {
     telemetry.incrementCounter("punishment.blocked", 1, {
       origin,
       reason: "bot-target",
-      punishmentId: String(punishmentId || ""),
+      punishmentId: normalizedPunishmentId,
     })
     telemetry.appendEvent("punishment.blocked", {
       groupId,
@@ -365,7 +414,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
   }
 
   if (origin !== "admin") {
-    const blocked = economyService.consumeShield(userId)
+    const blocked = economyService.consumeShield(targetUserId)
     if (blocked) {
       telemetry.incrementCounter("punishment.blocked", 1, {
         origin,
@@ -380,8 +429,8 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
         reason: "shield",
       })
       await sock.sendMessage(groupId, {
-        text: `🛡️ @${userId.split("@")[0]} bloqueou a punição com escudo!`,
-        mentions: [userId],
+        text: `🛡️ @${targetUserId.split("@")[0]} bloqueou a punição com escudo!`,
+        mentions: [targetUserId],
       })
       return { blockedByShield: true }
     }
@@ -393,14 +442,14 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     : 1
   const activePunishments = storage.getActivePunishments()
   if (!activePunishments[groupId]) activePunishments[groupId] = {}
-  clearPunishment(groupId, userId)
+  clearPunishment(groupId, targetUserId)
 
-  const mentionTag = `@${userId.split("@")[0]}`
+  const mentionTag = `@${targetUserId.split("@")[0]}`
   const now = Date.now()
   let punishmentState = null
   let warningText = ""
 
-  if (punishmentId === "1") {
+  if (normalizedPunishmentId === "1") {
     const durationMs = 5 * 60_000 * severityMultiplier
     punishmentState = {
       type: "max5chars",
@@ -409,7 +458,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     warningText = `${mentionTag}, punição ativada: suas mensagens só podem ter até *5 caracteres* por *${Math.floor(durationMs / 60_000)} minutos* (espaço conta). Mensagens fora disso serão apagadas.`
   }
 
-  if (punishmentId === "2") {
+  if (normalizedPunishmentId === "2") {
     const durationMs = 10 * 60_000 * severityMultiplier
     punishmentState = {
       type: "rate20s",
@@ -419,7 +468,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     warningText = `${mentionTag}, punição ativada: você só pode enviar *1 mensagem a cada 20 segundos* por *${Math.floor(durationMs / 60_000)} minutos*. Mensagens acima da taxa serão apagadas.`
   }
 
-  if (punishmentId === "3") {
+  if (normalizedPunishmentId === "3") {
     const letters = getRandomDifferentLetters(severityMultiplier + 1)
     punishmentState = {
       type: "lettersBlock",
@@ -428,7 +477,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     warningText = `${mentionTag}, punição ativada: qualquer mensagem sua contendo ao menos 1 de *${letters.length}* letras selecionadas aleatoriamente será apagada. Isso é *indefinido* e só acaba quando você enviar uma mensagem contendo apenas letras permitidas da própria punição.`
   }
 
-  if (punishmentId === "4") {
+  if (normalizedPunishmentId === "4") {
     const durationMs = 5 * 60_000 * severityMultiplier
     punishmentState = {
       type: "emojiOnly",
@@ -437,7 +486,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     warningText = `${mentionTag}, punição ativada: por *${Math.floor(durationMs / 60_000)} minutos* você só pode enviar mensagens formadas por emojis ou figurinhas. Qualquer mensagem com texto fora desse formato será apagada.`
   }
 
-  if (punishmentId === "5") {
+  if (normalizedPunishmentId === "5") {
     const durationMs = 5 * 60_000 * severityMultiplier
     punishmentState = {
       type: "mute5m",
@@ -446,8 +495,8 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     warningText = `${mentionTag}, punição ativada: *mute total por ${Math.floor(durationMs / 60_000)} minutos*. Qualquer mensagem sua será apagada.`
   }
 
-  if (punishmentId === "6") {
-    const durationMs = Math.ceil(5 * 60_000 * Math.pow(1.5, severityMultiplier - 1))
+  if (normalizedPunishmentId === "6") {
+    const durationMs = Math.ceil(5 * 60_000 * getLinear15xSeverityScale(severityMultiplier))
     punishmentState = {
       type: "noVowels",
       endsAt: now + durationMs,
@@ -455,8 +504,8 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     warningText = `${mentionTag}, punição ativada: sem vogais por *${Math.ceil(durationMs / 60_000)} minutos*. Mensagens com vogais serão apagadas.`
   }
 
-  if (punishmentId === "7") {
-    const durationMs = Math.ceil(5 * 60_000 * Math.pow(1.5, severityMultiplier - 1))
+  if (normalizedPunishmentId === "7") {
+    const durationMs = Math.ceil(5 * 60_000 * getLinear15xSeverityScale(severityMultiplier))
     punishmentState = {
       type: "urgentPrefix",
       endsAt: now + durationMs,
@@ -465,8 +514,8 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     warningText = `${mentionTag}, punição ativada: por *${Math.ceil(durationMs / 60_000)} minutos* toda mensagem deve começar com *URGENTE* (🚨 e ':' são opcionais).`
   }
 
-  if (punishmentId === "8") {
-    const durationMs = Math.ceil(5 * 60_000 * Math.pow(1.5, severityMultiplier - 1))
+  if (normalizedPunishmentId === "8") {
+    const durationMs = Math.ceil(5 * 60_000 * getLinear15xSeverityScale(severityMultiplier))
     const requiredWordsCount = Math.max(1, severityMultiplier)
     const wordList = getRandomWordList(requiredWordsCount)
     punishmentState = {
@@ -478,7 +527,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     warningText = `${mentionTag}, punição ativada: por *${Math.ceil(durationMs / 60_000)} minutos* cada mensagem deve conter pelo menos *${requiredWordsCount}* palavra(s) desta lista: ${wordList.join(", ")}.`
   }
 
-  if (punishmentId === "9") {
+  if (normalizedPunishmentId === "9") {
     const durationMin = 10 + (Math.max(1, severityMultiplier) - 1) * 2
     const durationMs = durationMin * 60_000
     punishmentState = {
@@ -488,7 +537,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     warningText = `${mentionTag}, punição ativada: por *${durationMin} minutos* toda mensagem deve estar em CAIXA ALTA.`
   }
 
-  if (punishmentId === "10") {
+  if (normalizedPunishmentId === "10") {
     const durationMs = 5 * 60_000
     punishmentState = {
       type: "deleteAndRepost",
@@ -497,8 +546,8 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     warningText = `${mentionTag}, punição ativada: por *5 minutos* suas mensagens serão apagadas e repostadas pelo bot.`
   }
 
-  if (punishmentId === "11") {
-    const durationMs = Math.ceil(5 * 60_000 * Math.pow(1.5, severityMultiplier - 1))
+  if (normalizedPunishmentId === "11") {
+    const durationMs = Math.ceil(5 * 60_000 * getLinear15xSeverityScale(severityMultiplier))
     punishmentState = {
       type: "sexualReaction",
       endsAt: now + durationMs,
@@ -506,7 +555,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     warningText = `${mentionTag}, punição ativada: por *${Math.ceil(durationMs / 60_000)} minutos* suas mensagens receberão reações sugestivas.`
   }
 
-  if (punishmentId === "12") {
+  if (normalizedPunishmentId === "12") {
     const durationMs = 60 * 60_000
     const deleteChance = Math.min(1, (20 + (Math.max(1, severityMultiplier) - 1) * 5) / 100)
     punishmentState = {
@@ -517,7 +566,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     warningText = `${mentionTag}, punição ativada: por *60 minutos* suas mensagens têm *${Math.ceil(deleteChance * 100)}%* de chance de serem apagadas.`
   }
 
-  if (punishmentId === "13") {
+  if (normalizedPunishmentId === "13") {
     const durationMin = 5 + (Math.max(1, severityMultiplier) - 1) * 2
     const durationMs = durationMin * 60_000
     punishmentState = {
@@ -529,44 +578,44 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
 
   if (!punishmentState) return
 
-  activePunishments[groupId][userId] = punishmentState
+  activePunishments[groupId][targetUserId] = punishmentState
 
   if (punishmentState?.endsAt) {
     const msRemaining = Math.max(0, punishmentState.endsAt - now)
     const timerId = setTimeout(() => {
-      clearPunishment(groupId, userId)
+      clearPunishment(groupId, targetUserId)
       sock.sendMessage(groupId, {
-        text: `@${userId.split("@")[0]}, sua punição expirou.`,
-        mentions: [userId],
+        text: `@${targetUserId.split("@")[0]}, sua punição expirou.`,
+        mentions: [targetUserId],
       }).catch(() => {})
     }, msRemaining)
-    activePunishments[groupId][userId].timerId = timerId
+    activePunishments[groupId][targetUserId].timerId = timerId
   }
 
   storage.setActivePunishments(activePunishments)
 
   telemetry.incrementCounter("punishment.applied", 1, {
     origin,
-    punishmentId: String(punishmentId || ""),
+    punishmentId: normalizedPunishmentId,
   })
   telemetry.appendEvent("punishment.applied", {
     groupId,
     userId,
     origin,
-    punishmentId,
+    punishmentId: normalizedPunishmentId,
     severityMultiplier,
     timed: Boolean(punishmentState?.endsAt),
   })
-  economyService.incrementStat(userId, "punishmentsReceivedTotal", 1)
+  economyService.incrementStat(targetUserId, "punishmentsReceivedTotal", 1)
   if (origin === "admin") {
-    economyService.incrementStat(userId, "punishmentsReceivedAdmin", 1)
+    economyService.incrementStat(targetUserId, "punishmentsReceivedAdmin", 1)
   } else {
-    economyService.incrementStat(userId, "punishmentsReceivedGame", 1)
+    economyService.incrementStat(targetUserId, "punishmentsReceivedGame", 1)
   }
 
   await sock.sendMessage(groupId, {
     text: warningText,
-    mentions: [userId]
+    mentions: [targetUserId]
   })
 }
 
@@ -576,10 +625,12 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
 
   // Phase 8 kickoff: anti letter-dump detection (4-5 sequential single-letter attempts)
   const singleLetter = isSingleLetterMessage(text)
+  const senderId = normalizeUserId(sender) || String(sender || "")
+
   if (singleLetter && !LETTER_DUMP_WHITELIST.has(singleLetter)) {
     const dumpState = storage.getGameState(from, LETTER_DUMP_STATE_KEY) || {}
-    const current = dumpState[sender] && typeof dumpState[sender] === "object"
-      ? dumpState[sender]
+    const current = dumpState[senderId] && typeof dumpState[senderId] === "object"
+      ? dumpState[senderId]
       : { sequence: [], offenseCount: 0, lastOffenseAt: 0 }
     const now = Date.now()
     current.sequence = (Array.isArray(current.sequence) ? current.sequence : []).filter((ts) => now - ts <= 30_000)
@@ -597,55 +648,55 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
       if (!activePunishments[from]) activePunishments[from] = {}
 
       if (current.offenseCount >= 3) {
-        activePunishments[from][sender] = {
+        activePunishments[from][senderId] = {
           type: "mute5m",
           endsAt: now + (5 * 60 * 1000),
         }
-        economyService.debitCoinsFlexible(sender, 50, {
+        economyService.debitCoinsFlexible(senderId, 50, {
           type: "anti-letter-dump-fine",
           details: "Multa por spam de letras",
           meta: { groupId: from },
         })
         await sock.sendMessage(from, {
-          text: `❌ Spam detectado @${sender.split("@")[0]}. 3ª ocorrência: mute de 5 minutos + multa de 50 moedas.`,
-          mentions: [sender],
+          text: `❌ Spam detectado @${senderId.split("@")[0]}. 3ª ocorrência: mute de 5 minutos + multa de 50 moedas.`,
+          mentions: [senderId],
         })
       } else if (current.offenseCount >= 2) {
-        activePunishments[from][sender] = {
+        activePunishments[from][senderId] = {
           type: "mute5m",
           endsAt: now + 60_000,
         }
         await sock.sendMessage(from, {
-          text: `❌ Spam detectado @${sender.split("@")[0]}. 2ª ocorrência: mute temporário de 1 minuto.`,
-          mentions: [sender],
+          text: `❌ Spam detectado @${senderId.split("@")[0]}. 2ª ocorrência: mute temporário de 1 minuto.`,
+          mentions: [senderId],
         })
       } else {
         await sock.sendMessage(from, {
-          text: `❌ Spam detectado @${sender.split("@")[0]}. Evite flood de letras isoladas.`,
-          mentions: [sender],
+          text: `❌ Spam detectado @${senderId.split("@")[0]}. Evite flood de letras isoladas.`,
+          mentions: [senderId],
         })
       }
 
       storage.setActivePunishments(activePunishments)
-      dumpState[sender] = current
+      dumpState[senderId] = current
       storage.setGameState(from, LETTER_DUMP_STATE_KEY, dumpState)
       return true
     }
 
-    dumpState[sender] = current
+    dumpState[senderId] = current
     storage.setGameState(from, LETTER_DUMP_STATE_KEY, dumpState)
   }
 
   const activePunishments = storage.getActivePunishments()
-  const punishment = activePunishments[from]?.[sender]
+  const punishment = activePunishments[from]?.[senderId]
   if (!punishment) return false
 
   const now = Date.now()
   if (punishment.endsAt && now >= punishment.endsAt) {
-    clearPunishment(from, sender)
+    clearPunishment(from, senderId)
     await sock.sendMessage(from, {
-      text: `@${sender.split("@")[0]}, sua punição expirou.`,
-      mentions: [sender],
+      text: `@${senderId.split("@")[0]}, sua punição expirou.`,
+      mentions: [senderId],
     })
     return false
   }
@@ -670,10 +721,10 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
     const letters = punishment.letters || []
     if (isUnlockLettersMessage(text, letters)) {
       const lettersLabel = letters.length > 0 ? letters.join(" / ") : "(sem letras)"
-      clearPunishment(from, sender)
+      clearPunishment(from, senderId)
       await sock.sendMessage(from, {
-        text: `@${sender.split("@")[0]}, você cumpriu a condição e foi liberado da punição das letras (${lettersLabel}).`,
-        mentions: [sender]
+        text: `@${senderId.split("@")[0]}, você cumpriu a condição e foi liberado da punição das letras (${lettersLabel}).`,
+        mentions: [senderId]
       })
       return false
     }
@@ -752,7 +803,7 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
   })
   telemetry.appendEvent("punishment.enforcement", {
     groupId: from,
-    userId: sender,
+    userId: senderId,
     type: punishment.type,
     action: "delete",
   })
@@ -760,7 +811,7 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
   try {
     await sock.sendMessage(from, { delete: msg.key })
     if (punishment.type === "deleteAndRepost") {
-      await resendPunishedContent(sock, from, sender, msg, text)
+      await resendPunishedContent(sock, from, senderId, msg, text)
     }
   } catch (e) {
     console.error("Erro ao apagar mensagem por punição", e)

@@ -2746,6 +2746,94 @@ test("games router uses loser bet map for rr punishment severity when available"
   assert.ok(xpCalls.some((entry) => entry.userId === other && entry.amount === 30))
 })
 
+test("economy router allows override to change another user nickname with !mudarapelido", async () => {
+  const { sock, sent } = createSockCapture()
+  const target = "alvo@s.whatsapp.net"
+  const updates = []
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "override@s.whatsapp.net",
+    cmd: "!mudarapelido @alvo apelido-novo",
+    cmdName: "!mudarapelido",
+    cmdArg1: "@alvo",
+    cmdArg2: "apelido-novo",
+    cmdParts: ["!mudarapelido", "@alvo", "apelido-novo"],
+    mentioned: [target],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    isOverrideSender: true,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    economyService: {
+      setPublicLabel: (userId, label) => {
+        updates.push({ userId, label })
+        return true
+      },
+    },
+    parseQuantity: () => 1,
+    formatDuration: () => "0m",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(updates.length, 1)
+  assert.equal(updates[0].userId, target)
+  assert.equal(updates[0].label, "apelido-novo")
+  assert.equal(sent.length, 1)
+  assert.match(String(sent[0].payload?.text || ""), /Apelido público/i)
+  assert.deepEqual(sent[0].payload?.mentions, [target])
+})
+
+test("economy router blocks !mudarapelido for non-override sender", async () => {
+  const { sock, sent } = createSockCapture()
+  const target = "alvo@s.whatsapp.net"
+  let changed = false
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "user@s.whatsapp.net",
+    cmd: "!mudarapelido @alvo apelido-novo",
+    cmdName: "!mudarapelido",
+    cmdArg1: "@alvo",
+    cmdArg2: "apelido-novo",
+    cmdParts: ["!mudarapelido", "@alvo", "apelido-novo"],
+    mentioned: [target],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    isOverrideSender: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    economyService: {
+      setPublicLabel: () => {
+        changed = true
+      },
+    },
+    parseQuantity: () => 1,
+    formatDuration: () => "0m",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(changed, false)
+  assert.equal(sent.length, 1)
+  assert.match(String(sent[0].payload?.text || ""), /Apenas overrides podem usar esse comando/i)
+})
+
 test("economy router no longer handles !jogos", async () => {
   const { sock, sent } = createSockCapture()
 

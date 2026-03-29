@@ -4561,7 +4561,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  if ((cmdName === prefix + "setcoins" || cmdName === prefix + "addcoins" || cmdName === prefix + "removecoins" || cmdName === prefix + "additem" || cmdName === prefix + "removeitem") && isGroup) {
+  if ((cmdName === prefix + "setcoins" || cmdName === prefix + "addcoins" || cmdName === prefix + "removecoins" || cmdName === prefix + "additem" || cmdName === prefix + "removeitem" || cmdName === prefix + "mudarapelido") && isGroup) {
     if (!isOverrideSender) {
       await sock.sendMessage(from, { text: "Apenas overrides podem usar esse comando." })
       return true
@@ -4685,6 +4685,28 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       })
       await sock.sendMessage(from, {
         text: `✅ Item removido de @${target.split("@")[0]}: *${qty}x ${itemDisplayName}*`,
+        mentions: targetMentions,
+      })
+      return true
+    }
+
+    if (cmdName === prefix + "mudarapelido") {
+      if (!mentionedTarget) {
+        return sock.sendMessage(from, { text: "Use: !mudarapelido @user <apelido-novo>" })
+      }
+
+      const label = String(cmdParts.slice(2).join(" ") || "").trim().slice(0, 30)
+      if (!label) {
+        return sock.sendMessage(from, { text: "Use: !mudarapelido @user <apelido-novo>" })
+      }
+
+      if (typeof economyService.setPublicLabel !== "function") {
+        return sock.sendMessage(from, { text: "Não foi possível alterar apelido agora." })
+      }
+
+      economyService.setPublicLabel(target, label)
+      await sock.sendMessage(from, {
+        text: `✅ Apelido público de @${target.split("@")[0]} atualizado para: *${label}*`,
         mentions: targetMentions,
       })
       return true

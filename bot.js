@@ -751,7 +751,7 @@ function parseBroadcastMentionModeToken(value = "") {
 
 function shouldAppendMassMentionHint(messageContent = {}) {
   const mentions = Array.isArray(messageContent?.mentions) ? messageContent.mentions.filter(Boolean) : []
-  if (mentions.length <= 1) return false
+  if (mentions.length <= 2) return false
   const text = typeof messageContent?.text === "string" ? messageContent.text : ""
   if (!text) return false
 
@@ -3546,7 +3546,7 @@ async function startBot(){
               mentions: loser ? [loser] : [],
             })
 
-            if (participants.length > 1 && loser) {
+            if (loser) {
               const rewardedPlayers = finalState.instruction?.cmd === "silence"
                 ? (() => {
                     const startedAt = Number(finalState.instructionStartedAt) || 0
@@ -3563,10 +3563,10 @@ async function startBot(){
                     .filter((playerId) => playerId && playerId !== loser)
               rewardedPlayers.forEach((playerId) => incrementUserStat(playerId, "gameComandoWin", 1))
               incrementUserStat(loser, "gameComandoLoss", 1)
-              await rewardPlayers(rewardedPlayers, GAME_REWARDS.COMANDO_SUCCESS, 1, "Comando")
-              if (finalState.instruction?.cmd === "silence") {
-                await applyRandomGamePunishment(loser)
+              if (rewardedPlayers.length > 0) {
+                await rewardPlayers(rewardedPlayers, GAME_REWARDS.COMANDO_SUCCESS, 1, "Comando")
               }
+              await applyRandomGamePunishment(loser)
             }
 
             storage.clearGameState(from, "comandoActive")
