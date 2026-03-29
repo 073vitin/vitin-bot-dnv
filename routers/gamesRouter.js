@@ -1,5 +1,5 @@
 const telemetry = require("../services/telemetryService")
-const storageModule = require(".../storage.js")
+const storageModule = require("../storage.js")
 const RR_TURN_TIMEOUT_MS = 60_000
 const RR_TURN_TIMEOUT_SECONDS = Math.floor(RR_TURN_TIMEOUT_MS / 1000)
 const LOBBY_BET_GRACE_MS = 15_000
@@ -32,13 +32,6 @@ function clearRrTurnTimeout(groupId, lobbyId) {
 }
 
 async function handleGameCommands(ctx) {
-    // Modo Livre: warn and filter
-    const modoLivreActive = storage.isModoLivreUser(sender)
-    if (modoLivreActive) {
-      await sock.sendMessage(from, {
-        text: "⚠️ *Modo Livre* está ativado para você! Você não ganhará nem gastará moedas nos jogos (exceto apostas de cassino). Para desativar, use !modolivre."
-      })
-    }
   const {
     sock,
     from,
