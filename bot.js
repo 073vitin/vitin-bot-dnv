@@ -4082,7 +4082,7 @@ async function startBot(){
       sender,
       text,
       isGroup,
-      isAdmin: senderIsAdmin,
+      isOverride: isOverrideSender,
     })
 
     } catch (err) {

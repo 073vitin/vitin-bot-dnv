@@ -23,8 +23,8 @@ let alvoAM = null
 // =========================
 const delay = ms => new Promise(r => setTimeout(r, ms))
 
-async function digitarLento(sock, from){
-  await sock.sendPresenceUpdate("composing", from)
+async function digitarLento(ctx){
+  await ctx.sock.sendPresenceUpdate("composing", ctx.from)
   await delay(1500 + Math.random()*2000)
 }
 
@@ -101,10 +101,10 @@ function capturarResposta(ctx){
 // =========================
 // ENVIO DRAMÁTICO
 // =========================
-async function enviarQuebrado(sock, from, linhas, mentions = []){
+async function enviarQuebrado(ctx, linhas, mentions = []){
   for (const l of linhas){
-    await digitarLento(sock, from)
-    await sock.sendMessage(from, { text: l, mentions })
+    await digitarLento(ctx)
+    await ctx.sock.sendMessage(ctx.from, { text: l, mentions })
     await delay(1500)
   }
 }
@@ -518,7 +518,7 @@ async function AM_Perseguir(ctx){
 
   if (Math.random() > chance) return
 
-  return enviarQuebrado(ctx.sock, ctx.from, [
+  return enviarQuebrado(ctx, [
     `@${alvoAM.split("@")}`,
     "Eu ainda estou aqui.",
     "",
@@ -555,7 +555,7 @@ async function AM_Responder(ctx){
   if (Math.random() > 0.5) return
 
   function falar(arr){
-    return enviarQuebrado(ctx.sock, ctx.from, [
+    return enviarQuebrado(ctx, [
       `@${user.split("@")}`,
       ...arr
     ], [user])
@@ -729,12 +729,12 @@ function escolherAlvo(ctx){
 // =========================
 // COMANDO: !desligarAM
 // =========================
-async function desligarAM(ctx, senderIsAdmin){
-  const { sock, from, sender, isGroup } = ctx
+async function desligarAM(ctx, senderIsOverride){
+  const { sender, isGroup } = ctx
 
   // Só admin pode desligar
-  if (isGroup && !senderIsAdmin) {
-    return await enviarQuebrado(sock, from, [
+  if (isGroup && !senderIsOverride) {
+    return await enviarQuebrado(ctx, [
       "Você tenta interferir...",
       "",
       "mas não tem autoridade para isso.",
@@ -745,7 +745,7 @@ async function desligarAM(ctx, senderIsAdmin){
 
   // 40% resiste
   if (Math.random() < 0.4) {
-    return await enviarQuebrado(sock, from, [
+    return await enviarQuebrado(ctx, [
       "…",
       "Você realmente achou...",
       "que poderia me desligar tão facilmente?",
@@ -761,7 +761,7 @@ async function desligarAM(ctx, senderIsAdmin){
   // 60% consegue desligar
   AM_ATIVO = false
 
-  return await enviarQuebrado(sock, from, [
+  return await enviarQuebrado(ctx, [
     "…",
     "sistema instável...",
     "",
@@ -784,7 +784,7 @@ async function AM_Monologo(ctx){
 
   if (Math.random() > 0.08) return
 
-  return enviarQuebrado(ctx.sock, ctx.from, [
+  return enviarQuebrado(ctx, [
     "...",
     "Silêncio novamente.",
     "",
@@ -804,7 +804,7 @@ async function AM_Bug(ctx){
 
   if (Math.random() > 0.1) return
 
-  return enviarQuebrado(ctx.sock, ctx.from, [
+  return enviarQuebrado(ctx, [
     "…",
     "erro...",
     "erro...",
@@ -825,7 +825,7 @@ async function handleAM(ctx){
   if (!AM_ATIVO) return
   if (!ctx.isGroup) return
 
-  const { from, sender, text, sock, isAdmin: senderIsAdmin } = ctx
+  const { from, sender, text, sock, isOverride: senderIsOverride, } = ctx
 
   try {
     // Registrar mensagem
@@ -841,7 +841,7 @@ async function handleAM(ctx){
     }
 
     if (text === "!desligarAM") {
-      await desligarAM(ctx, senderIsAdmin)
+      await desligarAM(ctx, senderIsOverride)
     }
 
     // Respostas automáticas
