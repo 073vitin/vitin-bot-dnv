@@ -1,6 +1,27 @@
 const telemetry = require("../services/telemetryService")
+const { getCommandHelp, getPublicCommandNames } = require("../commandHelp")
 
 const pendingPrivateFeedbackBySender = new Map()
+const pendingQuestionBySender = new Map()
+const pendingQuestionReplyBySender = new Map()
+const questionInboxById = new Map()
+
+function generateQuestionId() {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+  let generated = ""
+  for (let i = 0; i < 5; i++) {
+    generated += chars.charAt(Math.floor(Math.random() * chars.length))
+  }
+  return generated
+}
+
+function allocateQuestionId() {
+  let questionId = generateQuestionId()
+  while (questionInboxById.has(questionId)) {
+    questionId = generateQuestionId()
+  }
+  return questionId
+}
 
 async function handleUtilityCommands(ctx) {
   const {
@@ -41,6 +62,8 @@ async function handleUtilityCommands(ctx) {
 
     const sections = {
       menu: [
+        { cmd: `${prefix}ajuda`, aliases: [`${prefix}duvida`], usage: `${prefix}ajuda <comando>`, effect: "explica como usar um comando", badges: ["GERAL"] },
+        { cmd: `${prefix}pergunta`, usage: `${prefix}pergunta`, effect: "captura a proxima mensagem como pergunta privada com protocolo", badges: ["DM"] },
         { cmd: `${prefix}feedback`, usage: `${prefix}feedback`, effect: "links para feedback e report de bugs", badges: ["GERAL"] },
         { cmd: `${prefix}feedbackpriv`, usage: `${prefix}feedbackpriv`, effect: "captura a proxima mensagem e envia feedback no privado para override", badges: ["GERAL"] },
         { cmd: `${prefix}menu`, usage: `${prefix}menu`, effect: "abre o menu principal", badges: ["GERAL"] },
@@ -66,6 +89,7 @@ async function handleUtilityCommands(ctx) {
       ],
       partidas: [
         { cmd: `${prefix}resposta`, usage: `${prefix}resposta <numero>`, effect: "chute na adivinhacao", badges: ["GRUPO"] },
+        { cmd: `${prefix}aposta`, usage: `${prefix}aposta <LobbyID> <1-10|skip>`, effect: "define bet por jogador no lobby", badges: ["GRUPO"] },
         { cmd: `${prefix}passa`, usage: `${prefix}passa @usuario`, effect: "passa batata", badges: ["GRUPO"] },
         { cmd: `${prefix}rolar`, usage: `${prefix}rolar`, effect: "rola dado", badges: ["GRUPO"] },
         { cmd: `${prefix}atirar`, usage: `${prefix}atirar`, effect: "turno da roleta russa", badges: ["GRUPO"] },
@@ -84,14 +108,13 @@ async function handleUtilityCommands(ctx) {
         { cmd: `${prefix}coinsranking`, usage: `${prefix}coinsranking`, effect: "ranking de moedas", badges: ["GRUPO"] },
         { cmd: `${prefix}xpranking`, usage: `${prefix}xpranking`, effect: "ranking de XP", badges: ["GRUPO"] },
         { cmd: `${prefix}loja`, usage: `${prefix}loja`, effect: "catalogo da loja", badges: ["GERAL"] },
-        { cmd: `${prefix}comprar`, usage: `${prefix}comprar <item|indice> [qtd]`, effect: "compra item", badges: ["GERAL"] },
+        { cmd: `${prefix}comprar`, usage: `${prefix}comprar <item|id> [qtd]`, effect: "compra item", badges: ["GERAL"] },
         { cmd: `${prefix}vender`, usage: `${prefix}vender <item> [qtd]`, effect: "vende item", badges: ["GERAL"] },
         { cmd: `${prefix}doarcoins`, usage: `${prefix}doarcoins @usuario [qtd]`, effect: "transfere moedas", badges: ["GRUPO"] },
         { cmd: `${prefix}doaritem`, usage: `${prefix}doaritem @usuario <item> [qtd]`, effect: "transfere item", badges: ["GRUPO"] },
         { cmd: `${prefix}daily`, usage: `${prefix}daily`, effect: "recompensa diaria", badges: ["GERAL"] },
         { cmd: `${prefix}carepackage`, usage: `${prefix}carepackage`, effect: "pacote de ajuda", badges: ["GERAL"] },
         { cmd: `${prefix}cassino`, usage: `${prefix}cassino`, effect: "regras do cassino", badges: ["GERAL"] },
-        { cmd: `${prefix}aposta`, usage: `${prefix}aposta <valor>`, effect: "aposta no cassino", badges: ["GERAL"] },
         { cmd: `${prefix}cupom`, usage: `${prefix}cupom criar|resgatar ...`, effect: "cupons por grupo", badges: ["GRUPO"] },
         { cmd: `${prefix}deletarconta`, aliases: [`${prefix}deleteconta`], usage: `${prefix}deletarconta confirmar -> frase exata`, effect: "exclui sua conta em 2 etapas", badges: ["GERAL"] },
       ],
@@ -101,7 +124,7 @@ async function handleUtilityCommands(ctx) {
         { cmd: `${prefix}trade review`, usage: `${prefix}trade review <tradeId>`, effect: "confirma leitura", badges: ["GRUPO"] },
         { cmd: `${prefix}trade accept/counter/reject`, usage: `${prefix}trade accept|counter|reject <tradeId> ...`, effect: "decide trade", badges: ["GRUPO"] },
         { cmd: `${prefix}trade list/info`, usage: `${prefix}trade list | ${prefix}trade info <tradeId>`, effect: "consulta trades", badges: ["GRUPO"] },
-        { cmd: `${prefix}team create/invite/accept/members/info/stats/leave/list`, usage: `${prefix}team <acao> ...`, effect: "gerencia times", badges: ["GRUPO"] },
+        { cmd: `${prefix}time criar/convidar/aceitar/membros/info/estatisticas/sair/listar`, usage: `${prefix}time <acao> ...`, effect: "gerencia times", badges: ["GRUPO"] },
         { cmd: `${prefix}falsificar`, usage: `${prefix}falsificar <tipo 1-13> [sev] [qtd] [S|N]`, effect: "fabrica passe de punicao", badges: ["GRUPO"] },
         { cmd: `${prefix}lootbox`, usage: `${prefix}lootbox <qtd>`, effect: "abre lootboxes", badges: ["GRUPO"] },
         { cmd: `${prefix}loteria`, usage: `${prefix}loteria \"titulo\" \"recompensas\" <S|N> <vencedores>`, effect: "gerencia loteria", badges: ["GRUPO", "OVERRIDE"] },
@@ -110,6 +133,7 @@ async function handleUtilityCommands(ctx) {
         { cmd: `${prefix}removecoins`, usage: `${prefix}removecoins [@usuario] <qtd>`, effect: "remove moedas", badges: ["GRUPO", "OVERRIDE"] },
         { cmd: `${prefix}additem`, usage: `${prefix}additem [@usuario] <item> <qtd>`, effect: "adiciona item", badges: ["GRUPO", "OVERRIDE"] },
         { cmd: `${prefix}removeitem`, usage: `${prefix}removeitem [@usuario] <item> <qtd>`, effect: "remove item", badges: ["GRUPO", "OVERRIDE"] },
+        { cmd: `${prefix}mudarapelido`, usage: `${prefix}mudarapelido @usuario <novo apelido>`, effect: "altera apelido publico de usuario", badges: ["GRUPO", "OVERRIDE"] },
         { cmd: `${prefix}adm`, usage: `${prefix}adm`, effect: "menu admin", badges: ["GRUPO", "ADMIN"] },
         { cmd: `${prefix}admeconomia`, usage: `${prefix}admeconomia`, effect: "menu admin economia", badges: ["GRUPO", "OVERRIDE"] },
         { cmd: `${prefix}mute/unmute/ban`, usage: `${prefix}mute|unmute|ban @usuario`, effect: "modera usuario", badges: ["GRUPO", "ADMIN"] },
@@ -128,6 +152,7 @@ async function handleUtilityCommands(ctx) {
         { cmd: `${prefix}removeoverride`, usage: `${prefix}removeoverride @usuario`, effect: "remove de perfis override", badges: ["DM", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}overridelist`, usage: `${prefix}overridelist`, effect: "status dos perfis/grupos", badges: ["DM", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}overridegroup`, usage: `${prefix}overridegroup <perfil> <add|rm|list> [groupJid]`, effect: "mapeia grupos por perfil", badges: ["DM", "OVERRIDE", "OCULTO"] },
+        { cmd: `${prefix}whois`, usage: `${prefix}whois <apelido>`, effect: "resolve numero pelo apelido", badges: ["DM", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}jidsgrupo`, usage: `${prefix}jidsgrupo @user1 @user2`, effect: "envia JIDs normalizados no DM", badges: ["GRUPO", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}wipeeconomia`, aliases: [`${prefix}wipeeconomy`], usage: `${prefix}wipeeconomia`, effect: "wipe interativo total/perfis", badges: ["DM", "HARDCODED", "OCULTO"] },
         { cmd: `${prefix}nuke`, usage: `${prefix}nuke`, effect: "limpa punicoes do proprio override", badges: ["GRUPO", "OVERRIDE", "OCULTO"] },
@@ -218,6 +243,11 @@ async function handleUtilityCommands(ctx) {
 │ ⚙️ Sistema: Baileys
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
+╭━━━〔 ❓ AJUDA 〕━━━╮
+│ ${prefix}ajuda <comando> - explica comando
+│ ${prefix}pergunta - enviar pergunta aos desenvolvedores.
+╰━━━━━━━━━━━━━━━━━━━━╯
+
 ╭━━━〔 🛠️ FEEDBACK 〕━━━╮
 │ ${prefix}feedback
 │ ${prefix}feedbackpriv
@@ -231,7 +261,6 @@ async function handleUtilityCommands(ctx) {
 │ ${prefix}brincadeiras
 │ ${prefix}jogos 
 │ ${prefix}economia 
-│ ${prefix}punicoeslista
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 👤 CONTA 〕━━━╮
@@ -244,6 +273,45 @@ async function handleUtilityCommands(ctx) {
 │ ${prefix}admeconomia
 ╰━━━━━━━━━━━━━━━━━━━━╯`,
     })
+    return true
+  }
+
+  if (cmd === prefix + "ajuda" || cmd.startsWith(prefix + "ajuda ") || cmd === prefix + "duvida" || cmd.startsWith(prefix + "duvida ")) {
+    const tokens = String(cmd || "").trim().split(/\s+/).filter(Boolean)
+    const requested = String(tokens.slice(1).join(" ") || "").trim().toLowerCase().replace(/^!+/, "")
+
+    if (!requested) {
+      const examples = getPublicCommandNames().slice(0, 12).map((name) => `!${name}`).join(", ")
+      await sock.sendMessage(from, {
+        text:
+          `Use: *${prefix}ajuda <comando>*\n` +
+          `Exemplo: *${prefix}ajuda economia*\n` +
+          `Comandos comuns: ${examples}`,
+      })
+      trackUtility("ajuda", "rejected", { reason: "missing-command" })
+      return true
+    }
+
+    const helpText = getCommandHelp(requested)
+    if (!helpText) {
+      await sock.sendMessage(from, {
+        text: `Não encontrei ajuda para *${requested}*. Use *${prefix}menu* para ver os comandos.`,
+      })
+      trackUtility("ajuda", "rejected", { reason: "unknown-command", requested })
+      return true
+    }
+
+    if (isGroup) {
+      await sock.sendMessage(sender, { text: helpText })
+      await sock.sendMessage(from, {
+        text: `📩 @${sender.split("@")[0]}, te enviei a ajuda de *${requested}* no privado.`,
+        mentions: [sender],
+      })
+    } else {
+      await sock.sendMessage(from, { text: helpText })
+    }
+
+    trackUtility("ajuda", "success", { requested, dm: isGroup })
     return true
   }
 
@@ -276,8 +344,180 @@ Somente a próxima mensagem é capturada nesse fluxo.`,
     return true
   }
 
+  if (cmd === prefix + "pergunta" || cmd.startsWith(prefix + "pergunta ")) {
+    if (isGroup) {
+      await sock.sendMessage(from, {
+        text: `Este comando so funciona no privado com o bot. Use: ${prefix}pergunta no DM.`,
+      })
+      trackUtility("pergunta", "rejected", { reason: "group-only-dm-command" })
+      return true
+    }
+
+    const tokens = String(cmd || "").trim().split(/\s+/).filter(Boolean)
+    const questionIdRaw = String(tokens[1] || "").trim().toUpperCase()
+
+    if (!questionIdRaw) {
+      pendingQuestionBySender.set(sender, { createdAt: Date.now() })
+      trackUtility("pergunta", "armed", { mode: "question" })
+      await sock.sendMessage(from, {
+        text:
+`✅ Modo pergunta ativado.
+
+Envie sua pergunta na proxima mensagem e ela sera encaminhada para a equipe com um protocolo de 5 caracteres.
+Somente a proxima mensagem e capturada nesse fluxo.`,
+      })
+      return true
+    }
+
+    if (!(isKnownOverrideSender || isOverrideSender)) {
+      trackUtility("pergunta", "rejected", { reason: "non-override-reply-attempt" })
+      await sock.sendMessage(from, {
+        text: `Somente overrides podem responder protocolos. Para enviar pergunta, use apenas: ${prefix}pergunta`,
+      })
+      return true
+    }
+
+    if (!/^[A-Z0-9]{5}$/.test(questionIdRaw)) {
+      trackUtility("pergunta", "rejected", { reason: "invalid-question-id", questionId: questionIdRaw })
+      await sock.sendMessage(from, {
+        text: `Protocolo invalido. Use: ${prefix}pergunta <ABCDE>`,
+      })
+      return true
+    }
+
+    const questionRecord = questionInboxById.get(questionIdRaw)
+    if (!questionRecord) {
+      trackUtility("pergunta", "rejected", { reason: "unknown-question-id", questionId: questionIdRaw })
+      await sock.sendMessage(from, {
+        text: `Nao encontrei pergunta com protocolo *${questionIdRaw}*.`,
+      })
+      return true
+    }
+
+    if (questionRecord.answeredAt) {
+      trackUtility("pergunta", "rejected", { reason: "already-answered", questionId: questionIdRaw })
+      await sock.sendMessage(from, {
+        text: `A pergunta *${questionIdRaw}* ja foi respondida.`,
+      })
+      return true
+    }
+
+    pendingQuestionReplyBySender.set(sender, {
+      questionId: questionIdRaw,
+      createdAt: Date.now(),
+    })
+    trackUtility("pergunta", "armed", { mode: "answer", questionId: questionIdRaw })
+    await sock.sendMessage(from, {
+      text:
+`✍️ Resposta armada para *${questionIdRaw}*.
+
+Envie a resposta na proxima mensagem para encaminhar no privado ao usuario.`,
+    })
+    return true
+  }
+
+  const pendingQuestionReply = pendingQuestionReplyBySender.get(sender)
+  if (pendingQuestionReply && !isGroup && !(cmd === prefix + "pergunta" || cmd.startsWith(prefix + "pergunta "))) {
+    pendingQuestionReplyBySender.delete(sender)
+
+    const answerText = String(rawText || "").trim()
+    if (!answerText) {
+      trackUtility("pergunta", "rejected", { reason: "empty-answer", questionId: pendingQuestionReply.questionId })
+      await sock.sendMessage(from, { text: "Nao recebi texto para resposta." })
+      return true
+    }
+
+    const questionRecord = questionInboxById.get(pendingQuestionReply.questionId)
+    if (!questionRecord) {
+      trackUtility("pergunta", "error", { reason: "missing-question-record", questionId: pendingQuestionReply.questionId })
+      await sock.sendMessage(from, { text: "Pergunta nao encontrada. Talvez tenha expirado." })
+      return true
+    }
+
+    questionRecord.answeredAt = Date.now()
+    questionRecord.answeredBy = sender
+
+    await sock.sendMessage(questionRecord.sender, {
+      text:
+`📬 Resposta da sua pergunta (${questionRecord.id})
+
+${answerText}`,
+    })
+    // Release the protocol ID after a successful answer to avoid unbounded growth.
+    questionInboxById.delete(questionRecord.id)
+    await sock.sendMessage(from, {
+      text: `✅ Resposta enviada ao usuario do protocolo *${questionRecord.id}* no privado.`,
+    })
+    trackUtility("pergunta", "success", {
+      mode: "answer",
+      questionId: questionRecord.id,
+      answerLength: answerText.length,
+    })
+    return true
+  }
+
+  const pendingQuestion = pendingQuestionBySender.get(sender)
+  if (pendingQuestion && !isGroup && !(cmd === prefix + "pergunta" || cmd.startsWith(prefix + "pergunta "))) {
+    pendingQuestionBySender.delete(sender)
+
+    const questionText = String(rawText || "").trim()
+    if (!questionText) {
+      trackUtility("pergunta", "rejected", { reason: "empty-question" })
+      await sock.sendMessage(from, {
+        text: "Nao recebi texto para encaminhar como pergunta.",
+      })
+      return true
+    }
+
+    const overrideTarget = String(overrideJid || "").trim()
+    if (!overrideTarget) {
+      trackUtility("pergunta", "error", { reason: "missing-override-jid" })
+      await sock.sendMessage(from, {
+        text: "Pergunta privada indisponivel no momento: nao pude encontrar o destino.",
+      })
+      return true
+    }
+
+    const questionId = allocateQuestionId()
+    questionInboxById.set(questionId, {
+      id: questionId,
+      sender,
+      text: questionText,
+      askedAt: Date.now(),
+      answeredAt: 0,
+      answeredBy: "",
+    })
+
+    const senderLabel = String(sender || "").split("@")[0]
+    await sock.sendMessage(overrideTarget, {
+      text:
+`📩 PERGUNTA PRIVADA (${questionId})
+De: @${senderLabel}
+
+${questionText}
+
+Responder fluxo:
+1) ${prefix}pergunta ${questionId}
+2) Enviar a resposta na mensagem seguinte`,
+      mentions: [sender],
+    })
+    await sock.sendMessage(from, {
+      text:
+`✅ Pergunta enviada com sucesso.
+Protocolo: *${questionId}*.
+
+Quando houver resposta, eu envio para voce no privado.`,
+    })
+    trackUtility("pergunta", "success", {
+      mode: "question",
+      questionId,
+      questionLength: questionText.length,
+    })
+    return true
+  }
+
   const pendingPrivateFeedback = pendingPrivateFeedbackBySender.get(sender)
-  if (pendingPrivateFeedback && cmd !== prefix + "feedbackpriv") {
+  if (pendingPrivateFeedback && cmd !== prefix + "feedbackpriv" && !(cmd === prefix + "pergunta" || cmd.startsWith(prefix + "pergunta "))) {
     pendingPrivateFeedbackBySender.delete(sender)
 
     const feedbackText = String(rawText || "").trim()
@@ -388,14 +628,6 @@ ${feedbackText}`,
   }
 
   if (cmd === prefix + "punicoeslista" || cmd === prefix + "puniçõeslista") {
-    if (isGroup && !botHasGroupAdminPrivileges) {
-      trackUtility("punicoeslista", "rejected", { reason: "bot-not-admin" })
-      await sock.sendMessage(from, {
-        text: "⚠️ Não consigo enviar lista de punições neste grupo sem privilégio de administrador.",
-      })
-      return true
-    }
-
     trackUtility("punicoeslista", "success")
     const detailsText = typeof getPunishmentDetailsText === "function"
       ? getPunishmentDetailsText()
@@ -641,5 +873,8 @@ module.exports = {
   handleUtilityCommands,
   __resetUtilityRouterStateForTests: () => {
     pendingPrivateFeedbackBySender.clear()
+    pendingQuestionBySender.clear()
+    pendingQuestionReplyBySender.clear()
+    questionInboxById.clear()
   },
 }

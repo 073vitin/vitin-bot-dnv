@@ -31,13 +31,15 @@ const adivinhacao = require("./games/adivinhacao")
 const batataquente = require("./games/batataquente")
 const dueloDados = require("./games/dueloDados")
 const roletaRussa = require("./games/roletaRussa")
-const reação = require("./games/reacao")
+const reacaoGame = require("./games/reacao")
 const embaralhado = require("./games/embaralhado")
 const comando = require("./games/comando")
-const memória = require("./games/memoria")
+const memoriaGame = require("./games/memoria")
 const economyService = require("./services/economyService")
 const registrationService = require("./services/registrationService")
 const telemetry = require("./services/telemetryService")
+const { COMMAND_HELP } = require("./commandHelp")
+const { getLikelyCommandSuggestions } = require("./services/commandSuggestionService")
 const { handleGameCommands, handleGameMessageFlow } = require("./routers/gamesRouter")
 const { handleUtilityCommands } = require("./routers/utilityRouter")
 const { handleModerationCommands } = require("./routers/moderationRouter")
@@ -59,10 +61,12 @@ const OVERRIDE_PENDING_TIMEOUT_MS = 5 * 60 * 1000
 const ECONOMY_WIPE_COMMAND = prefix + "wipeeconomia"
 const ECONOMY_WIPE_COMMAND_ALIAS = prefix + "wipeeconomy"
 const ECONOMY_WIPE_CONFIRM_PHRASE = "CONFIRMAR WIPE ECONOMIA"
+const MASS_MENTION_OPT_OUT_HINT = "Cansado de ser mencionado? Use *!mention off* para o bot utilizar seu apelido ao invés de te mencionar!"
 const DATA_EXPORT_PASSWORD = String(process.env.PROFILER_PASSWORD || "").trim() || crypto.randomBytes(24).toString("hex")
 const pendingBroadcastBySender = new Map()
 const pendingOverrideAddBySender = new Map()
 const pendingEconomyWipeBySender = new Map()
+const pendingUnregisterBySender = new Map()
 const knownGroupIds = new Set()
 const groupNameCache = {}
 const userNameCache = {}
@@ -143,19 +147,71 @@ const perfStats = {
   groupMetadataMs: createMetricBucket(),
   eventLoopLagMs: createMetricBucket(),
   commandHistory: [],
+  lastCommandByUser: {},
   stages: {},
 }
 
+function safeLifetimeInteger(value, fallback = 0) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback
+}
+
+function loadLifetimeStats() {
+  const raw = typeof storage.getProfilerLifetimeStats === "function"
+    ? storage.getProfilerLifetimeStats()
+    : {}
+  const now = Date.now()
+  return {
+    sinceAt: safeLifetimeInteger(raw.sinceAt, now),
+    bootCount: safeLifetimeInteger(raw.bootCount, 0),
+    reconnects: safeLifetimeInteger(raw.reconnects, 0),
+    messagesReceived: safeLifetimeInteger(raw.messagesReceived, 0),
+    messagesErrored: safeLifetimeInteger(raw.messagesErrored, 0),
+    ignoredNoMessage: safeLifetimeInteger(raw.ignoredNoMessage, 0),
+    ignoredFromMe: safeLifetimeInteger(raw.ignoredFromMe, 0),
+    commandsExecuted: safeLifetimeInteger(raw.commandsExecuted, 0),
+    authUptimeTotalMs: safeLifetimeInteger(raw.authUptimeTotalMs, 0),
+    authSessionStartedAt: safeLifetimeInteger(raw.authSessionStartedAt, 0),
+    lastSeenAt: safeLifetimeInteger(raw.lastSeenAt, 0),
+  }
+}
+
+const lifetimeStats = loadLifetimeStats()
+
+function persistLifetimeStats() {
+  if (typeof storage.setProfilerLifetimeStats !== "function") return
+  lifetimeStats.lastSeenAt = Date.now()
+  storage.setProfilerLifetimeStats(lifetimeStats)
+}
+
+lifetimeStats.bootCount += 1
+if (!lifetimeStats.sinceAt) {
+  lifetimeStats.sinceAt = Date.now()
+}
+persistLifetimeStats()
+
 function addCommandHistory(entry = {}) {
+  const normalizedSenderId = registrationService.normalizeUserId(entry.senderId || "")
   const nextEntry = {
     at: Date.now(),
     command: String(entry.command || "").trim(),
+    senderId: normalizedSenderId,
     senderName: String(entry.senderName || "").trim() || "Desconhecido",
     groupName: String(entry.groupName || "").trim() || "DM",
   }
   perfStats.commandHistory.unshift(nextEntry)
   if (perfStats.commandHistory.length > COMMAND_HISTORY_LIMIT) {
     perfStats.commandHistory.length = COMMAND_HISTORY_LIMIT
+  }
+  if (normalizedSenderId && nextEntry.command) {
+    perfStats.lastCommandByUser[normalizedSenderId] = {
+      command: nextEntry.command,
+      at: nextEntry.at,
+    }
+  }
+  if (nextEntry.command) {
+    lifetimeStats.commandsExecuted += 1
+    persistLifetimeStats()
   }
 }
 
@@ -419,6 +475,10 @@ function sanitizeOverrideStatus(statusMap = {}, profiles = getOverrideProfiles()
   const profileNames = Object.keys(profiles?.positivo || {})
   for (const profileName of profileNames) {
     const current = source[profileName]
+    if (profileName === HARDCODED_OVERRIDE_OWNER) {
+      result.positivo[profileName] = true
+      continue
+    }
     result.positivo[profileName] = typeof current === "boolean" ? current : true
   }
 
@@ -509,10 +569,14 @@ function isOverrideProfileAllowedInGroup(profileName = "", groupId = "") {
 function buildOverrideGroupsStatusText() {
   const mappings = getOverrideGroupMappings()
   const profiles = getOverrideProfiles()
-  const allProfiles = [...new Set([
+  const allProfileSet = new Set([
     ...Object.keys(profiles?.positivo || {}),
     ...Object.keys(mappings || {}),
-  ])].sort()
+  ])
+  const allProfiles = [
+    ...(allProfileSet.has(HARDCODED_OVERRIDE_OWNER) ? [HARDCODED_OVERRIDE_OWNER] : []),
+    ...Array.from(allProfileSet).filter((name) => name !== HARDCODED_OVERRIDE_OWNER).sort(),
+  ]
 
   if (allProfiles.length === 0) {
     return "Nenhum perfil de override encontrado."
@@ -539,6 +603,7 @@ function isOverrideProfileEnabled(category, profileName) {
   const normalizedCategory = "positivo"
   const normalizedName = String(profileName || "").trim().toLowerCase()
   if (!normalizedName) return false
+  if (normalizedCategory === "positivo" && normalizedName === HARDCODED_OVERRIDE_OWNER) return true
   const statuses = getOverrideStatusMap()
   return Boolean(statuses?.[normalizedCategory]?.[normalizedName])
 }
@@ -581,6 +646,7 @@ function getOverrideCompatibilityContext() {
 function isKnownOverrideIdentity(identity = "", options = {}) {
   const normalized = normalizeOverrideIdentity(identity)
   if (!normalized) return false
+  if (isHardcodedOverrideIdentity(normalized)) return true
 
   const category = "positivo"
   const includeDisabled = Boolean(options?.includeDisabled)
@@ -675,12 +741,26 @@ function formatOverrideCategoryLabel(category = "") {
   return "positivo"
 }
 
+function getOrderedOverrideProfileNames(profiles = {}) {
+  const names = Object.keys(profiles?.positivo || {})
+  const ownerFirst = []
+  const others = []
+  for (const name of names) {
+    if (name === HARDCODED_OVERRIDE_OWNER) {
+      ownerFirst.push(name)
+    } else {
+      others.push(name)
+    }
+  }
+  return [...ownerFirst, ...others]
+}
+
 function buildOverrideToggleStatusText() {
   const profiles = getOverrideProfiles()
   const statuses = getOverrideStatusMap()
 
   const renderCategory = (category) => {
-    const entries = Object.keys(profiles?.[category] || {})
+    const entries = getOrderedOverrideProfileNames(profiles)
     if (entries.length === 0) return `(${formatOverrideCategoryLabel(category)} vazio)`
     return entries
       .map((profileName, index) => {
@@ -713,6 +793,23 @@ function parseBroadcastMentionModeToken(value = "") {
   return null
 }
 
+function shouldAppendMassMentionHint(messageContent = {}) {
+  const mentions = Array.isArray(messageContent?.mentions) ? messageContent.mentions.filter(Boolean) : []
+  if (mentions.length <= 2) return false
+  const text = typeof messageContent?.text === "string" ? messageContent.text : ""
+  if (!text) return false
+
+  const lower = text.toLowerCase()
+  if (lower.includes(MASS_MENTION_OPT_OUT_HINT.toLowerCase())) return false
+
+  // Lobby/raffle messages are exempt from this footer by requirement.
+  if (lower.includes("lobby") || lower.includes("loteria") || lower.includes("raffle") || lower.includes("sorteio")) {
+    return false
+  }
+
+  return true
+}
+
 function isEconomyCommandName(cmdName = "", cmd = "") {
   const economyCommands = new Set([
     prefix + "economia",
@@ -733,7 +830,6 @@ function isEconomyCommandName(cmdName = "", cmd = "") {
     prefix + "roubar",
     prefix + "daily",
     prefix + "cassino",
-    prefix + "aposta",
     prefix + "lootbox",
     prefix + "falsificar",
     prefix + "trabalho",
@@ -748,7 +844,6 @@ function isEconomyCommandName(cmdName = "", cmd = "") {
     prefix + "removeitem",
     prefix + "trade",
     prefix + "time",
-    prefix + "team",
     prefix + "deletarconta",
     prefix + "deleteconta",
     // Jogos com aposta/entrada/recompensa devem exigir cadastro também.
@@ -811,6 +906,26 @@ function messageTriggersFilter(text = "", filterText = "") {
   const filterNormalized = normalizeFilterComparable(rawFilter)
   if (!filterNormalized) return false
   return messageNormalized.includes(filterNormalized)
+}
+
+function formatUnknownCommandSuggestionText(inputCmd = "", result = { metric: "", suggestions: [] }) {
+  const suggestions = Array.isArray(result?.suggestions) ? result.suggestions : []
+  if (suggestions.length === 0) {
+    return (
+      `Comando não reconhecido: *${String(inputCmd || "").trim()}*\n` +
+      `Use *${prefix}menu* para ver os comandos disponíveis.`
+    )
+  }
+
+  const lines = [
+    `Comando não reconhecido: *${String(inputCmd || "").trim()}*`,
+    "Você quis dizer:",
+  ]
+
+  for (let i = 0; i < suggestions.length; i++) {
+    lines.push(`${i + 1}. *${suggestions[i].text}*`)
+  }
+  return lines.join("\n")
 }
 
 function collectKnownGroupsFromStorage() {
@@ -984,6 +1099,7 @@ function parseEconomyWipeSelection(input = "", maxIndex = 0) {
 function buildEconomyWipePreviewText(sessionState = {}) {
   const selected = Array.isArray(sessionState.selectedEntries) ? sessionState.selectedEntries : []
   const wipeStats = Boolean(sessionState.wipeStats)
+  const wipeEconomyDataOnly = Boolean(sessionState.wipeEconomyDataOnly)
   const modeLabel = sessionState.mode === "total" ? "TOTAL" : "PERFIS"
   const sample = selected.slice(0, 20)
 
@@ -991,11 +1107,13 @@ function buildEconomyWipePreviewText(sessionState = {}) {
     "Preview do wipe:",
     `Modo: ${modeLabel}`,
     `Perfis selecionados: ${selected.length}`,
+    `Arg wipeeconomy (somente dados): ${wipeEconomyDataOnly ? "SIM" : "NAO"}`,
     `Wipe de stats extras: ${wipeStats ? "SIM" : "NAO"}`,
     "",
     "Acoes base por perfil:",
-    "- deleteUserProfile (economyService)",
-    "- cleanupUserLinkedState (times/trades)",
+    ...(wipeEconomyDataOnly
+      ? ["- wipeUserData (economyService)"]
+      : ["- deleteUserProfile (economyService)", "- cleanupUserLinkedState (times/trades)"]),
     "",
   ]
 
@@ -1021,7 +1139,8 @@ function buildEconomyWipePreviewText(sessionState = {}) {
   return lines.join("\n")
 }
 
-function cleanupUserStateArtifacts(userId = "") {
+function cleanupUserStateArtifacts(userId = "", options = {}) {
+  const skipUnregister = Boolean(options?.skipUnregister)
   const identitySet = new Set(expandOverrideIdentityVariants(userId).map(normalizeOverrideIdentity).filter(Boolean))
   const matchesIdentity = (value = "") => {
     const normalized = normalizeOverrideIdentity(value)
@@ -1042,8 +1161,10 @@ function cleanupUserStateArtifacts(userId = "") {
     punishmentRemoved: 0,
   }
 
-  const unregister = registrationService.unregisterUser(userId)
-  metrics.registrationRemoved = Boolean(unregister?.ok)
+  if (!skipUnregister) {
+    const unregister = registrationService.unregisterUser(userId)
+    metrics.registrationRemoved = Boolean(unregister?.ok)
+  }
 
   if (storage.getPlayerProgress(userId)) {
     storage.setPlayerProgress(userId, {})
@@ -1095,13 +1216,50 @@ function getMetricSnapshot(bucket) {
   }
 }
 
+function extractWhatsAppNumber(userId = "") {
+  const normalized = registrationService.normalizeUserId(userId)
+  const userPart = String(normalized || userId || "").split("@")[0] || ""
+  const digits = userPart.replace(/\D+/g, "")
+  return digits || userPart || "-"
+}
+
+function buildRegisteredUsersSnapshot() {
+  const registeredIds = registrationService.getRegisteredUsers()
+  return registeredIds
+    .map((rawUserId) => {
+      const userId = registrationService.normalizeUserId(rawUserId)
+      if (!userId) return null
+      const regEntry = registrationService.getRegisteredEntry(userId)
+      const profile = economyService.getProfile(userId)
+      const waName = String(regEntry?.lastKnownName || getKnownUserName(userId) || userId.split("@")[0] || "").trim()
+      const nickname = String(profile?.preferences?.publicLabel || "").trim()
+      const coins = Math.max(0, Math.floor(Number(economyService.getCoins(userId)) || 0))
+      const lastCommand = perfStats.lastCommandByUser[userId] || null
+      return {
+        userId,
+        waNumber: extractWhatsAppNumber(userId),
+        waName: waName || "-",
+        nickname: nickname || "-",
+        coins,
+        lastCommand,
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.waNumber.localeCompare(b.waNumber))
+}
+
 function getProfilerSnapshot() {
   const now = Date.now()
   const memory = getMemoryUsageMb()
+  const registeredUsers = buildRegisteredUsersSnapshot()
   const stageEntries = Object.entries(perfStats.stages)
     .map(([name, bucket]) => ({ name, ...getMetricSnapshot(bucket) }))
     .sort((a, b) => b.avgMs - a.avgMs)
     .slice(0, 12)
+
+  const lifetimeAuthUptimeMs = lifetimeStats.authUptimeTotalMs + (lifetimeStats.authSessionStartedAt > 0
+    ? Math.max(0, now - lifetimeStats.authSessionStartedAt)
+    : 0)
 
   return {
     now,
@@ -1128,18 +1286,39 @@ function getProfilerSnapshot() {
     },
     commandHistory: perfStats.commandHistory,
     terminalLines: terminalMirrorLines.slice(-120),
-    registeredUsers: registrationService.getRegisteredCount(),
+    registeredUsers: registeredUsers.length,
+    registeredUsersList: registeredUsers,
     knownGroups: Array.from(knownGroupIds).map((groupId) => ({ groupId, groupName: getKnownGroupName(groupId) })),
+    lifetime: {
+      sinceAt: lifetimeStats.sinceAt,
+      bootCount: lifetimeStats.bootCount,
+      reconnects: lifetimeStats.reconnects,
+      messagesReceived: lifetimeStats.messagesReceived,
+      messagesErrored: lifetimeStats.messagesErrored,
+      ignoredNoMessage: lifetimeStats.ignoredNoMessage,
+      ignoredFromMe: lifetimeStats.ignoredFromMe,
+      commandsExecuted: lifetimeStats.commandsExecuted,
+      authUptimeMs: lifetimeAuthUptimeMs,
+      lastSeenAt: lifetimeStats.lastSeenAt,
+    },
+  }
+}
+
+function getDashboardPayload() {
+  const authReady = Boolean(perfStats.authenticatedAt)
+  return {
+    authReady,
+    qrImage: qrImage || null,
+    snapshot: authReady ? getProfilerSnapshot() : null,
   }
 }
 
 app.get("/profiler-data", (req, res) => {
-  const authReady = Boolean(perfStats.authenticatedAt)
-  res.json({
-    authReady,
-    qrImage: qrImage || null,
-    snapshot: authReady ? getProfilerSnapshot() : null,
-  })
+  res.json(getDashboardPayload())
+})
+
+app.get("/dashboard-data", (req, res) => {
+  res.json(getDashboardPayload())
 })
 
 app.get("/download-data", async (req, res) => {
@@ -1172,56 +1351,6 @@ app.get("/download-data", async (req, res) => {
 })
 
 app.get("/", (req,res)=>{
-  const authReady = Boolean(perfStats.authenticatedAt)
-  const qrBlock = qrImage
-    ? `<h2>Escaneie o QR Code</h2><img src="${qrImage}" style="max-width:320px;width:100%;height:auto">`
-    : "<h2>Bot conectado</h2>"
-  const perfBlock = authReady ? renderPerfPanelHtml() : ""
-  const snapshot = authReady ? getProfilerSnapshot() : null
-
-  const commandRows = (snapshot?.commandHistory || []).slice(-10).map((entry) => {
-    const at = formatDateTime(entry?.at)
-    const cmd = escapeHtmlServer(entry?.command || "-")
-    const sender = escapeHtmlServer(entry?.senderName || "-")
-    const group = escapeHtmlServer(entry?.groupName || "-")
-    return `<tr><td style="padding:4px;border-bottom:1px solid #ccc">${at}</td><td style="padding:4px;border-bottom:1px solid #ccc">${cmd}</td><td style="padding:4px;border-bottom:1px solid #ccc">${sender}</td><td style="padding:4px;border-bottom:1px solid #ccc">${group}</td></tr>`
-  }).join("")
-
-  const commandBlock = authReady
-    ? `
-    <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
-      <h3 style="margin:0 0 10px 0">Últimos 10 comandos</h3>
-      <table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:12px">
-        <thead>
-          <tr>
-            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Quando</th>
-            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Comando</th>
-            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Usuário</th>
-            <th style="text-align:left;border-bottom:1px solid #ccc;padding:4px">Grupo</th>
-          </tr>
-        </thead>
-        <tbody>${commandRows || '<tr><td colspan="4" style="padding:6px">Sem comandos registrados.</td></tr>'}</tbody>
-      </table>
-    </section>
-    `
-    : ""
-
-  const terminalLines = (snapshot?.terminalLines || []).map((line) => {
-    const at = formatDateTime(line?.at)
-    const source = escapeHtmlServer(line?.source || "log")
-    const text = escapeHtmlServer(line?.line || "")
-    return `[${at}] ${source}: ${text}`
-  }).join("\n") || "Sem saída capturada ainda."
-
-  const terminalBlock = authReady
-    ? `
-    <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
-      <h3 style="margin:0 0 10px 0">Terminal (somente leitura)</h3>
-      <pre style="max-height:260px;overflow:auto;background:#0d1117;color:#c9d1d9;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap">${terminalLines}</pre>
-    </section>
-    `
-    : ""
-
   const downloadBlock = `
     <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
       <h3 style="margin:0 0 10px 0">Download de dados</h3>
@@ -1230,7 +1359,268 @@ app.get("/", (req,res)=>{
   `
 
   res.send(
-    `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>Vitin Bot</title></head><body style="font-family:Segoe UI,Arial,sans-serif;padding:16px">${qrBlock}${perfBlock}${commandBlock}${terminalBlock}${downloadBlock}</body></html>`
+    `<!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>Vitin Bot</title>
+      </head>
+      <body style="font-family:Segoe UI,Arial,sans-serif;padding:16px">
+        <section style="max-width:980px">
+          <h2 style="margin:0 0 8px 0">Painel Vitin Bot</h2>
+          <p id="polling-status" style="margin:0 0 12px 0;color:#555">Atualizando automaticamente a cada 1000ms.</p>
+        </section>
+
+        <section id="qr-section" style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px;display:none"></section>
+        <section id="perf-section" style="display:none"></section>
+        <section id="users-section" style="display:none"></section>
+        <section id="commands-section" style="display:none"></section>
+        <section id="terminal-section" style="display:none"></section>
+
+        ${downloadBlock}
+
+        <script>
+          const POLLING_MS = 1000
+          const pollingStatusEl = document.getElementById("polling-status")
+          const qrSectionEl = document.getElementById("qr-section")
+          const perfSectionEl = document.getElementById("perf-section")
+          const usersSectionEl = document.getElementById("users-section")
+          const commandsSectionEl = document.getElementById("commands-section")
+          const terminalSectionEl = document.getElementById("terminal-section")
+
+          function escapeHtml(value) {
+            return String(value || "")
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/\\"/g, "&quot;")
+              .replace(/'/g, "&#39;")
+          }
+
+          function formatMs(value) {
+            return Number(value || 0).toFixed(1) + " ms"
+          }
+
+          function formatElapsed(ms) {
+            const totalSec = Math.max(0, Math.floor(Number(ms || 0) / 1000))
+            const h = Math.floor(totalSec / 3600)
+            const m = Math.floor((totalSec % 3600) / 60)
+            const s = totalSec % 60
+            return h + "h " + m + "m " + s + "s"
+          }
+
+          function formatDateTime(value) {
+            if (!value) return "-"
+            const shifted = new Date(Number(value) - (3 * 60 * 60 * 1000))
+            return shifted.toISOString().replace("T", " ").slice(0, 19) + " (UTC-3)"
+          }
+
+          function readPath(obj, path, fallback) {
+            let current = obj
+            for (let i = 0; i < path.length; i++) {
+              if (!current || typeof current !== "object") return fallback
+              current = current[path[i]]
+            }
+            return current === undefined || current === null ? fallback : current
+          }
+
+          function renderMetricRow(label, bucket) {
+            return "<tr>" +
+              "<td style=\\"text-align:left;border-bottom:1px solid #eee;padding:4px\\">" + escapeHtml(label) + "</td>" +
+              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + Number(readPath(bucket, ["count"], 0)) + "</td>" +
+              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + formatMs(readPath(bucket, ["lastMs"], 0)) + "</td>" +
+              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + formatMs(readPath(bucket, ["avgMs"], 0)) + "</td>" +
+              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + formatMs(readPath(bucket, ["p95Ms"], 0)) + "</td>" +
+              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + formatMs(readPath(bucket, ["maxMs"], 0)) + "</td>" +
+            "</tr>"
+          }
+
+          function renderQr(authReady, qrImage) {
+            if (!authReady && qrImage) {
+              qrSectionEl.style.display = "block"
+              qrSectionEl.innerHTML = "<h3 style=\\"margin:0 0 10px 0\\">Escaneie o QR Code</h3>" +
+                "<img src=\\"" + qrImage + "\\" style=\\"max-width:320px;width:100%;height:auto\\">"
+              return
+            }
+            qrSectionEl.style.display = "block"
+            qrSectionEl.innerHTML = "<h3 style=\\"margin:0\\">" + (authReady ? "Bot conectado" : "Aguardando autenticação") + "</h3>"
+          }
+
+          function renderPerf(snapshot) {
+            if (!snapshot) {
+              perfSectionEl.style.display = "none"
+              return
+            }
+
+            const stageRows = (readPath(snapshot, ["metrics", "stages"], []) || []).map((stage) =>
+              renderMetricRow("stage:" + stage.name, stage)
+            ).join("")
+
+            perfSectionEl.style.display = "block"
+            perfSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">Performance</h3>" +
+                "<p style=\\"margin:4px 0\\">Estado da conexão: <b>" + escapeHtml(snapshot.connectionState) + "</b></p>" +
+                "<p style=\"margin:4px 0\">Uptime do bot (sessão atual): <b>" + formatElapsed(snapshot.uptimeMs) + "</b> | Desde autenticação atual: <b>" + formatElapsed(snapshot.authUptimeMs) + "</b></p>" +
+                "<p style=\\"margin:4px 0\\">Autenticado em: <b>" + formatDateTime(snapshot.authenticatedAt) + "</b> | Conectado em: <b>" + formatDateTime(snapshot.connectedAt) + "</b></p>" +
+                "<p style=\\"margin:4px 0\\">Mensagens recebidas: <b>" + Number(snapshot.messagesReceived || 0) + "</b> | Erros: <b>" + Number(snapshot.messagesErrored || 0) + "</b> | Ignoradas (sem conteúdo): <b>" + Number(snapshot.ignoredNoMessage || 0) + "</b> | Ignoradas (fromMe): <b>" + Number(snapshot.ignoredFromMe || 0) + "</b></p>" +
+                "<p style=\"margin:4px 0\">Lifetime desde <b>" + formatDateTime(readPath(snapshot, [\"lifetime\", \"sinceAt\"], 0)) + "</b>: mensagens <b>" + Number(readPath(snapshot, [\"lifetime\", \"messagesReceived\"], 0)) + "</b>, erros <b>" + Number(readPath(snapshot, [\"lifetime\", \"messagesErrored\"], 0)) + "</b>, ignoradas sem conteúdo <b>" + Number(readPath(snapshot, [\"lifetime\", \"ignoredNoMessage\"], 0)) + "</b>, ignoradas fromMe <b>" + Number(readPath(snapshot, [\"lifetime\", \"ignoredFromMe\"], 0)) + "</b>, comandos <b>" + Number(readPath(snapshot, [\"lifetime\", \"commandsExecuted\"], 0)) + "</b>, reconexões <b>" + Number(readPath(snapshot, [\"lifetime\", \"reconnects\"], 0)) + "</b>, uptime autenticado <b>" + formatElapsed(readPath(snapshot, [\"lifetime\", \"authUptimeMs\"], 0)) + "</b>, boots <b>" + Number(readPath(snapshot, [\"lifetime\", \"bootCount\"], 0)) + "</b></p>" +
+                "<p style=\\"margin:4px 0\\">Último comando: <b>" + escapeHtml(snapshot.lastCommand || "-") + "</b> | Último processamento: <b>" + formatDateTime(snapshot.lastProcessedAt) + "</b> | Reconexões: <b>" + Number(snapshot.reconnects || 0) + "</b></p>" +
+                "<p style=\\"margin:4px 0\\">Memória: heap <b>" + Number(readPath(snapshot, ["memory", "heapUsed"], 0)) + " MB</b> | rss <b>" + Number(readPath(snapshot, ["memory", "rss"], 0)) + " MB</b> | Registrados <b>" + Number(snapshot.registeredUsers || 0) + "</b></p>" +
+                "<table style=\\"width:100%;margin-top:12px;border-collapse:collapse;font-family:monospace;font-size:12px\\">" +
+                  "<thead>" +
+                    "<tr>" +
+                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Métrica</th>" +
+                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Count</th>" +
+                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Last</th>" +
+                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Avg</th>" +
+                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">P95</th>" +
+                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Max</th>" +
+                    "</tr>" +
+                  "</thead>" +
+                  "<tbody>" +
+                    renderMetricRow("message.processing", readPath(snapshot, ["metrics", "processing"], {})) +
+                    renderMetricRow("message.queueDelay", readPath(snapshot, ["metrics", "queueDelay"], {})) +
+                    renderMetricRow("sock.sendMessage", readPath(snapshot, ["metrics", "sendMessage"], {})) +
+                    renderMetricRow("sock.groupMetadata", readPath(snapshot, ["metrics", "groupMetadata"], {})) +
+                    renderMetricRow("eventLoop.lag", readPath(snapshot, ["metrics", "eventLoopLag"], {})) +
+                    stageRows +
+                  "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderRegisteredUsers(snapshot) {
+            if (!snapshot) {
+              usersSectionEl.style.display = "none"
+              return
+            }
+
+            const users = Array.isArray(snapshot.registeredUsersList) ? snapshot.registeredUsersList : []
+            const rows = users.map((entry) => {
+              const command = readPath(entry, ["lastCommand", "command"], "-")
+              const commandAt = formatDateTime(readPath(entry, ["lastCommand", "at"], 0))
+              return "<tr>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["waNumber"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["waName"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["nickname"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc;text-align:right\\">" + Number(readPath(entry, ["coins"], 0)).toLocaleString("pt-BR") + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(command) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(commandAt) + "</td>" +
+              "</tr>"
+            }).join("")
+
+            usersSectionEl.style.display = "block"
+            usersSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;max-width:980px\\">" +
+                "<details open style=\\"padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa\\">" +
+                  "<summary style=\\"cursor:pointer;font-weight:700\\">Usuários registrados (" + users.length + ")</summary>" +
+                  "<div style=\\"margin-top:10px;overflow:auto\\">" +
+                    "<table style=\\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\\">" +
+                      "<thead>" +
+                        "<tr>" +
+                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">WhatsApp nº</th>" +
+                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Nome WhatsApp</th>" +
+                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Apelido escolhido</th>" +
+                          "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Coins</th>" +
+                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Último comando</th>" +
+                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Quando</th>" +
+                        "</tr>" +
+                      "</thead>" +
+                      "<tbody>" + (rows || "<tr><td colspan=\\"6\\" style=\\"padding:6px\\">Sem usuários registrados.</td></tr>") + "</tbody>" +
+                    "</table>" +
+                  "</div>" +
+                "</details>" +
+              "</section>"
+          }
+
+          function renderCommands(snapshot) {
+            if (!snapshot) {
+              commandsSectionEl.style.display = "none"
+              return
+            }
+
+            const rows = (snapshot.commandHistory || []).slice(-10).map((entry) =>
+              "<tr>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + formatDateTime(readPath(entry, ["at"], 0)) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["command"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["senderName"], "-")) + "</td>" +
+                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["groupName"], "-")) + "</td>" +
+              "</tr>"
+            ).join("")
+
+            commandsSectionEl.style.display = "block"
+            commandsSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">Últimos 10 comandos</h3>" +
+                "<table style=\\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\\">" +
+                  "<thead>" +
+                    "<tr>" +
+                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Quando</th>" +
+                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Comando</th>" +
+                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Usuário</th>" +
+                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Grupo</th>" +
+                    "</tr>" +
+                  "</thead>" +
+                  "<tbody>" + (rows || "<tr><td colspan=\\"4\\" style=\\"padding:6px\\">Sem comandos registrados.</td></tr>") + "</tbody>" +
+                "</table>" +
+              "</section>"
+          }
+
+          function renderTerminal(snapshot) {
+            if (!snapshot) {
+              terminalSectionEl.style.display = "none"
+              return
+            }
+
+            const terminalText = (snapshot.terminalLines || []).map((line) => {
+              return "[" + formatDateTime(readPath(line, ["at"], 0)) + "] " + readPath(line, ["source"], "log") + ": " + readPath(line, ["line"], "")
+            }).join("\\n") || "Sem saída capturada ainda."
+
+            terminalSectionEl.style.display = "block"
+            terminalSectionEl.innerHTML =
+              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
+                "<h3 style=\\"margin:0 0 10px 0\\">Terminal (somente leitura)</h3>" +
+                "<pre style=\\"max-height:260px;overflow:auto;background:#0d1117;color:#c9d1d9;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap\\">" + escapeHtml(terminalText) + "</pre>" +
+              "</section>"
+          }
+
+          function renderDashboard(payload) {
+            const authReady = Boolean(readPath(payload, ["authReady"], false))
+            const snapshot = readPath(payload, ["snapshot"], null)
+            renderQr(authReady, readPath(payload, ["qrImage"], null))
+            renderPerf(snapshot)
+            renderRegisteredUsers(snapshot)
+            renderCommands(snapshot)
+            renderTerminal(snapshot)
+          }
+
+          let refreshInFlight = false
+          async function refreshDashboard() {
+            if (refreshInFlight) return
+            refreshInFlight = true
+            try {
+              const response = await fetch("/dashboard-data", { cache: "no-store" })
+              if (!response.ok) {
+                throw new Error("HTTP " + response.status)
+              }
+              const payload = await response.json()
+              renderDashboard(payload)
+              pollingStatusEl.textContent = "Atualizando automaticamente a cada 1000ms. Última atualização: " + new Date().toLocaleTimeString("pt-BR")
+            } catch (err) {
+              const errMessage = err && err.message ? err.message : err
+              pollingStatusEl.textContent = "Falha ao atualizar painel: " + String(errMessage)
+            } finally {
+              refreshInFlight = false
+            }
+          }
+
+          refreshDashboard()
+          setInterval(refreshDashboard, POLLING_MS)
+        </script>
+      </body>
+    </html>`
   )
 })
 
@@ -1291,6 +1681,12 @@ async function startBot(){
 
   const originalSendMessage = sock.sendMessage.bind(sock)
   sock.sendMessage = async (...args) => {
+    const messageContent = args[1]
+    if (messageContent && typeof messageContent === "object" && shouldAppendMassMentionHint(messageContent)) {
+      const baseText = String(messageContent.text || "").trimEnd()
+      messageContent.text = `${baseText}\n\n${MASS_MENTION_OPT_OUT_HINT}`
+    }
+
     const startedAt = Date.now()
     try {
       return await originalSendMessage(...args)
@@ -1337,10 +1733,20 @@ async function startBot(){
       if (!perfStats.authenticatedAt) {
         perfStats.authenticatedAt = perfStats.connectedAt
       }
+      if (!lifetimeStats.authSessionStartedAt) {
+        lifetimeStats.authSessionStartedAt = perfStats.connectedAt
+        persistLifetimeStats()
+      }
     }
 
     if(connection === "close"){
       perfStats.reconnects += 1
+      lifetimeStats.reconnects += 1
+      if (lifetimeStats.authSessionStartedAt) {
+        lifetimeStats.authUptimeTotalMs += Math.max(0, Date.now() - lifetimeStats.authSessionStartedAt)
+        lifetimeStats.authSessionStartedAt = 0
+      }
+      persistLifetimeStats()
       const reason = lastDisconnect?.error?.output?.statusCode
       if(reason !== DisconnectReason.loggedOut){
         console.log("Reconectando...")
@@ -1352,6 +1758,8 @@ async function startBot(){
   sock.ev.on("messages.upsert", async ({ messages })=>{
     const processingStartedAt = Date.now()
     perfStats.messagesReceived += 1
+    lifetimeStats.messagesReceived += 1
+    persistLifetimeStats()
 
     const measureStage = async (stageName, task) => {
       const stageStart = Date.now()
@@ -1367,10 +1775,14 @@ async function startBot(){
     const msg = messages[0]
     if(!msg?.message) {
       perfStats.ignoredNoMessage += 1
+      lifetimeStats.ignoredNoMessage += 1
+      persistLifetimeStats()
       return
     }
     if(msg.key.fromMe) {
       perfStats.ignoredFromMe += 1
+      lifetimeStats.ignoredFromMe += 1
+      persistLifetimeStats()
       return
     }
 
@@ -1383,6 +1795,19 @@ async function startBot(){
     const from = msg.key.remoteJid
     const senderRaw = msg.key.participant || msg.key.remoteJid
     const sender = jidNormalizedUser(senderRaw)
+    const senderRegistrationCandidates = [...new Set([
+      senderRaw,
+      msg?.key?.participantPn,
+      msg?.key?.remoteJid,
+      msg?.key?.remoteJidAlt,
+      msg?.message?.extendedTextMessage?.contextInfo?.participant,
+      sender,
+    ]
+      .map((candidate) => registrationService.normalizeUserId(candidate))
+      .filter(Boolean)
+    )]
+    const senderRegisteredId = senderRegistrationCandidates.find((candidate) => registrationService.isRegistered(candidate)) || ""
+    const senderIsRegistered = Boolean(senderRegisteredId)
     const isGroup = from.endsWith("@g.us")
     const isOverrideSender = isOverrideIdentity(sender, from, isGroup)
     const overrideCompat = getOverrideCompatibilityContext()
@@ -1672,12 +2097,12 @@ async function startBot(){
               ...entry,
               index: idx + 1,
             }))
-            pendingEconomyWipeState.phase = "choose-stats-wipe"
+            pendingEconomyWipeState.phase = "choose-wipeeconomy"
             refreshWipeTtl()
             await sock.sendMessage(from, {
               text:
                 "Escopo escolhido: *TOTAL*.\n" +
-                "Deseja limpar tambem stats/registro fora da economia? Responda *S* ou *N*.",
+                "Deseja usar o arg *wipeeconomy* (limpar so dados de economia/stats, mantendo perfil/registro)? Responda *S* ou *N*.",
             })
             return
           }
@@ -1705,12 +2130,41 @@ async function startBot(){
             ...(pendingEconomyWipeState.userSummaries[index - 1] || {}),
             index,
           }))
-          pendingEconomyWipeState.phase = "choose-stats-wipe"
+          pendingEconomyWipeState.phase = "choose-wipeeconomy"
           refreshWipeTtl()
           await sock.sendMessage(from, {
             text:
               `Selecionados: *${pendingEconomyWipeState.selectedEntries.length}* perfil(is).\n` +
-              "Deseja limpar tambem stats/registro fora da economia? Responda *S* ou *N*.",
+              "Deseja usar o arg *wipeeconomy* (limpar so dados de economia/stats, mantendo perfil/registro)? Responda *S* ou *N*.",
+          })
+          return
+        }
+
+        if (pendingEconomyWipeState.phase === "choose-wipeeconomy") {
+          if (!isYesToken(text) && !isNoToken(text)) {
+            await sock.sendMessage(from, {
+              text: "Responda apenas com *S* ou *N* para o arg wipeeconomy.",
+            })
+            return
+          }
+
+          pendingEconomyWipeState.wipeEconomyDataOnly = isYesToken(text)
+
+          if (pendingEconomyWipeState.wipeEconomyDataOnly) {
+            pendingEconomyWipeState.wipeStats = true
+            pendingEconomyWipeState.phase = "confirm"
+            pendingEconomyWipeState.previewText = buildEconomyWipePreviewText(pendingEconomyWipeState)
+            refreshWipeTtl()
+            await sock.sendMessage(from, {
+              text: pendingEconomyWipeState.previewText,
+            })
+            return
+          }
+
+          pendingEconomyWipeState.phase = "choose-stats-wipe"
+          refreshWipeTtl()
+          await sock.sendMessage(from, {
+            text: "Deseja limpar tambem stats/registro fora da economia? Responda *S* ou *N*.",
           })
           return
         }
@@ -1748,9 +2202,11 @@ async function startBot(){
             ? pendingEconomyWipeState.selectedEntries
             : []
           const wipeStats = Boolean(pendingEconomyWipeState.wipeStats)
+          const wipeEconomyDataOnly = Boolean(pendingEconomyWipeState.wipeEconomyDataOnly)
           const mode = pendingEconomyWipeState.mode === "total" ? "total" : "profiles"
           pendingEconomyWipeBySender.delete(sender)
 
+          let dataWiped = 0
           let profilesDeleted = 0
           let profilesNotFound = 0
           let registrationRemoved = 0
@@ -1763,21 +2219,38 @@ async function startBot(){
             const userId = entry?.userId
             if (!userId) continue
 
-            const deleted = economyService.deleteUserProfile(userId)
-            if (deleted) {
-              profilesDeleted += 1
-            } else {
-              profilesNotFound += 1
-            }
+            let deleted = false
+            let linkedCleanup = { teamsLeft: 0, teamsDeleted: 0, tradesCancelled: 0 }
 
-            const linkedCleanup = cleanupUserLinkedState(storage, userId)
-            teamsLeftTotal += Number(linkedCleanup?.teamsLeft || 0)
-            teamsDeletedTotal += Number(linkedCleanup?.teamsDeleted || 0)
-            tradesCancelledTotal += Number(linkedCleanup?.tradesCancelled || 0)
+            if (wipeEconomyDataOnly) {
+              const wiped = typeof economyService.wipeUserData === "function"
+                ? economyService.wipeUserData(userId)
+                : false
+              if (wiped) {
+                dataWiped += 1
+                deleted = true
+              } else {
+                profilesNotFound += 1
+              }
+            } else {
+              deleted = economyService.deleteUserProfile(userId)
+              if (deleted) {
+                profilesDeleted += 1
+              } else {
+                profilesNotFound += 1
+              }
+
+              linkedCleanup = cleanupUserLinkedState(storage, userId)
+              teamsLeftTotal += Number(linkedCleanup?.teamsLeft || 0)
+              teamsDeletedTotal += Number(linkedCleanup?.teamsDeleted || 0)
+              tradesCancelledTotal += Number(linkedCleanup?.tradesCancelled || 0)
+            }
 
             let statsMetrics = null
             if (wipeStats) {
-              statsMetrics = cleanupUserStateArtifacts(userId)
+              statsMetrics = cleanupUserStateArtifacts(userId, {
+                skipUnregister: wipeEconomyDataOnly,
+              })
               if (statsMetrics?.registrationRemoved) registrationRemoved += 1
               const removedCount =
                 Number(statsMetrics?.mutedRemoved || 0) +
@@ -1791,6 +2264,7 @@ async function startBot(){
 
             telemetry.incrementCounter("economy.wipe.profile", 1, {
               deleted: deleted ? "yes" : "no",
+              wipeEconomyDataOnly: wipeEconomyDataOnly ? "yes" : "no",
               statsWipe: wipeStats ? "yes" : "no",
             })
             telemetry.appendEvent("economy.wipe.profile", {
@@ -1800,6 +2274,7 @@ async function startBot(){
               deleted,
               mode,
               linkedCleanup,
+              wipeEconomyDataOnly,
               statsWipe: wipeStats,
               statsMetrics,
               redacted: true,
@@ -1808,6 +2283,7 @@ async function startBot(){
 
           telemetry.incrementCounter("economy.wipe.batch", 1, {
             mode,
+            wipeEconomyDataOnly: wipeEconomyDataOnly ? "yes" : "no",
             statsWipe: wipeStats ? "yes" : "no",
           })
           telemetry.appendEvent("economy.wipe.batch", {
@@ -1815,6 +2291,7 @@ async function startBot(){
             groupId: from,
             mode,
             selectedCount: selectedEntries.length,
+            dataWiped,
             profilesDeleted,
             profilesNotFound,
             registrationRemoved,
@@ -1822,6 +2299,7 @@ async function startBot(){
             teamsDeleted: teamsDeletedTotal,
             tradesCancelled: tradesCancelledTotal,
             statsArtifactsRemoved,
+            wipeEconomyDataOnly,
             statsWipe: wipeStats,
             redacted: true,
           })
@@ -1831,8 +2309,11 @@ async function startBot(){
               `Wipe concluido.\n` +
               `Modo: *${mode === "total" ? "TOTAL" : "PERFIS"}*\n` +
               `Selecionados: *${selectedEntries.length}*\n` +
-              `Perfis apagados: *${profilesDeleted}* | Nao encontrados: *${profilesNotFound}*\n` +
-              `Cleanup times: saidas *${teamsLeftTotal}* | times removidos *${teamsDeletedTotal}* | trades canceladas *${tradesCancelledTotal}*\n` +
+              `Arg wipeeconomy: *${wipeEconomyDataOnly ? "SIM" : "NAO"}*\n` +
+              (wipeEconomyDataOnly
+                ? `Dados de economia resetados: *${dataWiped}* | Nao encontrados: *${profilesNotFound}*\n`
+                : (`Perfis apagados: *${profilesDeleted}* | Nao encontrados: *${profilesNotFound}*\n` +
+                  `Cleanup times: saidas *${teamsLeftTotal}* | times removidos *${teamsDeletedTotal}* | trades canceladas *${tradesCancelledTotal}*\n`)) +
               `Stats wipe: *${wipeStats ? "SIM" : "NAO"}*` +
               (wipeStats
                 ? `\nRegistros removidos: *${registrationRemoved}* | artefatos de stats removidos: *${statsArtifactsRemoved}*`
@@ -1896,6 +2377,7 @@ async function startBot(){
         phase: "choose-scope",
         mode: null,
         wipeStats: false,
+        wipeEconomyDataOnly: false,
         userSummaries,
         selectedEntries: [],
         createdAt: Date.now(),
@@ -1911,7 +2393,8 @@ async function startBot(){
         text:
           "Escolha o escopo do wipe:\n" +
           "- Responda *TOTAL* para apagar todos os perfis listados.\n" +
-          "- Responda *PERFIS* para selecionar por indice/faixa/all.\n\n" +
+          "- Responda *PERFIS* para selecionar por indice/faixa/all.\n" +
+          "- Depois da seleção, o bot pergunta o arg *wipeeconomy* (somente dados, mantendo perfil/registro).\n\n" +
           "A sessao expira em 5 minutos. Envie *cancelar* para abortar.",
       })
       return
@@ -1972,11 +2455,20 @@ async function startBot(){
       }
 
       const profiles = getOverrideProfiles()
-      const names = Object.keys(profiles?.positivo || {})
+      const names = getOrderedOverrideProfileNames(profiles)
       const targetName = names[indexRaw - 1]
       if (!targetName) {
         await sock.sendMessage(from, {
           text: "Índice inválido.\n\n" + buildOverrideToggleStatusText(),
+        })
+        return
+      }
+
+      if (targetName === HARDCODED_OVERRIDE_OWNER) {
+        await sock.sendMessage(from, {
+          text:
+            `O perfil *${HARDCODED_OVERRIDE_OWNER}* é fixo e não pode ser desligado.\n\n` +
+            buildOverrideToggleStatusText(),
         })
         return
       }
@@ -1991,6 +2483,103 @@ async function startBot(){
           `Override de *${targetName}* agora está *${statuses.positivo[targetName] ? "ON" : "OFF"}*.\n\n` +
           buildOverrideToggleStatusText(),
       })
+      return
+    }
+
+    if (cmdName === prefix + "whois") {
+      if (isGroup) {
+        await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
+        return
+      }
+      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) return
+
+      const nicknameQuery = String(cmdParts.slice(1).join(" ") || "").trim()
+      if (!nicknameQuery) {
+        await sock.sendMessage(from, { text: `Use: ${prefix}whois <apelido>` })
+        return
+      }
+
+      const matches = typeof economyService.findUsersByPublicLabel === "function"
+        ? economyService.findUsersByPublicLabel(nicknameQuery)
+        : []
+
+      if (!matches.length) {
+        await sock.sendMessage(from, {
+          text: `Nenhum usuário com apelido exato *${nicknameQuery}* foi encontrado.`,
+        })
+        return
+      }
+
+      const lines = matches.map((entry, index) => {
+        // Extract phone number from userId (format: phone@s.whatsapp.net or phone:something@s.whatsapp.net)
+        const userId = String(entry?.userId || "").trim().toLowerCase()
+        const phoneOrJid = userId.split(":")[0].split("@")[0] || userId
+        const phoneDigitsOnly = phoneOrJid.replace(/\D+/g, "")
+        const displayPhone = phoneDigitsOnly || phoneOrJid
+        return `${index + 1}. ${entry.publicLabel} -> *${displayPhone}*`
+      })
+
+      await sock.sendMessage(from, {
+        text:
+          `Resultado do whois para *${nicknameQuery}* (${matches.length}):\n` +
+          lines.join("\n"),
+      })
+      return
+    }
+
+    if (cmdName === prefix + "find") {
+      if (!isGroup) {
+        await sock.sendMessage(from, { text: "Use !find apenas em grupos." })
+        return
+      }
+      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) return
+
+      const jidQuery = String(cmdParts.slice(1).join(" ") || "").trim()
+      if (!jidQuery) {
+        await sock.sendMessage(from, { text: `Use: ${prefix}find <jid ou numero>` })
+        return
+      }
+
+      // Normalize the query to a proper JID format
+      let searchJid = jidQuery.toLowerCase().trim()
+      if (!searchJid.includes("@")) {
+        // If it's just a phone number, add the WhatsApp format
+        const digitsOnly = searchJid.replace(/\D+/g, "")
+        if (digitsOnly) {
+          searchJid = digitsOnly + "@s.whatsapp.net"
+        }
+      }
+
+      try {
+        const groupMetadata = await sock.groupMetadata(from)
+        const participants = Array.isArray(groupMetadata?.participants) ? groupMetadata.participants : []
+        
+        // Find if the user is in the group
+        const userInGroup = participants.find(p => {
+          const normalizedParticipant = jidNormalizedUser(p?.id || "")
+          const normalizedSearch = jidNormalizedUser(searchJid)
+          return normalizedParticipant === normalizedSearch
+        })
+
+        if (userInGroup) {
+          const userJid = jidNormalizedUser(userInGroup.id)
+          const userName = userNameCache[userJid] || userJid.split("@")[0]
+          await sock.sendMessage(from, {
+            text: `✅ Usuário encontrado neste grupo: *${userName}*`,
+            mentions: [userJid],
+          })
+        } else {
+          const phoneDisplay = searchJid.split("@")[0]
+          await sock.sendMessage(from, {
+            text: `❌ Nenhum usuário com JID ou número *${phoneDisplay}* foi encontrado neste grupo.`,
+          })
+        }
+      } catch (err) {
+        console.error("Erro ao executar !find", err)
+        await sock.sendMessage(from, {
+          text: "❌ Erro ao buscar usuário no grupo.",
+        })
+      }
       return
     }
 
@@ -2187,11 +2776,22 @@ async function startBot(){
         })
         return
       }
-      const reg = registrationService.registerUser(sender, { profileName: senderProfileName })
+      if (senderIsRegistered) {
+        await sock.sendMessage(from, { text: "Você já está registrado no sistema." })
+        return
+      }
+
+      const registerBaseId = senderRegistrationCandidates[0] || sender
+      const reg = registrationService.registerUser(registerBaseId, { profileName: senderProfileName })
       if (!reg.ok && reg.reason === "already-registered") {
         await sock.sendMessage(from, { text: "Você já está registrado no sistema." })
         return
       }
+
+      if (reg?.userId && typeof economyService?.setMentionOptIn === "function") {
+        economyService.setMentionOptIn(reg.userId, true)
+      }
+
       await sock.sendMessage(from, {
         text: reg.migratedEconomy
           ? "✅ Registro concluído. Perfil na economia anterior detectado e portado para o novo sistema."
@@ -2207,7 +2807,44 @@ async function startBot(){
         })
         return
       }
-      const unreg = registrationService.unregisterUser(sender)
+      const unregisterAction = String(cmdArg1 || "").trim().toLowerCase()
+      const pendingUnregister = pendingUnregisterBySender.get(sender)
+      const now = Date.now()
+
+      if (pendingUnregister && pendingUnregister.expiresAt <= now) {
+        pendingUnregisterBySender.delete(sender)
+      }
+
+      if (unregisterAction === "cancelar") {
+        pendingUnregisterBySender.delete(sender)
+        await sock.sendMessage(from, {
+          text: "✅ Solicitação de unregister cancelada.",
+        })
+        return
+      }
+
+      if (unregisterAction !== "confirmar") {
+        pendingUnregisterBySender.set(sender, {
+          expiresAt: now + (2 * 60 * 1000),
+        })
+        await sock.sendMessage(from, {
+          text:
+            `⚠️ Confirme para remover seu registro com *${prefix}unregister confirmar* em até 2 minutos.\n` +
+            `Para abortar, use *${prefix}unregister cancelar*.\n` +
+            `Obs: Isso também irá apagar seus dados de economia, junto com suas estatísticas.`,
+        })
+        return
+      }
+
+      if (!pendingUnregisterBySender.has(sender)) {
+        await sock.sendMessage(from, {
+          text: `Confirmação não iniciada. Use *${prefix}unregister* e depois *${prefix}unregister confirmar*.`,
+        })
+        return
+      }
+
+      pendingUnregisterBySender.delete(sender)
+      const unreg = registrationService.unregisterUser(senderRegisteredId || sender)
       if (!unreg.ok) {
         await sock.sendMessage(from, { text: "Você não está registrado no sistema." })
         return
@@ -2251,7 +2888,7 @@ async function startBot(){
       return
     }
 
-    if (isCommand && isEconomyCommandName(cmdName, cmd) && !registrationService.isRegistered(sender)) {
+    if (isCommand && isEconomyCommandName(cmdName, cmd) && !senderIsRegistered) {
       await sock.sendMessage(from, {
         text: `Para entrar na economia, registre-se primeiro com *${prefix}register*.`,
       })
@@ -2333,6 +2970,7 @@ async function startBot(){
     if (isCommand) {
       addCommandHistory({
         command: cmd,
+        senderId: sender,
         senderName: getKnownUserName(sender),
         groupName: isGroup ? getKnownGroupName(from) : "DM",
       })
@@ -2341,39 +2979,36 @@ async function startBot(){
     // =========================
     // ESCOLHA PENDENTE DE PUNIÇÃO
     // =========================
-    if (botIsAdmin || !isGroup) {
-      const handledPendingPunishment = await measureStage("pendingPunishment", async () =>
-        handlePendingPunishmentChoice({
-          sock,
-          from,
-          sender,
-          text,
-          mentioned,
-          isGroup,
-          senderIsAdmin: senderIsNativeAdmin,
-          isCommand,
-        })
-      )
-      if (handledPendingPunishment) return
-    }
+    const handledPendingPunishment = await measureStage("pendingPunishment", async () =>
+      handlePendingPunishmentChoice({
+        sock,
+        from,
+        sender,
+        text,
+        mentioned,
+        isGroup,
+        senderIsAdmin: senderIsNativeAdmin,
+        isCommand,
+      })
+    )
+    if (handledPendingPunishment) return
 
     // =========================
     // APLICAÇÃO DE PUNIÇÃO ATIVA
     // =========================
-    if (botIsAdmin || !isGroup) {
-      const punishedMessageDeleted = await measureStage("punishmentEnforcement", async () =>
-        handlePunishmentEnforcement(
-          sock,
-          msg,
-          from,
-          sender,
-          text,
-          isGroup,
-          senderIsNativeAdmin && isCommand
-        )
+    const punishedMessageDeleted = await measureStage("punishmentEnforcement", async () =>
+      handlePunishmentEnforcement(
+        sock,
+        msg,
+        from,
+        sender,
+        text,
+        isGroup,
+        senderIsNativeAdmin && isCommand,
+        botIsAdmin
       )
-      if (punishedMessageDeleted) return
-    }
+    )
+    if (punishedMessageDeleted) return
 
     if (cmd === prefix + "resenha"){
       if (!isGroup) {
@@ -2418,15 +3053,19 @@ async function startBot(){
         applyPunishment,
         clearPendingPunishment,
         minPunishmentBet: 4,
-        rewardWinner: async (winnerId, rewardMultiplier = 1) => {
+        rewardWinner: async (winnerId, rewardMultiplier = 1, wagerMultiplier = 2) => {
         const safeMultiplier = Number.isFinite(Number(rewardMultiplier)) && Number(rewardMultiplier) > 0
           ? Math.floor(Number(rewardMultiplier))
           : 1
-        const amount = 25 * safeMultiplier
+        const safeWager = Number.isFinite(Number(wagerMultiplier)) && Number(wagerMultiplier) >= 2
+          ? Math.floor(Number(wagerMultiplier))
+          : 2
+        const baseBuyIn = 25 * safeWager
+        const amount = baseBuyIn + (25 * safeWager * safeMultiplier)
         economyService.creditCoins(winnerId, amount, {
           type: "game-reward",
           details: "Recompensa de Cara ou Coroa",
-          meta: { game: "caraoucoroa" },
+          meta: { game: "caraoucoroa", wagerMultiplier: safeWager, rewardMultiplier: safeMultiplier },
         })
         incrementUserStat(winnerId, "gameCoinWin", 1)
         incrementUserStat(winnerId, "moneyGameWon", amount)
@@ -2438,29 +3077,21 @@ async function startBot(){
           mentions: [winnerId],
         })
       },
-        chargeLoser: async (loserId, lossMultiplier = 1) => {
+        chargeLoser: async (loserId, lossMultiplier = 1, wagerMultiplier = 2) => {
         const safeMultiplier = Number.isFinite(Number(lossMultiplier)) && Number(lossMultiplier) > 0
           ? Math.floor(Number(lossMultiplier))
           : 1
-        const amount = 25 * safeMultiplier
-        const taken = economyService.debitCoinsFlexible(loserId, amount, {
-          type: "game-loss",
-          details: "Derrota em Cara ou Coroa",
-          meta: { game: "caraoucoroa" },
-        })
+        const safeWager = Number.isFinite(Number(wagerMultiplier)) && Number(wagerMultiplier) >= 2
+          ? Math.floor(Number(wagerMultiplier))
+          : 2
         incrementUserStat(loserId, "gameCoinLoss", 1)
         if (safeMultiplier > 1) {
           incrementUserStat(loserId, "gameDobroLoss", 1)
         }
-        if (taken > 0) {
-          incrementUserStat(loserId, "moneyGameLost", taken)
-        }
-        if (taken > 0) {
-          await sock.sendMessage(from, {
-            text: `💸 @${loserId.split("@")[0]} perdeu *${taken}* Epsteincoins (Cara ou Coroa).`,
-            mentions: [loserId],
-          })
-        }
+        await sock.sendMessage(from, {
+          text: `💸 @${loserId.split("@")[0]} perdeu o buy-in de *${25 * safeWager}* Epsteincoins (Cara ou Coroa).`,
+          mentions: [loserId],
+        })
         },
       })
     )
@@ -2627,15 +3258,12 @@ async function startBot(){
 
       if (options?.payoutMode === "lobby-bet-formula") {
         const playerBetByPlayer = options?.playerBetByPlayer || {}
-        const buyInByPlayer = options?.buyInByPlayer || {}
 
         for (const playerId of uniquePlayers) {
           const betRaw = Number.parseInt(String(playerBetByPlayer[playerId] ?? 1), 10)
           const bet = Number.isFinite(betRaw) ? Math.max(1, Math.min(10, betRaw)) : 1
-          const ownBuyInRaw = Number.parseInt(String(buyInByPlayer[playerId] ?? 0), 10)
-          const ownBuyIn = Number.isFinite(ownBuyInRaw) ? Math.max(0, ownBuyInRaw) : 0
 
-          const amount = Math.max(0, safePool - ownBuyIn) * bet
+          const amount = safePool * bet
           if (amount <= 0) continue
 
           economyService.creditCoins(playerId, amount, {
@@ -2644,16 +3272,15 @@ async function startBot(){
             meta: {
               game: gameLabel.toLowerCase(),
               poolAmount: safePool,
-              ownBuyIn,
               playerBet: bet,
-              formula: "(pool-ownBuyIn)*bet",
+              formula: "pool*bet",
             },
           })
           incrementUserStat(playerId, "moneyGameWon", amount)
           await sock.sendMessage(from, {
             text:
               `🏦 @${playerId.split("@")[0]} recebeu *${amount}* Epsteincoins da pool (${gameLabel}).\n` +
-              `Fórmula: (pool ${safePool} - buy-in ${ownBuyIn}) x bet ${bet}.`,
+              `Fórmula: pool ${safePool} x bet ${bet}.`,
             mentions: [playerId],
           })
         }
@@ -2869,7 +3496,7 @@ async function startBot(){
     }
 
     async function startPeriodicGame(gameType, options = {}) {
-      const { triggeredBy = null, automatic = false, reactionParticipants = null } = options
+      const { triggeredBy = null, automatic = false, reactionParticipants = null, comandoParticipants = null } = options
 
       const activePeriodic = getActivePeriodicGame()
       if (activePeriodic) {
@@ -2912,7 +3539,7 @@ async function startBot(){
       if (gameType === "reação") {
         const participants = Array.isArray(reactionParticipants) ? reactionParticipants : []
         const restrictToPlayers = participants.length > 0
-        const state = reação.start(from, participants, { restrictToPlayers })
+        const state = reacaoGame.start(from, participants, { restrictToPlayers })
         storage.setGameState(from, "reaçãoActive", state)
 
         const participantText = restrictToPlayers
@@ -2928,7 +3555,7 @@ async function startBot(){
           const currentState = storage.getGameState(from, "reaçãoActive")
           if (!currentState || currentState.started || currentState.winner) return
 
-          reação.markStarted(currentState)
+          reacaoGame.markStarted(currentState)
           storage.setGameState(from, "reaçãoActive", currentState)
 
           await sock.sendMessage(from, {
@@ -2939,11 +3566,11 @@ async function startBot(){
             const finalState = storage.getGameState(from, "reaçãoActive")
             if (!finalState || finalState.winner) return
 
-            const results = reação.getResults(finalState)
+            const results = reacaoGame.getResults(finalState)
             const resenhaOn = isResenhaModeEnabled()
             const reactionMentions = Array.from(new Set((results.reactions || []).map((r) => r.playerId)))
             await sock.sendMessage(from, {
-              text: reação.formatResults(finalState, results, resenhaOn),
+              text: reacaoGame.formatResults(finalState, results, resenhaOn),
               mentions: reactionMentions,
             })
 
@@ -2960,7 +3587,9 @@ async function startBot(){
       }
 
       if (gameType === "comando") {
-        const state = comando.start(from, triggeredBy)
+        const participants = Array.isArray(comandoParticipants) ? comandoParticipants : []
+        const restrictToPlayers = participants.length > 0
+        const state = comando.start(from, triggeredBy, { players: participants, restrictToPlayers })
         storage.setGameState(from, "comandoActive", state)
         await sock.sendMessage(from, {
           text: "⚠️ O desafio *Comando* vai começar em 10 segundos. Preparem-se para obedecer na hora certa!"
@@ -2978,46 +3607,64 @@ async function startBot(){
             text: comando.formatInstruction(currentState, resenhaOn)
           })
 
-          setTimeout(async () => {
+          let comandoFinalized = false
+          const finalizeComandoRound = async () => {
+            if (comandoFinalized) return
+            comandoFinalized = true
+
             const finalState = storage.getGameState(from, "comandoActive")
-            if (finalState) {
-              const participants = Array.from(new Set((finalState.participants || []).filter(Boolean)))
-              const resenhaOn = isResenhaModeEnabled()
-              const loser = comando.getLoser(finalState)
-              await sock.sendMessage(from, {
-                text: comando.formatResults(finalState, resenhaOn),
-                mentions: loser ? [loser] : [],
-              })
-              if (participants.length <= 1) {
-                if (participants.length === 1) {
-                  const soloPlayer = participants[0]
-                  incrementUserStat(soloPlayer, "gameComandoWin", 1)
-                  await rewardPlayer(soloPlayer, 20, 1, "Comando (solo)")
-                }
-              } else if (loser) {
-                const rewardedPlayers = finalState.instruction?.cmd === "silence"
-                  ? (() => {
-                      const startedAt = Number(finalState.instructionStartedAt) || 0
-                      const endedAt = Date.now()
-                      const participantLastMessageAt = finalState.participantLastMessageAt || {}
-                      return (finalState.participants || []).filter((playerId) => {
-                        if (!playerId || playerId === loser) return false
-                        const lastAt = Number(participantLastMessageAt[playerId]) || 0
-                        return lastAt >= startedAt && lastAt <= endedAt
-                      })
-                    })()
-                  : (finalState.compliers || [])
-                      .map((entry) => entry.playerId)
-                      .filter((playerId) => playerId && playerId !== loser)
-                rewardedPlayers.forEach((playerId) => incrementUserStat(playerId, "gameComandoWin", 1))
-                incrementUserStat(loser, "gameComandoLoss", 1)
+            if (!finalState) return
+
+            const participants = Array.from(new Set((finalState.participants || []).filter(Boolean)))
+            const finalResenhaOn = isResenhaModeEnabled()
+            const loser = comando.getLoser(finalState)
+            await sock.sendMessage(from, {
+              text: comando.formatResults(finalState, finalResenhaOn),
+              mentions: loser ? [loser] : [],
+            })
+
+            if (loser) {
+              const rewardedPlayers = finalState.instruction?.cmd === "silence"
+                ? (() => {
+                    const startedAt = Number(finalState.instructionStartedAt) || 0
+                    const endedAt = Date.now()
+                    const participantLastMessageAt = finalState.participantLastMessageAt || {}
+                    return (finalState.participants || []).filter((playerId) => {
+                      if (!playerId || playerId === loser) return false
+                      const lastAt = Number(participantLastMessageAt[playerId]) || 0
+                      return lastAt >= startedAt && lastAt <= endedAt
+                    })
+                  })()
+                : (finalState.compliers || [])
+                    .map((entry) => entry.playerId)
+                    .filter((playerId) => playerId && playerId !== loser)
+              rewardedPlayers.forEach((playerId) => incrementUserStat(playerId, "gameComandoWin", 1))
+              incrementUserStat(loser, "gameComandoLoss", 1)
+              if (rewardedPlayers.length > 0) {
                 await rewardPlayers(rewardedPlayers, GAME_REWARDS.COMANDO_SUCCESS, 1, "Comando")
-                if (finalState.instruction?.cmd === "silence") {
-                  await applyRandomGamePunishment(loser)
-                }
               }
-              storage.clearGameState(from, "comandoActive")
+              await applyRandomGamePunishment(loser)
             }
+
+            storage.clearGameState(from, "comandoActive")
+          }
+
+          if (currentState.instruction?.cmd === "silence") {
+            const silenceStopwatch = setInterval(async () => {
+              const liveState = storage.getGameState(from, "comandoActive")
+              if (!liveState || comandoFinalized) {
+                clearInterval(silenceStopwatch)
+                return
+              }
+              if (liveState.silenceBreaker) {
+                clearInterval(silenceStopwatch)
+                await finalizeComandoRound()
+              }
+            }, 500)
+          }
+
+          setTimeout(async () => {
+            await finalizeComandoRound()
           }, 20_000)
         }, 10_000)
 
@@ -3025,10 +3672,10 @@ async function startBot(){
       }
 
       if (gameType === "memória") {
-        const state = memória.start(from, triggeredBy)
+        const state = memoriaGame.start(from, triggeredBy)
         storage.setGameState(from, "memóriaActive", state)
         const sequenceMessage = await sock.sendMessage(from, {
-          text: memória.formatSequence(state)
+          text: memoriaGame.formatSequence(state)
         })
 
         setTimeout(async () => {
@@ -3042,7 +3689,7 @@ async function startBot(){
               }
             }
             await sock.sendMessage(from, {
-              text: memória.formatHidden(finalState)
+              text: memoriaGame.formatHidden(finalState)
             })
           }
         }, 5000)
@@ -3122,7 +3769,7 @@ async function startBot(){
 
         sock.sendMessage(groupId, {
           text:
-            `⌛ Lobby *${gameId}* foi fechado por inatividade.\n` +
+            `❌: Lobby *${gameId}* foi fechado por inatividade.\n` +
             `Use *!começar ${gameType}* para abrir um novo lobby.`,
           mentions: players,
         }).catch(() => {})
@@ -3234,9 +3881,9 @@ async function startBot(){
         isCommand,
         storage,
         gameManager,
-        reação,
+        "reação": reacaoGame,
         embaralhado,
-        memória,
+        "memória": memoriaGame,
         comando,
         startPeriodicGame,
         GAME_REWARDS,
@@ -3304,6 +3951,7 @@ async function startBot(){
         isOverrideSender,
         botHasGroupAdminPrivileges: botIsAdmin,
         registrationService,
+        registrationSenderCandidates: senderRegistrationCandidates,
       })
     )
     if (handledEconomyCommand) return
@@ -3405,6 +4053,26 @@ async function startBot(){
     )
     if (handledStreakValue) return
 
+    if (isCommand) {
+      const suggestionResult = getLikelyCommandSuggestions({
+        input: cmd,
+        commandHelp: COMMAND_HELP,
+        prefix,
+        maxSuggestions: 3,
+      })
+      await sock.sendMessage(from, {
+        text: formatUnknownCommandSuggestionText(cmd, suggestionResult),
+      })
+      telemetry.incrementCounter("command.unknown", 1)
+      telemetry.appendEvent("command.unknown", {
+        groupId: isGroup ? from : null,
+        userId: sender,
+        input: cmd,
+        metric: suggestionResult.metric,
+        suggestions: suggestionResult.suggestions.map((entry) => entry.text),
+      })
+      return
+    }
     // =========================
     // AM - PERSONALIDADE DRAMÁTICA
     // =========================
@@ -3419,6 +4087,8 @@ async function startBot(){
 
     } catch (err) {
       perfStats.messagesErrored += 1
+      lifetimeStats.messagesErrored += 1
+      persistLifetimeStats()
       telemetry.incrementCounter("command.error", 1, {
         scope: "messages.upsert",
         scope: "messages.upsert.processing",
@@ -3438,3 +4108,5 @@ async function startBot(){
   })
 }
 startBot()
+
+

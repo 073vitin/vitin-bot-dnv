@@ -33,7 +33,7 @@ npm test
 - routers/moderationRouter.js: comandos de moderação/punições.
 - routers/utilityRouter.js: utilitários e diversão.
 - services/economyService.js: motor de economia persistente (moedas, itens, estatísticas, cooldowns e extrato).
-- sercices/punishmentService.js: seleção, aplicação e validação de punições.
+- services/punishmentService.js: seleção, aplicação e validação de punições.
 - gameManager.js: ciclo de lobbies e gatilhos periódicos.
 - storage.js: cache e persistência de estado para jogos e moderação.
 - services/telemetryService.js: coleta de eventos e métricas para balanceamento e observabilidade (e curiosidade).
@@ -97,6 +97,7 @@ Observações de lobby:
 - O buy-in (quando existir) é cobrado ao iniciar a partida de todos os jogadores no lobby, incluindo o criador.
 - O LobbyID pode ser informado em maiúsculas ou minúsculas para entrar/iniciar.
 
+
 ### Economia
 - !register / !unregister
 - !perfil / !perfil @user / !perfil stats
@@ -109,12 +110,13 @@ Observações de lobby:
 - !missao claim <Q1|Q2|Q3>
 - !extrato
 - !loja
-- !comprar <item|indice> / !comprarpara
+- !comprar <item|id> / !comprarpara
 - !vender
 - !doarcoins / !doaritem
 - !roubar
 - !daily
-- !cassino / !aposta
+- !cassino <valor>
+- !aposta <LobbyID> <1-10|skip>
 - !lootbox <quantidade>
 - !falsificar <tipo 1-13> [severidade] [quantidade] [S|N]
 - !loteria "<titulo>" "<recompensas>" <S|N> <qtdVencedores>
@@ -141,7 +143,7 @@ Observações de economia:
 - Com opt-in = S, a loteria fica aberta por 20 minutos ou até !loteria fechar.
 - Recompensas de !loteria aceitam combinações separadas por |: texto livre, moedas=<valor> e item:<itemID-quantidade>.
 - Missões diárias renovam por dia e concedem XP + moedas ao usar !missao claim.
-- !guia envia no privado um resumo em 2 partes com loops, riscos e estratégia de progressão.
+- !guia envia no privado um guia em 3 seções: rotina de renda, social/itens e dicas com tutorial de progressão.
 - A cada 5 níveis, o jogador recebe recompensas automáticas de progressão (moedas e, em marcos maiores, itens).
 - Times permitem organizar e compartilhar um pool de moedas e itens.
 - !team create cria um novo time (max 1 por usuário).

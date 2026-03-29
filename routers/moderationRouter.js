@@ -62,7 +62,11 @@ async function handleModerationCommands(ctx) {
   const isOverrideSender = isOverrideJid(sender)
   const resolveAdminTarget = () => {
     if (mentioned[0]) return mentioned[0]
-    return senderIsAdmin ? sender : ""
+    const quotedParticipant = jidNormalizedUser(
+      msg?.message?.extendedTextMessage?.contextInfo?.participant || ""
+    )
+    if (quotedParticipant) return quotedParticipant
+    return ""
   }
 
   const expandKnownUserIdentities = (jid = "") => {
@@ -926,6 +930,7 @@ async function handleModerationCommands(ctx) {
 │ !unmute @user
 │ !ban @user
 │ !punições / !punicoes @user
+│ !punicoeslista
 │ !puniçõesclr / !punicoesclr @user
 │ !puniçõesadd / !punicoesadd [@user] <1-13> [severidade]
 │ !filtros

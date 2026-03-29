@@ -201,6 +201,31 @@ function setCouponState(storage, groupId, state) {
   })
 }
 
+function resolveCouponScopeByCode(storage, codeRaw = "") {
+  const code = String(codeRaw || "").trim().toUpperCase()
+  if (!code) return null
+  const cache = typeof storage?.getCache === "function" ? storage.getCache() : null
+  const gameStates = cache?.gameStates && typeof cache.gameStates === "object"
+    ? cache.gameStates
+    : {}
+  const groupIds = Object.keys(gameStates)
+    .filter((groupId) => groupId && groupId !== "__system__")
+    .sort((a, b) => a.localeCompare(b))
+
+  for (const groupId of groupIds) {
+    const state = getCouponState(storage, groupId)
+    const coupon = state?.codes?.[code]
+    if (coupon) {
+      return {
+        groupId,
+        state,
+        coupon,
+      }
+    }
+  }
+  return null
+}
+
 function setTradeState(storage, groupId, nextState) {
   if (typeof storage?.setGameState !== "function") return
   storage.setGameState(groupId, TRADE_STATE_KEY, {
@@ -252,12 +277,23 @@ function parseTradeOffer(tokens = [], economyService, limits) {
   return { ok: true, offer: { coins, items } }
 }
 
-function formatTradeOffer(offer = {}) {
+function formatItemWithId(economyService, itemKey = "") {
+  const key = String(itemKey || "").trim()
+  if (!key) return "Item desconhecido"
+  const itemDef = typeof economyService?.getItemDefinition === "function"
+    ? economyService.getItemDefinition(key)
+    : null
+  const resolvedId = String(itemDef?.key || key)
+  const resolvedName = String(itemDef?.name || key)
+  return `${resolvedName} [ID ${resolvedId}]`
+}
+
+function formatTradeOffer(offer = {}, economyService) {
   const coins = Math.max(0, Math.floor(Number(offer.coins) || 0))
   const items = offer.items && typeof offer.items === "object" ? offer.items : {}
   const itemParts = Object.entries(items)
     .filter(([, qty]) => Number(qty) > 0)
-    .map(([key, qty]) => `${key}:${qty}`)
+    .map(([key, qty]) => `${formatItemWithId(economyService, key)}:${qty}`)
   const itemsText = itemParts.length > 0 ? itemParts.join(", ") : "nenhum item"
   return `${coins} ${CURRENCY_LABEL} | ${itemsText}`
 }
@@ -383,6 +419,20 @@ function formatQuestProgressLine(quest = {}) {
   )
 }
 
+function getMsUntilNextLocalMidnight(nowMs = Date.now()) {
+  const now = new Date(Number(nowMs) || Date.now())
+  const next = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + 1,
+    0,
+    0,
+    0,
+    0
+  )
+  return Math.max(0, next.getTime() - now.getTime())
+}
+
 function grantCommandXp(economyService, userId, xpAmount, source, meta = {}) {
   const safeXp = Math.max(0, Math.floor(Number(xpAmount) || 0))
   if (safeXp <= 0) return { ok: false, granted: 0 }
@@ -443,7 +493,7 @@ async function handleLevel100Milestone(sock, userId, xpResult) {
   }
 }
 
-function buildXpRewardText(xpResult, xpAmount) {
+function buildXpRewardText(xpResult, xpAmount, economyService = null) {
   const granted = Math.max(0, Math.floor(Number(xpAmount) || 0))
   if (!granted) return ""
   const levelUps = Math.max(0, Math.floor(Number(xpResult?.levelsGained) || 0))
@@ -458,7 +508,7 @@ function buildXpRewardText(xpResult, xpAmount) {
         const itemKey = String(entry?.key || "").trim()
         const itemQty = Math.max(0, Math.floor(Number(entry?.quantity) || 0))
         if (!itemKey || itemQty <= 0) return ""
-        return `${itemQty}x ${itemKey}`
+        return `${itemQty}x ${formatItemWithId(economyService, itemKey)}`
       })
       .filter(Boolean)
     const itemText = itemSegments.length > 0 ? ` + ${itemSegments.join(", ")}` : ""
@@ -562,6 +612,7 @@ async function handleEconomyCommands(ctx) {
     raffleRevealDelayMs,
     raffleOptInWindowMs,
     registrationService,
+    registrationSenderCandidates,
   } = ctx
 
   const normalizedCmdName = String(cmdName || "").trim().toLowerCase()
@@ -587,8 +638,9 @@ async function handleEconomyCommands(ctx) {
     `${commandPrefix}roubar`,
     `${commandPrefix}daily`,
     `${commandPrefix}carepackage`,
+    `${commandPrefix}cestabásica`,
+    `${commandPrefix}cestabasica`,
     `${commandPrefix}cassino`,
-    `${commandPrefix}aposta`,
     `${commandPrefix}lootbox`,
     `${commandPrefix}falsificar`,
     `${commandPrefix}usaritem`,
@@ -599,12 +651,15 @@ async function handleEconomyCommands(ctx) {
     `${commandPrefix}removecoins`,
     `${commandPrefix}additem`,
     `${commandPrefix}removeitem`,
+    `${commandPrefix}escambo`,
     `${commandPrefix}trade`,
-    `${commandPrefix}team`,
+    `${commandPrefix}troca`,
     `${commandPrefix}time`,
     `${commandPrefix}cupom`,
     `${commandPrefix}loteria`,
-    `${commandPrefix}deletarconta ou ${commandPrefix}deleteconta`
+    `${commandPrefix}item`,
+    `${commandPrefix}deletarconta`,
+    `${commandPrefix}deleteconta`,
   ].map((entry) => String(entry || "").toLowerCase()))
   const isEconomyCommandInvocation = economyCommandNames.has(normalizedCmdName)
 
@@ -619,70 +674,126 @@ async function handleEconomyCommands(ctx) {
       maxForgeQuantity: 1_000,
     }
 
-  const applyMentionPolicy = (userIds = []) => {
-    const unique = [...new Set((userIds || []).filter(Boolean))]
-    return unique.filter((userId) => {
-      const isRegistered = typeof registrationService?.isRegistered === "function"
-        ? registrationService.isRegistered(userId)
-        : true
-      if (!isRegistered) return false
-      if (typeof economyService.isMentionOptIn !== "function") return true
-      return economyService.isMentionOptIn(userId)
-    })
-  }
+  const normalizedSenderRegistrationCandidates = [...new Set(
+    (Array.isArray(registrationSenderCandidates) ? registrationSenderCandidates : [sender])
+      .map((candidate) => {
+        if (typeof registrationService?.normalizeUserId === "function") {
+          return registrationService.normalizeUserId(candidate)
+        }
+        return String(candidate || "").trim().toLowerCase()
+      })
+      .filter(Boolean)
+  )]
 
-  const hasPublicVisibility = (userId = "") => {
-    const isRegistered = typeof registrationService?.isRegistered === "function"
-      ? registrationService.isRegistered(userId)
-      : true
-    if (!isRegistered) return false
-
-    const mentionOptIn = typeof economyService.isMentionOptIn === "function"
-      ? economyService.isMentionOptIn(userId)
-      : true
-    const profile = typeof economyService.getProfile === "function"
-      ? economyService.getProfile(userId)
-      : null
-    const customLabel = String(profile?.preferences?.publicLabel || "").trim()
-    return Boolean(mentionOptIn || customLabel)
-  }
-
-  const getPublicRankingLabel = (userId = "") => {
-    const profile = typeof economyService.getProfile === "function"
-      ? economyService.getProfile(userId)
-      : null
-    const customLabel = String(profile?.preferences?.publicLabel || "").trim()
-    if (customLabel) return customLabel
-
-    const mentionOptIn = typeof economyService.isMentionOptIn === "function"
-      ? economyService.isMentionOptIn(userId)
-      : true
-    if (mentionOptIn) {
-      return `@${String(userId || "").split("@")[0]}`
+  const resolveRegisteredSenderId = () => {
+    if (typeof registrationService?.isRegistered !== "function") return sender
+    for (const candidate of normalizedSenderRegistrationCandidates) {
+      if (registrationService.isRegistered(candidate)) return candidate
     }
-
     return ""
   }
 
-  if (cmdName === prefix + "mentions") {
+  const registeredSenderId = resolveRegisteredSenderId()
+  const mentionPreferenceUserId = registeredSenderId || sender
+
+  const normalizeRankingUserId = (userId = "") => {
+    const normalizedByRegistration = typeof registrationService?.normalizeUserId === "function"
+      ? registrationService.normalizeUserId(userId)
+      : ""
+    return normalizedByRegistration || jidNormalizedUser(userId)
+  }
+
+  const getRankingIdentity = (userId = "", options = {}) => {
+    const isRegistered = typeof registrationService?.isRegistered === "function"
+      ? registrationService.isRegistered(userId)
+      : true
+    if (!isRegistered) return { visible: false, label: "", mentionId: null }
+
+    const mentionOptIn = typeof economyService.isMentionOptIn === "function"
+      ? economyService.isMentionOptIn(userId)
+      : true
+
+    const profile = typeof economyService.getProfile === "function"
+      ? economyService.getProfile(userId)
+      : null
+    const publicLabel = String(profile?.preferences?.publicLabel || "").trim()
+    const registeredEntry = typeof registrationService?.getRegisteredEntry === "function"
+      ? registrationService.getRegisteredEntry(userId)
+      : null
+    const knownName = String(registeredEntry?.lastKnownName || "").trim()
+    const stableLabel = typeof economyService.getStablePublicLabel === "function"
+      ? economyService.getStablePublicLabel(userId)
+      : (String(userId || "").split("@")[0] || "Jogador")
+    const publicIdentityLabel = publicLabel || knownName || stableLabel
+    const requirePublicIdentity = Boolean(options?.requirePublicIdentity)
+
+    const mentionJidByNormalized = options?.mentionJidByNormalized instanceof Map
+      ? options.mentionJidByNormalized
+      : null
+
+    if (mentionOptIn) {
+      const normalizedRankingUserId = normalizeRankingUserId(userId)
+      const mentionJid = mentionJidByNormalized
+        ? mentionJidByNormalized.get(normalizedRankingUserId) || mentionJidByNormalized.get(jidNormalizedUser(userId)) || null
+        : userId
+      if (mentionJid) {
+        const tag = String(mentionJid).split("@")[0].split(":")[0]
+        if (!tag) return { visible: false, label: "", mentionId: null }
+        return {
+          visible: true,
+          label: `@${tag}`,
+          mentionId: mentionJid,
+        }
+      }
+    }
+
+    if (requirePublicIdentity && !publicIdentityLabel) {
+      return { visible: false, label: "", mentionId: null }
+    }
+
+    if (!publicIdentityLabel) {
+      return { visible: false, label: "", mentionId: null }
+    }
+
+    return {
+      visible: true,
+      label: publicIdentityLabel,
+      mentionId: null,
+    }
+  }
+
+  const applyMentionPolicy = (userIds = []) => {
+    const unique = [...new Set((userIds || []).filter(Boolean))]
+    return unique.filter((userId) => {
+      const identity = getRankingIdentity(userId)
+      return Boolean(identity?.mentionId)
+    })
+  }
+
+  if (cmdName === prefix + "mentions" || cmdName === prefix + "mention") {
     const action = String(cmdArg1 || "").trim().toLowerCase()
     if (!action || action === "status") {
       const current = typeof economyService.isMentionOptIn === "function"
-        ? economyService.isMentionOptIn(sender)
+        ? economyService.isMentionOptIn(mentionPreferenceUserId)
         : false
       await sock.sendMessage(from, {
-        text: `Preferência de menção em rankings/listas: *${current ? "ATIVADA" : "DESATIVADA"}*\nUse: !mentions on | !mentions off`,
+        text: `Preferência de menção em rankings/listas: *${current ? "ATIVADA" : "DESATIVADA"}*\nUse: !mention on | !mention off`,
       })
       return true
     }
 
     if (!["on", "off"].includes(action)) {
-      await sock.sendMessage(from, { text: "Use: !mentions on | !mentions off" })
+      await sock.sendMessage(from, { text: "Use: !mention on | !mention off" })
       return true
     }
 
     if (typeof economyService.setMentionOptIn === "function") {
-      economyService.setMentionOptIn(sender, action === "on")
+      economyService.setMentionOptIn(mentionPreferenceUserId, action === "on")
+      for (const candidate of normalizedSenderRegistrationCandidates) {
+        if (candidate !== mentionPreferenceUserId) {
+          economyService.setMentionOptIn(candidate, action === "on")
+        }
+      }
     }
     await sock.sendMessage(from, {
       text: `✅ Menções em rankings/listas ${action === "on" ? "ativadas" : "desativadas"}.`,
@@ -717,7 +828,7 @@ async function handleEconomyCommands(ctx) {
       economyService.setPublicLabel(sender, label)
     }
     await sock.sendMessage(from, {
-      text: `✅ Apelido público atualizado para: *${label.slice(0, 32)}*`,
+      text: `✅ Apelido público atualizado para: *${label.slice(0, 30)}*`,
     })
     return true
   }
@@ -999,47 +1110,58 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
 
   if (cmdName === prefix + "guia") {
     const guidePart1 =
-      `GUIA DE ECONOMIA (1/2)\n\n` +
-      `Loop base para subir de forma consistente:\n` +
-      `1. Resgate *${prefix}daily* todo dia (160 moedas base).\n` +
-      `2. Rode *${prefix}trabalho* para renda: ifood, capinar, lavagem, aposta, minerar, ou bitcoin.\n` +
-      `3. Use *${prefix}missao* e finalize Q1/Q2/Q3 para XP + moedas.\n` +
-      `4. Use *${prefix}missaoweekly* para missões com maiores recompensas.\n` +
-      `5. Consulte *${prefix}xp* e *${prefix}xpranking* para acompanhar progressao.\n\n` +
-      `Atinja *nível 100* para receber uma *Coroa Kronos Verdadeira Permanente* de presente!\n\n` +
-      `Comandos-chave:\n` +
-      `- Perfil e historico: ${prefix}perfil, ${prefix}extrato\n` +
-      `- Loja e inventario: ${prefix}loja, ${prefix}comprar, ${prefix}vender\n` +
-      `- Interacao social: ${prefix}doarcoins, ${prefix}doaritem, ${prefix}team\n` +
-      `- Rotina diaria: ${prefix}daily, ${prefix}trabalho, ${prefix}missao claim <Q1|Q2|Q3>`
+      `GUIA DE ECONOMIA - SECAO 1/3 (ROTINA DE GRANA)\n\n` +
+      `Comandos da rotina base para ficar forte sem depender de sorte:\n` +
+      `1. *${prefix}daily* todo dia para garantir renda recorrente.\n` +
+      `2. *${prefix}trabalho <ifood|capinar|lavagem|aposta|minerar|bitcoin>* para farmar moedas.\n` +
+      `3. *${prefix}missao* e *${prefix}missao claim <Q1|Q2|Q3>* para XP + moedas.\n` +
+      `4. *${prefix}missaosemanal* e *${prefix}missaosemanal claim <W1|W2|W3|W4|W5>* para recompensas maiores.\n` +
+      `5. Acompanhe progresso com *${prefix}xp*, *${prefix}xpranking* e *${prefix}coinsranking*.\n\n` +
+      `Rotina curta recomendada (todo dia):\n` +
+      `- ${prefix}daily -> ${prefix}trabalho -> ${prefix}missao -> ${prefix}missaosemanal\n` +
+      `- Feche o ciclo consultando ${prefix}perfil e ${prefix}extrato.`
 
     const guidePart2 =
-      `GUIA DE ECONOMIA (2/2)\n\n` +
-      `Tipos de trabalho (6 opções):\n` +
-      `- *ifood*: 55-145 moedas, 10% falha\n` +
-      `- *capinar*: 110 moedas fixas, 20% falha\n` +
-      `- *lavagem*: 320-620 moedas, 80% falha (~20% da carteira perdida)\n` +
-      `- *aposta*: Minigame! 50% → 2x payout, 50% → 0.5x payout\n` +
-      `- *minerar*: Minigame! 30% → 0 moedas, 70% → 180-330 moedas\n` +
-      `- *bitcoin*: 200-350 moedas, 15% falha\n\n` +
-      `💡 DICA: Jogos em grupo dão *+15%* de recompensa! Jogos solo recebem *-10%* de penalidade.\n\n` +
-      `Rotas de risco:\n` +
-      `- Segura: daily + trabalho + missoes + jogos em grupo.\n` +
-      `- Balanceada: segura + cassino/aposta com valor controlado.\n` +
-      `- Agressiva: incluir roubo, lootbox, trades e jogos arriscados.\n\n` +
-      `Dicas praticas:\n` +
-      `- Nao comprometa todo saldo em uma unica jogada.\n` +
-      `- Use ${prefix}trade com revisao antes de aceitar.\n` +
-      `- Priorize jogos em grupo para bônus de +15% em moedas.\n` +
-      `- Colecionadores: 50+ itens diferentes estão disponíveis na ${prefix}loja!`
+      `GUIA DE ECONOMIA - SECAO 2/3 (SOCIAL + ITENS)\n\n` +
+      `Interacoes sociais (time e trade):\n` +
+      `- Time: ${prefix}time criar, ${prefix}time convidar, ${prefix}time info, ${prefix}time membros\n` +
+      `- Cofre do time: ${prefix}time depositarcoins, ${prefix}time depositaritem, ${prefix}time retirarcoins, ${prefix}time retiraritem\n` +
+      `- Trocas: ${prefix}escambo (ou ${prefix}troca), ${prefix}escambo revisar <id>, ${prefix}escambo aceitar <id>\n` +
+      `- Doacoes diretas: ${prefix}doarcoins e ${prefix}doaritem\n\n` +
+      `Ciclo de itens (comprar, vender e usar):\n` +
+      `- Consulte a loja: ${prefix}loja\n` +
+      `- Compre: ${prefix}comprar <item> [quantidade]\n` +
+      `- Venda: ${prefix}vender <item> [quantidade]\n` +
+      `- Veja detalhes do item: ${prefix}item <item>\n` +
+      `- Use efeitos: ${prefix}usaritem <item> [alvo] ou ${prefix}usarpasse <tipo> <severidade> [alvo]`
+
+    const guidePart3 =
+      `GUIA DE ECONOMIA - SECAO 3/3 (DICAS + EXTRAS + TUTORIAL)\n\n` +
+      `Dicas essenciais:\n` +
+      `- Jogos multiplayer em grupo sao essenciais para ficar rico: *+15%* de recompensa em grupo e *-10%* em solo.\n` +
+      `- Nao arrisque todo saldo em uma jogada (cassino).\n` +
+      `- Antes de aceitar trocas, use ${prefix}escambo revisar <id>.\n` +
+      `- Subir nivel acelera sua economia com recompensas de progressao.\n\n` +
+      `Comandos extras que ajudam muito:\n` +
+      `- ${prefix}carepackage (alias ${prefix}cestabasica)\n` +
+      `- ${prefix}lootbox <quantidade>\n` +
+      `- ${prefix}cassino <valor>\n` +
+      `- ${prefix}cupom <codigo>\n` +
+      `- ${prefix}economia social | ${prefix}economia rotina\n\n` +
+      `Tutorial rapido (primeiros passos):\n` +
+      `1) Dia 1: use ${prefix}daily, rode 1 trabalho seguro (ifood/capinar) e resgate 1 missao.\n` +
+      `2) Dia 2-3: monte estoque na ${prefix}loja, teste ${prefix}comprar/${prefix}vender e acompanhe no ${prefix}extrato.\n` +
+      `3) Dia 4-5: entre em interacao social (time + escambo) com valores pequenos.\n` +
+      `4) Dia 6+: inclua risco controlado (cassino/lootbox) e foque em jogos multiplayer para acelerar riqueza.`
 
     const guideTarget = isGroup ? sender : from
     await sock.sendMessage(guideTarget, { text: guidePart1 })
     await sock.sendMessage(guideTarget, { text: guidePart2 })
+    await sock.sendMessage(guideTarget, { text: guidePart3 })
 
     if (isGroup) {
       await sock.sendMessage(from, {
-        text: `📩 @${sender.split("@")[0]}, te enviei o guia de economia no privado em 2 partes.`,
+        text: `📩 @${sender.split("@")[0]}, te enviei o guia de economia no privado em 3 partes.`,
         mentions: [sender],
       })
     }
@@ -1048,49 +1170,40 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
     telemetry.appendEvent("economy.guide.sent", {
       groupId: isGroup ? from : null,
       userId: sender,
-      parts: 2,
+      parts: 3,
       via: isGroup ? "group" : "dm",
     })
     return true
   }
 
   // Team system commands
-  if (cmdName === prefix + "time" || cmdName === prefix + "team") {
+  if (cmdName === prefix + "time") {
     const actionRaw = String(cmdArg1 || "").trim().toLowerCase()
     const TEAM_ACTION_ALIASES = {
       criar: "create",
-      create: "create",
+      convidar: "invite",
       entra: "join",
-      join: "join",
+      entrar: "join",
       aceitar: "accept",
-      accept: "accept",
       promover: "promote",
-      promote: "promote",
       rebaixar: "demote",
-      demote: "demote",
       sair: "leave",
-      leave: "leave",
       membros: "members",
-      members: "members",
-      stats: "stats",
+      estatisticas: "stats",
+      estatísticas: "stats",
       info: "info",
       listar: "list",
       lista: "list",
-      list: "list",
       doarcoins: "depositarcoins",
       depositarcoins: "depositarcoins",
-      depositcoins: "depositarcoins",
       doaritem: "depositaritem",
       depositaritem: "depositaritem",
-      deposititem: "depositaritem",
       sacarcoins: "retirarcoins",
       retirarcoins: "retirarcoins",
-      withdrawcoins: "retirarcoins",
       sacaritem: "retiraritem",
       retiraritem: "retiraritem",
-      withdrawitem: "retiraritem",
     }
-    const action = TEAM_ACTION_ALIASES[actionRaw] || actionRaw
+    const action = TEAM_ACTION_ALIASES[actionRaw] || ""
 
     // Generate unique team ID from timestamp and random
     const generateTeamId = () => {
@@ -1113,7 +1226,7 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
       const teamName = String(cmdArg2 || "").trim().slice(0, 50)
       if (!teamName) {
         await sock.sendMessage(from, {
-          text: `Use: ${prefix}${cmdName} create <nome do time>`,
+          text: `Use: ${prefix}${cmdName} criar <nome do time>`,
         })
         return true
       }
@@ -1122,7 +1235,7 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
       if (userTeamId) {
         const existingTeam = storage.getTeam(userTeamId)
         await sock.sendMessage(from, {
-          text: `Voce ja faz parte do time *${existingTeam?.name || userTeamId}*. Use ${prefix}${cmdName} leave para sair.`,
+          text: `Voce ja faz parte do time *${existingTeam?.name || userTeamId}*. Use ${prefix}${cmdName} sair para sair.`,
         })
         return true
       }
@@ -1177,7 +1290,7 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
 
       if (typeof storage.inviteToTeam !== "function") {
         await sock.sendMessage(from, {
-          text: `⛔ ${prefix}${cmdName} join foi desativado temporariamente. Use ${prefix}${cmdName} accept <team ID> após receber convite.`,
+          text: `⛔ ${prefix}${cmdName} entrar foi desativado temporariamente. Use ${prefix}${cmdName} aceitar <ID do time> apos receber convite.`,
         })
         return true
       }
@@ -1195,7 +1308,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const userTeamId = storage.getUserTeamId(sender)
       if (!userTeamId) {
         await sock.sendMessage(from, {
-          text: `Voce nao faz parte de um time. Use ${prefix}${cmdName} create <nome> para criar um.`,
+          text: `Voce nao faz parte de um time. Use ${prefix}${cmdName} criar <nome> para criar um.`,
         })
         return true
       }
@@ -1203,7 +1316,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const inviteTargets = mentioned && mentioned.length > 0 ? mentioned : []
       if (inviteTargets.length === 0) {
         await sock.sendMessage(from, {
-          text: `Use: ${prefix}${cmdName} invite @usuario(s)`,
+          text: `Use: ${prefix}${cmdName} convidar @usuario(s)`,
         })
         return true
       }
@@ -1292,7 +1405,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const acceptTeamId = String(cmdArg2 || "").trim().toUpperCase()
       if (!acceptTeamId) {
         await sock.sendMessage(from, {
-          text: `Use: ${prefix}${cmdName} accept <team ID>`,
+          text: `Use: ${prefix}${cmdName} aceitar <ID do time>`,
         })
         return true
       }
@@ -1444,7 +1557,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         ? poolItemEntries
           .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
           .slice(0, 10)
-          .map(([itemKey, qty]) => `- ${itemKey} x${qty}`)
+          .map(([itemKey, qty]) => `- ${formatItemWithId(economyService, itemKey)} x${qty}`)
           .join("\n")
         : "- vazio"
 
@@ -1603,7 +1716,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
       await sock.sendMessage(from, {
         text:
-          `✅ @${sender.split("@")[0]} depositou *${quantity}x ${normalizedItem}* no pool do time.` +
+          `✅ @${sender.split("@")[0]} depositou *${quantity}x ${formatItemWithId(economyService, normalizedItem)}* no pool do time.` +
           (poolQuantity !== quantity ? `\n⚡ Multiplicador de contribuições ativo: pool recebeu *${poolQuantity}x*.` : ""),
         mentions: [sender],
       })
@@ -1755,7 +1868,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       }
 
       await sock.sendMessage(from, {
-        text: `✅ Retirada concluida: *${credited}x ${normalizedItem}* do pool para @${sender.split("@")[0]}.`,
+        text: `✅ Retirada concluida: *${credited}x ${formatItemWithId(economyService, normalizedItem)}* do pool para @${sender.split("@")[0]}.`,
         mentions: [sender],
       })
       return true
@@ -1859,7 +1972,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
           responseText += `*Times disponiveis:*\n` + otherTeams
             .map(team => `${team.name} (${team.teamId}) - ${team.members.length} membros`)
             .join("\n") +
-            `\n\nEntre apenas com convite: ${prefix}${cmdName} accept <ID>.`
+            `\n\nEntre apenas com convite: ${prefix}${cmdName} aceitar <ID>.`
         } else {
           responseText += `Nenhum outro time disponivel.`
         }
@@ -1873,7 +1986,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
           text:
             `*Times com membros neste grupo (${teamList.length} total)*\n\n` +
             (teamLines.length > 0 ? teamLines.join("\n") : "Nenhum time criado ainda.") +
-            `\n\nUse ${prefix}${cmdName} create <nome> para criar um novo time e ${prefix}${cmdName} accept <ID> para aceitar convites.`,
+            `\n\nUse ${prefix}${cmdName} criar <nome> para criar um novo time e ${prefix}${cmdName} aceitar <ID> para aceitar convites.`,
         })
       }
 
@@ -1886,25 +1999,25 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     const menuText = userTeamId
       ? `*Seu time*\n\nComandos:\n` +
         `- ${prefix}${cmdName} info: Ver info do time\n` +
-        `- ${prefix}${cmdName} members: Listar membros\n` +
-        `- ${prefix}${cmdName} stats: Stats do time\n` +
-        `- ${prefix}${cmdName} invite @user: Convidar jogador\n` +
+        `- ${prefix}${cmdName} membros: Listar membros\n` +
+        `- ${prefix}${cmdName} estatisticas: Stats do time\n` +
+        `- ${prefix}${cmdName} convidar @user: Convidar jogador\n` +
         `- ${prefix}${cmdName} depositarcoins <qtd>\n` +
         `- ${prefix}${cmdName} depositaritem <item> [qtd]\n` +
         `- ${prefix}${cmdName} retirarcoins <qtd> (dono/tenente, cooldown 15m)\n` +
         `- ${prefix}${cmdName} retiraritem <item> [qtd] (dono/tenente, cooldown 15m)\n` +
-        `- ${prefix}${cmdName} leave: Sair do time\n` +
-        `- ${prefix}${cmdName} list: Ver outros times`
+        `- ${prefix}${cmdName} sair: Sair do time\n` +
+        `- ${prefix}${cmdName} listar: Ver outros times`
       : `*Sistema de Times*\n\nComandos:\n` +
-        `- ${prefix}${cmdName} create <nome>: Criar um time\n` +
-        `- ${prefix}${cmdName} accept <ID>: Aceitar convite para um time\n` +
-        `- ${prefix}${cmdName} list: Ver times disponiveis`
+        `- ${prefix}${cmdName} criar <nome>: Criar um time\n` +
+        `- ${prefix}${cmdName} aceitar <ID>: Aceitar convite para um time\n` +
+        `- ${prefix}${cmdName} listar: Ver times disponiveis`
 
     await sock.sendMessage(from, { text: menuText })
     return true
   }
 
-  if (cmdName === prefix + "timeranking" || cmdName === prefix + "teamranking") {
+  if (cmdName === prefix + "timeranking") {
     const teams = (typeof storage.getAllTeams === "function" ? storage.getAllTeams() : [])
       .map((team) => {
         const teamId = String(team?.teamId || "")
@@ -1942,17 +2055,12 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  const hasMentionPreferenceApi = typeof economyService.isMentionOptIn === "function"
-  const senderIsRegistered = typeof registrationService?.isRegistered === "function"
-    ? registrationService.isRegistered(sender)
-    : true
+  const senderIsRegistered = Boolean(registeredSenderId) || typeof registrationService?.isRegistered !== "function"
+  const hasRegistrationGate = typeof registrationService?.isRegistered === "function"
   const senderProfile = typeof economyService.getProfile === "function"
     ? economyService.getProfile(sender)
     : null
   const senderCustomLabel = String(senderProfile?.preferences?.publicLabel || "").trim()
-  const senderMentionOptIn = hasMentionPreferenceApi
-    ? economyService.isMentionOptIn(sender)
-    : true
   const mustRegisterBeforeEconomy = isEconomyCommandInvocation && !senderIsRegistered
   if (mustRegisterBeforeEconomy) {
     await sock.sendMessage(from, {
@@ -1963,11 +2071,15 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  const mustSetNicknameBeforeEconomy = isEconomyCommandInvocation && hasMentionPreferenceApi && !senderMentionOptIn && !senderCustomLabel
+  const mustSetNicknameBeforeEconomy =
+    isEconomyCommandInvocation &&
+    hasRegistrationGate &&
+    senderIsRegistered &&
+    !senderCustomLabel
   if (mustSetNicknameBeforeEconomy) {
     await sock.sendMessage(from, {
       text:
-        "⚠️ Você desativou menções e ainda não definiu apelido público.\n" +
+        "⚠️ Você ainda não definiu apelido público.\n" +
         `Para continuar usando a economia, use: *${prefix}apelido <novo nome>*`,
     })
     return true
@@ -2037,53 +2149,104 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
   }
 
   if (cmdName === prefix + "economia") {
-    const submenu = String(cmdArg1 || "").trim().toLowerCase()
-    if (submenu === "escambo") {
-      await sock.sendMessage(from, {
-        text:
-`╭━━━〔 💱 SUBMENU: ESCAMBO 〕━━━╮
-│ Escambo é o novo nome do sistema de trocas.
-│ Comandos principais:
-│ ${prefix}trade @user <coins> [item:quantidade...]
-│ ${prefix}trade respond <id> <coins> [item:quantidade...]
-│ ${prefix}trade review <id> | ${prefix}trade accept <id>
-│ ${prefix}trade counter <id> <coins> [item:quantidade...]
-│ ${prefix}trade reject <id> | ${prefix}trade cancel <id>
-│ ${prefix}trade list | ${prefix}trade info <id> | ${prefix}trade dispute <id>
-│ Dica: !troca continua como alias de !trade.
-╰━━━━━━━━━━━━━━━━━━━━╯`,
-      })
-      return true
+    const submenuRaw = String(cmdArg1 || "").trim().toLowerCase()
+    const submenuAliases = {
+      geral: "geral",
+      general: "geral",
+      util: "geral",
+      utility: "geral",
+      utilidade: "geral",
+      utilidades: "geral",
+      rotina: "rotina",
+      rotinas: "rotina",
+      progresso: "rotina",
+      progressao: "rotina",
+      progressão: "rotina",
+      social: "social",
+      sociais: "social",
+      escambo: "social",
+      trade: "social",
+      troca: "social",
+      time: "social",
+      times: "social",
+      extra: "extras",
+      extras: "extras",
+      especial: "extras",
+      especiais: "extras",
+      specials: "extras",
+      cupom: "extras",
+      cupons: "extras",
+      falsificar: "extras",
+      passe: "extras",
+      usarpasse: "extras",
     }
+    const submenu = submenuAliases[submenuRaw] || submenuRaw
 
-    if (submenu === "times") {
+    if (submenu === "geral") {
       await sock.sendMessage(from, {
         text:
-`╭━━━〔 👥 SUBMENU: TIMES 〕━━━╮
-│ Comandos de organização e pool de equipe:
-│ ${prefix}team info | ${prefix}team stats | ${prefix}team members
-│ ${prefix}team depositarcoins <qtd>
-│ ${prefix}team depositaritem <item> [qtd]
-│ ${prefix}team retirarcoins <qtd>
-│ ${prefix}team retiraritem <item> [qtd]
-│ Dica: contribuições de time entram no loop de progressão.
-╰━━━━━━━━━━━━━━━━━━━━╯`,
-      })
-      return true
-    }
-
-    if (submenu === "progressao" || submenu === "progressão") {
-      await sock.sendMessage(from, {
-        text:
-`╭━━━〔 📈 SUBMENU: PROGRESSÃO 〕━━━╮
-│ XP, níveis e rotas de ganho de coins:
-│ ${prefix}xp
-│ ${prefix}perfil stats
-│ ${prefix}xpranking | ${prefix}coinsranking
-│ ${prefix}missao | ${prefix}missaosemanal
-│ ${prefix}daily | ${prefix}trabalho
+`╭━━━〔 🧭 SUBMENU: GERAL/UTILIDADE 〕━━━╮
+│ Comandos-base para perfil, identidade e consulta:
+│ ${prefix}perfil stats | ${prefix}perfil *@user
+│ ${prefix}xp | ${prefix}xpranking | ${prefix}coinsranking
+│ ${prefix}mentions <on|off> | ${prefix}apelido <nome público>
+│ ${prefix}extrato *@user
+│ ${prefix}item <item>
 │ ${prefix}guia
+╰━━━━━━━━━━━━━━━━━━━━╯`,
+      })
+      return true
+    }
+
+    if (submenu === "rotina") {
+      await sock.sendMessage(from, {
+        text:
+`╭━━━〔 💼 SUBMENU: ROTINA (FAZER MOEDAS) 〕━━━╮
+│ Comandos de renda e progressão diária:
+│ ${prefix}daily | ${prefix}cestabasica
+│ ${prefix}trabalho <ifood|capinar|lavagem|aposta|minerar|bitcoin>
+│ ${prefix}missao | ${prefix}missaosemanal
+│ ${prefix}cassino <valor>
+│ ${prefix}lootbox <quantidade 1-10>
 │ Dica: combine daily + trabalho + missões para evolução estável.
+╰━━━━━━━━━━━━━━━━━━━━╯`,
+      })
+      return true
+    }
+
+    if (submenu === "social") {
+      await sock.sendMessage(from, {
+        text:
+`╭━━━〔 🤝 SUBMENU: SOCIAL 〕━━━╮
+│ Trocas, doações e interação entre jogadores:
+│ ${prefix}doarcoins @user *<quantidade>
+│ ${prefix}doaritem @user <item> *<quantidade>
+│ ${prefix}escambo @user <coins> [item:quantidade...]
+│ ${prefix}escambo resposta <id> <coins> [item:quantidade...]
+│ ${prefix}escambo revisar <id> | ${prefix}escambo aceitar <id>
+│ ${prefix}escambo lista | ${prefix}escambo info <id> | ${prefix}escambo disputar <id>
+│ ${prefix}time criar <nome> | ${prefix}time convidar @usuario
+│ ${prefix}time entrar <ID> | ${prefix}time aceitar <ID>
+│ ${prefix}time info | ${prefix}time membros | ${prefix}time estatisticas
+│ ${prefix}time depositarcoins <qtd> | ${prefix}time depositaritem <item> [qtd]
+│ ${prefix}time retirarcoins <qtd> | ${prefix}time retiraritem <item> [qtd]
+│ ${prefix}time promover @usuario | ${prefix}time rebaixar @usuario
+│ ${prefix}time sair | ${prefix}time listar | ${prefix}timeranking
+╰━━━━━━━━━━━━━━━━━━━━╯`,
+      })
+      return true
+    }
+
+    if (submenu === "extras") {
+      await sock.sendMessage(from, {
+        text:
+`╭━━━〔 🎁 SUBMENU: EXTRAS/ESPECIAIS 〕━━━╮
+│ Comandos especiais, eventos e utilidades avançadas:
+│ ${prefix}cupom resgatar <codigo>
+│ ${prefix}falsificar <tipo 1-13> *<severidade> *<quantidade> *<S|N>
+│ ${prefix}falsificar tipo <1-13>
+│ ${prefix}loteria entrar (para entrar em sorteios abertos)
+│ ${prefix}usarpasse @user <tipo> <severidade>
 ╰━━━━━━━━━━━━━━━━━━━━╯`,
       })
       return true
@@ -2091,58 +2254,27 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
     await sock.sendMessage(from, {
       text:
-`╭━━━〔 💰 SUBMENU: ECONOMIA 〕━━━╮
-│ Comandos de economia (* significa argumento opcional)
-│ No privado: exige cadastro via ${prefix}register
-│ Submenus: ${prefix}economia escambo | ${prefix}economia times | ${prefix}economia progressao
-│ ${prefix}perfil stats
-│ ${prefix}perfil *@user
-│ ${prefix}coinsranking
-│ ${prefix}xpranking
-│ ${prefix}xp
-│ ${prefix}guia
-│ ${prefix}missao
-│ ${prefix}missao claim <Q1|Q2|Q3>
-│ ${prefix}mentions <on|off>
-│ ${prefix}apelido <nome público>
-│ (para não ser mencionado pelo bot, você precisa de um apelido público)
-│ ${prefix}extrato *@user
-│ ${prefix}loja
-│ ${prefix}comprar <item|indice> *<quantidade>
-│ ${prefix}comprarpara @user <item> *<quantidade>
-│ ${prefix}vender <item> *<quantidade>
-│ ${prefix}usaritem <item>
-│ ${prefix}doarcoins @user *<quantidade>
-│ ${prefix}doaritem @user <item> *<quantidade>
-│ ${prefix}roubar @user
-│ ${prefix}daily
-│ ${prefix}cestabásica
-│ ${prefix}cassino / ${prefix}aposta <valor>
-│ ${prefix}lootbox <quantidade 1-10>
-│ ${prefix}falsificar <tipo 1-13> *<severidade> *<quantidade> *<S|N>
-│ ${prefix}trade @user <coins> [item:quantidade...]
-│ ${prefix}trade respond <id> <coins> [item:quantidade...]
-│ ${prefix}trade review <id> | ${prefix}trade accept <id>
-│ ${prefix}trade counter <id> <coins> [item:quantidade...]
-│ ${prefix}trade reject <id> | ${prefix}trade cancel <id>
-│ ${prefix}trade list | ${prefix}trade info <id> | ${prefix}trade dispute <id>
-│ ${prefix}team info | ${prefix}team stats | ${prefix}team members
-│ ${prefix}team depositarcoins <qtd> | ${prefix}team depositaritem <item> [qtd]
-│ ${prefix}team retirarcoins <qtd> | ${prefix}team retiraritem <item> [qtd]
-│ ${prefix}cupom criar <codigo> <moedas>
-│ ${prefix}cupom resgatar <codigo>
-│ ${prefix}falsificar tipo <1-13> (escolha pendente)
-│ ${prefix}loteria "<titulo>" "<recompensas>" <S|N> <qtdVencedores>
-│ ${prefix}loteria entrar (quando opt-in = S)
-│ ${prefix}loteria fechar (encerra loteria opt-in)
-│ ${prefix}usarpasse @user <tipo> <severidade>
-│ ${prefix}trabalho <ifood|capinar|lavagem>
-╰━━━━━━━━━━━━━━━━━━━━╯`,
+    `╭━━━〔 💰 MENU: ECONOMIA 〕━━━╮
+  │ Comandos de economia
+  │ No privado: exige cadastro via ${prefix}register
+  │ Submenus:
+  │ ${prefix}economia geral
+  │ ${prefix}economia rotina
+  │ ${prefix}economia social
+  │ ${prefix}economia extras
+  │
+  │ Atalhos úteis:
+  │ ${prefix}loja | ${prefix}comprar <item|id> *<quantidade>
+  │ ${prefix}comprarpara @user <item> *<quantidade>
+  │ ${prefix}vender <item> *<quantidade>
+  │ ${prefix}usaritem <item>
+  │ ${prefix}roubar @user
+  ╰━━━━━━━━━━━━━━━━━━━━╯`,
     })
     return true
   }
 
-  if (cmdName === prefix + "cupom" && isGroup) {
+  if (cmdName === prefix + "cupom") {
     const action = String(cmdArg1 || "").trim().toLowerCase()
     const couponState = getCouponState(storage, from)
 
@@ -2153,19 +2285,24 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       }
       const codeRaw = String(cmdArg2 || "").trim().toUpperCase()
       const amount = Number.parseInt(String(cmdParts[3] || ""), 10)
-      if (!/^[A-Z0-9_-]{4,24}$/.test(codeRaw) || !Number.isFinite(amount) || amount <= 0 || amount > limits.maxCoinOperation) {
-        await sock.sendMessage(from, { text: "Use: !cupom criar <codigo 4-24> <moedas>" })
+      const parsedDays = Number.parseInt(String(cmdParts[4] || ""), 10)
+      const expiresInDays = Number.isFinite(parsedDays) ? parsedDays : 7
+      if (!/^[A-Z0-9_-]{4,24}$/.test(codeRaw) || !Number.isFinite(amount) || amount <= 0 || amount > limits.maxCoinOperation || expiresInDays <= 0 || expiresInDays > 365) {
+        await sock.sendMessage(from, { text: "Use: !cupom criar <codigo 4-24> <moedas> <dias 1-365>" })
         return true
       }
+      const expiresAt = Date.now() + (expiresInDays * 24 * 60 * 60 * 1000)
       if (!couponState.codes[codeRaw]) {
         couponState.codes[codeRaw] = {
           amount,
+          expiresAt,
           createdBy: sender,
           createdAt: Date.now(),
           redeemedBy: {},
         }
       } else {
         couponState.codes[codeRaw].amount = amount
+        couponState.codes[codeRaw].expiresAt = expiresAt
         couponState.codes[codeRaw].updatedBy = sender
         couponState.codes[codeRaw].updatedAt = Date.now()
       }
@@ -2180,8 +2317,28 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       })
 
       await sock.sendMessage(from, {
-        text: `Cupom criado: *${codeRaw}* valendo *${amount}* ${CURRENCY_LABEL}.`,
+        text: `Cupom criado: *${codeRaw}* valendo *${amount}* ${CURRENCY_LABEL} (expira em ${expiresInDays} dia(s)).`,
       })
+      return true
+    }
+
+    if (action === "remove") {
+      if (!isOverrideSender) {
+        await sock.sendMessage(from, { text: "Apenas overrides podem remover cupons." })
+        return true
+      }
+      const codeRaw = String(cmdArg2 || "").trim().toUpperCase()
+      if (!codeRaw) {
+        await sock.sendMessage(from, { text: "Use: !cupom remove <codigo>" })
+        return true
+      }
+      if (!couponState.codes[codeRaw]) {
+        await sock.sendMessage(from, { text: "Cupom não encontrado." })
+        return true
+      }
+      delete couponState.codes[codeRaw]
+      setCouponState(storage, from, couponState)
+      await sock.sendMessage(from, { text: `🗑️ Cupom *${codeRaw}* removido.` })
       return true
     }
 
@@ -2191,9 +2348,28 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         await sock.sendMessage(from, { text: "Use: !cupom resgatar <codigo>" })
         return true
       }
-      const coupon = couponState.codes[codeRaw]
+      let scopedGroupId = from
+      let scopedState = couponState
+      let coupon = couponState.codes[codeRaw]
+
+      if (!coupon && !isGroup) {
+        const resolved = resolveCouponScopeByCode(storage, codeRaw)
+        if (resolved) {
+          scopedGroupId = resolved.groupId
+          scopedState = resolved.state
+          coupon = resolved.coupon
+        }
+      }
+
       if (!coupon) {
         await sock.sendMessage(from, { text: "Cupom inválido ou inexistente." })
+        return true
+      }
+      const expiresAt = Number(coupon.expiresAt) || 0
+      if (expiresAt > 0 && Date.now() > expiresAt) {
+        delete scopedState.codes[codeRaw]
+        setCouponState(storage, scopedGroupId, scopedState)
+        await sock.sendMessage(from, { text: "Cupom expirado." })
         return true
       }
 
@@ -2205,15 +2381,15 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const received = economyService.creditCoins(sender, coupon.amount, {
         type: "coupon-redeem",
         details: `Cupom ${codeRaw}`,
-        meta: { code: codeRaw, groupId: from },
+        meta: { code: codeRaw, groupId: scopedGroupId },
       })
       if (!coupon.redeemedBy || typeof coupon.redeemedBy !== "object") coupon.redeemedBy = {}
       coupon.redeemedBy[sender] = Date.now()
-      setCouponState(storage, from, couponState)
+      setCouponState(storage, scopedGroupId, scopedState)
 
       telemetry.incrementCounter("economy.coupon.redeem", 1)
       telemetry.appendEvent("economy.coupon.redeem", {
-        groupId: from,
+        groupId: scopedGroupId,
         code: codeRaw,
         amount: received,
         userId: sender,
@@ -2227,32 +2403,48 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     }
 
     await sock.sendMessage(from, {
-      text: "Use: !cupom criar <codigo> <moedas> | !cupom resgatar <codigo>",
+      text: "Use: !cupom criar <codigo> <moedas> <dias> | !cupom resgatar <codigo> | !cupom remove <codigo>",
     })
     return true
   }
 
-  if ((cmdName === prefix + "trade" || cmdName === prefix + "troca") && isGroup) {
+  if ((cmdName === prefix + "escambo" || cmdName === prefix + "trade" || cmdName === prefix + "troca") && isGroup) {
     const tradeState = getTradeState(storage, from)
     const expiredChanged = cleanupExpiredTrades(tradeState)
     if (expiredChanged) {
       setTradeState(storage, from, tradeState)
     }
 
-    const action = String(cmdArg1 || "").trim().toLowerCase()
+    const actionRaw = String(cmdArg1 || "").trim().toLowerCase()
+    const actionAliases = {
+      resposta: "respond",
+      respond: "respond",
+      revisar: "review",
+      review: "review",
+      aceitar: "accept",
+      accept: "accept",
+      rejeitar: "reject",
+      reject: "reject",
+      lista: "list",
+      list: "list",
+      disputar: "dispute",
+      dispute: "dispute",
+    }
+    const action = actionAliases[actionRaw] || actionRaw
     const sendTradeUsage = async () => {
       await sock.sendMessage(from, {
         text:
           `Use:\n` +
-          `- !trade @user <coins> [item:quantidade...]\n` +
-          `- !trade respond <tradeId> <coins> [item:quantidade...]\n` +
-          `- !trade review <tradeId>\n` +
-          `- !trade accept <tradeId>\n` +
-          `- !trade counter <tradeId> <coins> [item:quantidade...]\n` +
-          `- !trade reject <tradeId> | !trade cancel <tradeId>\n` +
-          `- !trade list\n` +
-          `- !trade info <tradeId>\n` +
-          `- !trade dispute <tradeId>`
+          `- !escambo @user <coins> [item:quantidade...]\n` +
+          `- !escambo resposta <tradeId> <coins> [item:quantidade...]\n` +
+          `- !escambo revisar <tradeId>\n` +
+          `- !escambo aceitar <tradeId>\n` +
+          `- !escambo counter <tradeId> <coins> [item:quantidade...]\n` +
+          `- !escambo rejeitar <tradeId> | !escambo cancel <tradeId>\n` +
+          `- !escambo lista\n` +
+          `- !escambo info <tradeId>\n` +
+          `- !escambo disputar <tradeId>\n` +
+          `Alias mantido: !troca`
       })
     }
 
@@ -2271,8 +2463,8 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const teamB = typeof storage.getUserTeamId === "function" ? storage.getUserTeamId(trade.counterparty) : null
       const sameTeam = Boolean(teamA && teamB && teamA === teamB)
 
-      const baseFeeRateA = levelA <= 10 ? 0 : getTradeFeeRateByBracket(bracketA)
-      const baseFeeRateB = levelB <= 10 ? 0 : getTradeFeeRateByBracket(bracketB)
+      const baseFeeRateA = levelA <= 25 ? 0 : getTradeFeeRateByBracket(bracketA)
+      const baseFeeRateB = levelB <= 25 ? 0 : getTradeFeeRateByBracket(bracketB)
       const effectiveFeeRateA = sameTeam ? (baseFeeRateA * 0.8) : baseFeeRateA
       const effectiveFeeRateB = sameTeam ? (baseFeeRateB * 0.8) : baseFeeRateB
       const feeA = Math.floor(valueA * effectiveFeeRateA)
@@ -2423,21 +2615,28 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         })
       }
 
-      const userA = storage.economyCache?.users?.[trade.initiator]
-      const userB = storage.economyCache?.users?.[trade.counterparty]
-      if (userA?.progression) {
-        if (!userA.progression.lastTradeByBracket || typeof userA.progression.lastTradeByBracket !== "object") {
-          userA.progression.lastTradeByBracket = {}
+      if (typeof economyService.setUserLastTradeByBracket === "function") {
+        economyService.setUserLastTradeByBracket(trade.initiator, bracketA, now)
+        economyService.setUserLastTradeByBracket(trade.counterparty, bracketB, now)
+      } else {
+        const profileA = economyService.getProfile(trade.initiator)
+        const profileB = economyService.getProfile(trade.counterparty)
+        if (profileA?.progression) {
+          if (!profileA.progression.lastTradeByBracket || typeof profileA.progression.lastTradeByBracket !== "object") {
+            profileA.progression.lastTradeByBracket = {}
+          }
+          profileA.progression.lastTradeByBracket[bracketA] = now
         }
-        userA.progression.lastTradeByBracket[bracketA] = now
-      }
-      if (userB?.progression) {
-        if (!userB.progression.lastTradeByBracket || typeof userB.progression.lastTradeByBracket !== "object") {
-          userB.progression.lastTradeByBracket = {}
+        if (profileB?.progression) {
+          if (!profileB.progression.lastTradeByBracket || typeof profileB.progression.lastTradeByBracket !== "object") {
+            profileB.progression.lastTradeByBracket = {}
+          }
+          profileB.progression.lastTradeByBracket[bracketB] = now
         }
-        userB.progression.lastTradeByBracket[bracketB] = now
+        if (typeof economyService.saveEconomy === "function") {
+          economyService.saveEconomy()
+        }
       }
-      storage.saveEconomy?.()
 
       return {
         ok: true,
@@ -2493,8 +2692,8 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
           `Status: *${trade.status}* | Fase: *${trade.phase}*\n` +
           `Iniciador: @${trade.initiator.split("@")[0]}\n` +
           `Contraparte: @${trade.counterparty.split("@")[0]}\n` +
-          `Oferta iniciador: ${formatTradeOffer(trade.offers?.initiator)}\n` +
-          `Oferta contraparte: ${formatTradeOffer(trade.offers?.counterparty)}\n` +
+          `Oferta iniciador: ${formatTradeOffer(trade.offers?.initiator, economyService)}\n` +
+          `Oferta contraparte: ${formatTradeOffer(trade.offers?.counterparty, economyService)}\n` +
           `Expira em: ${new Date(trade.expiresAt || Date.now()).toLocaleString()}`,
         mentions: [trade.initiator, trade.counterparty],
       })
@@ -2520,7 +2719,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const parsedOffer = parseTradeOffer(cmdParts.slice(3), economyService, limits)
       if (!parsedOffer.ok) {
         await sock.sendMessage(from, {
-          text: "Oferta inválida. Use: !trade respond <tradeId> <coins> [item:quantidade...]",
+          text: "Oferta inválida. Use: !escambo resposta <tradeId> <coins> [item:quantidade...]",
         })
         return true
       }
@@ -2544,9 +2743,9 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       await sock.sendMessage(from, {
         text:
           `Trade ${trade.tradeId} atualizado para análise.\n` +
-          `Oferta iniciador: ${formatTradeOffer(trade.offers.initiator)}\n` +
-          `Oferta contraparte: ${formatTradeOffer(trade.offers.counterparty)}\n` +
-          `Agora ambos precisam confirmar com: !trade review ${trade.tradeId}`,
+          `Oferta iniciador: ${formatTradeOffer(trade.offers.initiator, economyService)}\n` +
+          `Oferta contraparte: ${formatTradeOffer(trade.offers.counterparty, economyService)}\n` +
+          `Agora ambos precisam confirmar com: !escambo revisar ${trade.tradeId}`,
         mentions: [trade.initiator, trade.counterparty],
       })
       return true
@@ -2582,7 +2781,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
       await sock.sendMessage(from, {
         text: trade.phase === "phase4-negotiation"
-          ? `Ambos revisaram o trade ${trade.tradeId}. Fase de negociação iniciada. Use !trade accept ${trade.tradeId}, !trade counter ${trade.tradeId} ... ou !trade reject ${trade.tradeId}.`
+          ? `Ambos revisaram o trade ${trade.tradeId}. Fase de negociação iniciada. Use !escambo aceitar ${trade.tradeId}, !escambo counter ${trade.tradeId} ... ou !escambo rejeitar ${trade.tradeId}.`
           : `Revisão registrada para ${trade.tradeId}. Falta o outro participante revisar.`,
         mentions: [trade.initiator, trade.counterparty],
       })
@@ -2670,6 +2869,11 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         valueBand: getValueBand(grossValue),
       })
 
+      if (typeof incrementUserStat === "function") {
+        incrementUserStat(trade.initiator, "tradesCompleted", 1)
+        incrementUserStat(trade.counterparty, "tradesCompleted", 1)
+      }
+
       await sock.sendMessage(from, {
         text:
           `Trade ${trade.tradeId} concluído com sucesso.\n` +
@@ -2700,7 +2904,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const parsedOffer = parseTradeOffer(cmdParts.slice(3), economyService, limits)
       if (!parsedOffer.ok) {
         await sock.sendMessage(from, {
-          text: "Contraoferta inválida. Use: !trade counter <tradeId> <coins> [item:quantidade...]",
+          text: "Contraoferta inválida. Use: !escambo counter <tradeId> <coins> [item:quantidade...]",
         })
         return true
       }
@@ -2722,9 +2926,9 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       await sock.sendMessage(from, {
         text:
           `Contraoferta registrada em ${trade.tradeId}.\n` +
-          `Oferta iniciador: ${formatTradeOffer(trade.offers.initiator)}\n` +
-          `Oferta contraparte: ${formatTradeOffer(trade.offers.counterparty)}\n` +
-          `Se concordarem, ambos usem !trade accept ${trade.tradeId}.`,
+          `Oferta iniciador: ${formatTradeOffer(trade.offers.initiator, economyService)}\n` +
+          `Oferta contraparte: ${formatTradeOffer(trade.offers.counterparty, economyService)}\n` +
+          `Se concordarem, ambos usem !escambo aceitar ${trade.tradeId}.`,
         mentions: [trade.initiator, trade.counterparty],
       })
       return true
@@ -2781,7 +2985,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const parsedOffer = parseTradeOffer(cmdParts.slice(2), economyService, limits)
       if (!parsedOffer.ok) {
         await sock.sendMessage(from, {
-          text: "Oferta inválida. Use: !trade @user <coins> [item:quantidade...]",
+          text: "Oferta inválida. Use: !escambo @user <coins> [item:quantidade...]",
         })
         return true
       }
@@ -2844,8 +3048,8 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       await sock.sendMessage(from, {
         text:
           `Trade ${tradeId} criado.\n` +
-          `Oferta inicial de @${sender.split("@")[0]}: ${formatTradeOffer(parsedOffer.offer)}\n` +
-          `@${target.split("@")[0]} responda com: !trade respond ${tradeId} <coins> [item:quantidade...]`,
+          `Oferta inicial de @${sender.split("@")[0]}: ${formatTradeOffer(parsedOffer.offer, economyService)}\n` +
+          `@${target.split("@")[0]} responda com: !escambo resposta ${tradeId} <coins> [item:quantidade...]`,
         mentions: [sender, target],
       })
       return true
@@ -2897,11 +3101,16 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       return true
     }
 
-    const lines = statement.map((entry, index) => {
-      const sign = entry.deltaCoins >= 0 ? "+" : ""
-      const when = new Date(entry.at).toLocaleString()
-      const details = entry.details ? ` | ${entry.details}` : ""
-      return `${index + 1}. ${when} | ${entry.type} | ${sign}${entry.deltaCoins} | saldo ${entry.balanceAfter}${details}`
+    const lines = statement.map((entry) => {
+      const date = new Date(Number(entry.at) || Date.now())
+      const dd = String(date.getDate()).padStart(2, "0")
+      const mm = String(date.getMonth() + 1).padStart(2, "0")
+      const hh = String(date.getHours()).padStart(2, "0")
+      const min = String(date.getMinutes()).padStart(2, "0")
+      const delta = Math.floor(Number(entry.deltaCoins) || 0)
+      const sign = delta >= 0 ? "+" : ""
+      const reason = String(entry.details || entry.type || "sem motivo").trim()
+      return `${dd}/${mm} | ${hh}/${min} | ${sign}${delta} | ${reason}`
     })
 
     await sock.sendMessage(from, {
@@ -2911,25 +3120,78 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  if (cmd === prefix + "coinsranking" && isGroup) {
-    const metadata = await sock.groupMetadata(from)
-    const members = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
-    const ranking = economyService.getGroupRanking(members, 10)
-    const visibleRanking = ranking.filter((entry) => hasPublicVisibility(entry.userId))
+  if (cmdName === prefix + "item") {
+    const requested = String(cmdArg1 || "").trim()
+    if (!requested) {
+      await sock.sendMessage(from, { text: `Use: ${prefix}item <item>` })
+      return true
+    }
+    const itemDef = economyService.getItemDefinition(requested)
+    if (!itemDef?.key) {
+      await sock.sendMessage(from, { text: "Item não encontrado. Use !loja para ver os itens disponíveis." })
+      return true
+    }
+    await sock.sendMessage(from, {
+      text:
+        `📦 ${itemDef.name || itemDef.key}\n` +
+        `ID: *${itemDef.key}*\n` +
+        `Preço: *${Math.max(0, Math.floor(Number(itemDef.price) || 0))}* ${CURRENCY_LABEL}\n` +
+        `Raridade: *${Math.max(1, Math.floor(Number(itemDef.rarity) || 1))}*\n` +
+        `Descrição: ${String(itemDef.description || "Sem descrição")}`,
+    })
+    return true
+  }
+
+  if (cmd === prefix + "coinsranking") {
+    let mentionJidByNormalized = null
+    let members = []
+    if (isGroup) {
+      const metadata = await sock.groupMetadata(from)
+      members = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
+      mentionJidByNormalized = new Map()
+      ;(metadata?.participants || []).forEach((participant) => {
+        const participantId = String(participant?.id || "").trim()
+        if (!participantId) return
+        const normalizedJid = jidNormalizedUser(participantId)
+        const normalizedRegistration = typeof registrationService?.normalizeUserId === "function"
+          ? registrationService.normalizeUserId(participantId)
+          : ""
+        if (normalizedJid) mentionJidByNormalized.set(normalizedJid, participantId)
+        if (normalizedRegistration) mentionJidByNormalized.set(normalizedRegistration, participantId)
+      })
+    }
+
+    let ranking = []
+    if (typeof economyService.getGlobalRanking === "function") {
+      ranking = economyService.getGlobalRanking(10)
+    } else if (isGroup && typeof economyService.getGroupRanking === "function") {
+      ranking = economyService.getGroupRanking(members, 10)
+    }
+    const visibleRanking = ranking
+      .map((entry) => ({
+        ...entry,
+        rankingIdentity: getRankingIdentity(entry.userId, {
+          mentionJidByNormalized,
+          requirePublicIdentity: false,
+        }),
+      }))
+      .filter((entry) => entry.rankingIdentity.visible)
     if (visibleRanking.length === 0) {
       await sock.sendMessage(from, { text: "Sem dados de economia neste grupo ainda." })
       return true
     }
 
     const lines = visibleRanking.map((entry, index) => {
-      const label = getPublicRankingLabel(entry.userId)
+      const label = entry.rankingIdentity.label
       return `${index + 1}. ${label} - *${entry.coins}*`
     })
     const globalPos = economyService.getUserGlobalPosition(sender)
-    const mentions = applyMentionPolicy(visibleRanking.map((entry) => entry.userId))
+    const mentions = [...new Set(visibleRanking
+      .map((entry) => entry.rankingIdentity.mentionId)
+      .filter(Boolean))]
     await sock.sendMessage(from, {
       text:
-        `🏦 Ranking de ${CURRENCY_LABEL} (grupo)\n` +
+        `🏦 Ranking de ${CURRENCY_LABEL} (global)\n` +
         `${lines.join("\n")}\n\n` +
         `Sua posição global: *${globalPos || "N/A"}*`,
       mentions,
@@ -2937,20 +3199,47 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  if (cmd === prefix + "xpranking" && isGroup) {
-    const metadata = await sock.groupMetadata(from)
-    const members = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
-    const ranking = typeof economyService.getGroupXpRanking === "function"
-      ? economyService.getGroupXpRanking(members, 10)
-      : []
-    const visibleRanking = ranking.filter((entry) => hasPublicVisibility(entry.userId))
+  if (cmd === prefix + "xpranking") {
+    let mentionJidByNormalized = null
+    let members = []
+    if (isGroup) {
+      const metadata = await sock.groupMetadata(from)
+      members = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
+      mentionJidByNormalized = new Map()
+      ;(metadata?.participants || []).forEach((participant) => {
+        const participantId = String(participant?.id || "").trim()
+        if (!participantId) return
+        const normalizedJid = jidNormalizedUser(participantId)
+        const normalizedRegistration = typeof registrationService?.normalizeUserId === "function"
+          ? registrationService.normalizeUserId(participantId)
+          : ""
+        if (normalizedJid) mentionJidByNormalized.set(normalizedJid, participantId)
+        if (normalizedRegistration) mentionJidByNormalized.set(normalizedRegistration, participantId)
+      })
+    }
+
+    let ranking = []
+    if (typeof economyService.getGlobalXpRanking === "function") {
+      ranking = economyService.getGlobalXpRanking(10)
+    } else if (isGroup && typeof economyService.getGroupXpRanking === "function") {
+      ranking = economyService.getGroupXpRanking(members, 10)
+    }
+    const visibleRanking = ranking
+      .map((entry) => ({
+        ...entry,
+        rankingIdentity: getRankingIdentity(entry.userId, {
+          mentionJidByNormalized,
+          requirePublicIdentity: false,
+        }),
+      }))
+      .filter((entry) => entry.rankingIdentity.visible)
     if (visibleRanking.length === 0) {
       await sock.sendMessage(from, { text: "Sem dados de XP neste grupo ainda." })
       return true
     }
 
     const lines = visibleRanking.map((entry, index) => {
-      const label = getPublicRankingLabel(entry.userId)
+      const label = entry.rankingIdentity.label
       const level = Math.max(1, Math.floor(Number(entry?.level) || 1))
       const xpNow = Math.max(0, Math.floor(Number(entry?.xp) || 0))
       const xpToNext = Math.max(1, Math.floor(Number(entry?.xpToNextLevel) || 1))
@@ -2959,10 +3248,12 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     const globalPos = typeof economyService.getUserGlobalXpPosition === "function"
       ? economyService.getUserGlobalXpPosition(sender)
       : null
-    const mentions = applyMentionPolicy(visibleRanking.map((entry) => entry.userId))
+    const mentions = [...new Set(visibleRanking
+      .map((entry) => entry.rankingIdentity.mentionId)
+      .filter(Boolean))]
     await sock.sendMessage(from, {
       text:
-        `⭐ Ranking de XP (grupo)\n` +
+        `⭐ Ranking de XP (global)\n` +
         `${lines.join("\n")}\n\n` +
         `Sua posição global de XP: *${globalPos || "N/A"}*`,
       mentions,
@@ -3026,19 +3317,24 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       return true
     }
 
-    const user = storage.economyCache?.users?.[sender]
-    if (!user?.progression) {
+    const profile = economyService.getProfile(sender)
+    if (!profile) {
       await sock.sendMessage(from, { text: "Perfil não disponível para ativar cupom." })
       return true
     }
 
-    user.progression.activeCoupon = {
+    if (!profile.progression) {
+      profile.progression = {}
+    }
+    profile.progression.activeCoupon = {
       couponKey,
       percentage,
       createdAt: Date.now(),
     }
     economyService.removeItem(sender, couponKey, 1)
-    storage.saveEconomy?.()
+    if (typeof economyService.saveEconomy === "function") {
+      economyService.saveEconomy()
+    }
 
     await sock.sendMessage(from, {
       text: `💳 Cupom de ${percentage}% ativado para a próxima compra.`,
@@ -3051,9 +3347,10 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     const quantity = parseQuantity(cmdArg2, 1)
     let item = itemInput
     if (/^\d+$/.test(itemInput)) {
-      const itemIndex = Number.parseInt(itemInput, 10)
-      const catalog = economyService.getItemCatalog()
-      item = catalog[itemIndex - 1]?.key || ""
+      const itemById = typeof economyService.getItemDefinition === "function"
+        ? economyService.getItemDefinition(itemInput)
+        : null
+      item = itemById?.key || ""
     }
     const bought = economyService.buyItem(sender, item, quantity, sender)
     if (!bought.ok) {
@@ -3066,7 +3363,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
               ? `Limite de pilha atingido para esse item. Máximo por item: ${bought.maxStack}.`
               : (bought.reason === "not-for-sale"
                 ? "Esse item não pode ser comprado diretamente na loja."
-                : "Item/índice inválido. Use !loja para ver o índice."))),
+                : "Item/ID inválido. Use !loja para ver os IDs disponíveis."))),
       })
       return true
     }
@@ -3077,7 +3374,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       : ""
     await sock.sendMessage(from, {
       text:
-        `Compra concluída: *${bought.quantity}x ${bought.itemKey}*\n` +
+        `Compra concluída: *${bought.quantity}x ${formatItemWithId(economyService, bought.itemKey)}*\n` +
         `Custo: *${bought.totalCost}* ${CURRENCY_LABEL}${discountText}\n` +
         `Saldo atual: *${profile.coins}*`,
     })
@@ -3113,7 +3410,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
     await sock.sendMessage(from, {
       text:
-        `🎁 @${sender.split("@")[0]} comprou *${bought.quantity}x ${bought.itemKey}* para @${target.split("@")[0]}.`,
+        `🎁 @${sender.split("@")[0]} comprou *${bought.quantity}x ${formatItemWithId(economyService, bought.itemKey)}* para @${target.split("@")[0]}.`,
       mentions: [sender, target],
     })
     return true
@@ -3134,7 +3431,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       return true
     }
     await sock.sendMessage(from, {
-      text: `💱 Venda concluída: ${sold.quantity}x ${sold.itemKey} por *${sold.total}* ${CURRENCY_LABEL}.`,
+      text: `💱 Venda concluída: ${sold.quantity}x ${formatItemWithId(economyService, sold.itemKey)} por *${sold.total}* ${CURRENCY_LABEL}.`,
     })
     return true
   }
@@ -3176,6 +3473,9 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       }
       if (used.effect === "team-contrib-multiplier") {
         return "👥 Multiplicador de contribuições ativo: *2x* em times por 24h."
+      }
+      if (used.effect === "quest-reroll") {
+        return "🔄 Missões diárias re-roladas com sucesso. Use !missao para ver a nova rotação."
       }
       return "✅ Item usado com sucesso."
     })()
@@ -3237,7 +3537,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     }
 
     await sock.sendMessage(from, {
-      text: `🎁 @${sender.split("@")[0]} doou *${transferred.quantity}x ${transferred.itemKey}* para @${target.split("@")[0]}.`,
+      text: `🎁 @${sender.split("@")[0]} doou *${transferred.quantity}x ${formatItemWithId(economyService, transferred.itemKey)}* para @${target.split("@")[0]}.`,
       mentions: [sender, target],
     })
     return true
@@ -3301,7 +3601,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         text:
           `🚨 Roubo falhou! @${sender.split("@")[0]} perdeu *${steal.lost}* ${CURRENCY_LABEL}.\n` +
           `Chance de sucesso nesta tentativa: ${(steal.successChance * 100).toFixed(0)}%` +
-          buildXpRewardText(xpResult, XP_REWARDS.stealAttemptFail),
+          buildXpRewardText(xpResult, XP_REWARDS.stealAttemptFail, economyService),
         mentions: [sender],
       })
       return true
@@ -3317,7 +3617,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         `🕵️ Roubo bem-sucedido! @${sender.split("@")[0]} roubou *${steal.stolenFromVictim}* de @${target.split("@")[0]} e recebeu *${steal.gained}* ${CURRENCY_LABEL}.\n` +
         `Faixa base do roubo: 90 a 320 ${CURRENCY_LABEL} (antes de bônus da Coroa Kronos).\n` +
         `Chance de sucesso nesta tentativa: ${(steal.successChance * 100).toFixed(0)}%` +
-        buildXpRewardText(xpResult, XP_REWARDS.stealAttemptSuccess),
+        buildXpRewardText(xpResult, XP_REWARDS.stealAttemptSuccess, economyService),
       mentions: [sender, target],
     })
     return true
@@ -3335,8 +3635,13 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     }
     const daily = economyService.claimDaily(sender, scaledDailyCoins)
     if (!daily.ok) {
+      const remainingResetMs = typeof economyService.getMsUntilNextDailyReset === "function"
+        ? Math.max(0, Math.floor(Number(economyService.getMsUntilNextDailyReset()) || 0))
+        : getMsUntilNextLocalMidnight()
       await sock.sendMessage(from, {
-        text: "⏰ Você já resgatou seu daily hoje. Volte após o próximo reset global da meia-noite.",
+        text:
+          "⏰ Você já resgatou seu daily hoje.\n" +
+          `Tempo restante para o reset global: *${formatDuration(remainingResetMs)}* (21h).`,
       })
       return true
     }
@@ -3350,12 +3655,12 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         `💰 Daily resgatado: *${daily.amount}* ${CURRENCY_LABEL}.` +
         (daily.kronosBonus ? " (bônus da Coroa Kronos aplicado)" : "") +
         (claimBoost.active ? "\n✨ Multiplicador de rotina aplicado no daily." : "") +
-        buildXpRewardText(xpResult, scaledDailyXp),
+        buildXpRewardText(xpResult, scaledDailyXp, economyService),
     })
     return true
   }
 
-  if (cmdName === prefix + "cestabásica") {
+  if (cmdName === prefix + "cestabásica" || cmdName === prefix + "cestabasica" || cmdName === prefix + "carepackage") {
     const result = economyService.claimCarePackage(sender)
 
     if (!result.ok) {
@@ -3393,15 +3698,15 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         `3 iguais: ganha 3x\n` +
         `4 iguais: ganha 8x\n` +
         `5 iguais: jackpot 30x\n\n` +
-        `Use: !aposta <valor>`,
+        `Use: !cassino <valor>`,
     })
     return true
   }
 
-  if (cmdName === prefix + "aposta") {
+  if (cmdName === prefix + "cassino") {
     const value = parseQuantity(cmdArg1, 0)
     if (value <= 0) {
-      await sock.sendMessage(from, { text: "Use: !aposta <valor>" })
+      await sock.sendMessage(from, { text: "Use: !cassino <valor>" })
       return true
     }
 
@@ -3476,8 +3781,8 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       return arr
     }
 
-    // Meta de balanceamento: ~40% de rodadas vencedoras no cassino.
-    const isWin = Math.random() < 0.4
+    // Meta de balanceamento: 20% de rodadas vencedoras no cassino.
+    const isWin = Math.random() < 0.2
     let maxCount = 0
     if (isWin) {
       const tierRoll = Math.random()
@@ -3504,12 +3809,21 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       incrementUserStat(sender, "moneyCasinoWon", payout)
     }
 
+    let casinoInsurance = { activated: false, refunded: 0 }
     let salvage = { activated: false, refunded: 0 }
-    if (payout <= 0 && typeof economyService.applySalvageInsurance === "function") {
-      salvage = economyService.applySalvageInsurance(sender, value, {
-        betValue: value,
-        threshold: 4,
-      })
+    if (payout <= 0) {
+      if (typeof economyService.applyCasinoInsurance === "function") {
+        casinoInsurance = economyService.applyCasinoInsurance(sender, value, {
+          wager: value,
+          threshold: 2,
+        })
+      }
+      if (typeof economyService.applySalvageInsurance === "function") {
+        salvage = economyService.applySalvageInsurance(sender, value, {
+          betValue: value,
+          threshold: 4,
+        })
+      }
     }
 
     const casinoXp = payout > 0
@@ -3538,22 +3852,25 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         (payout > 0
           ? `Resultado: ganhou *${payout}* ${CURRENCY_LABEL}.`
           : `Resultado: perdeu *${value}* ${CURRENCY_LABEL}.`) +
+        (casinoInsurance.activated ? `\n🎟️ Seguro de Cassino ativado: devolução de *${casinoInsurance.refunded}* ${CURRENCY_LABEL}.` : "") +
         (salvage.activated ? `\n🛟 Seguro Geral ativado: devolução de *${salvage.refunded}* ${CURRENCY_LABEL}.` : "") +
-        buildXpRewardText(xpResult, casinoXp),
+        buildXpRewardText(xpResult, casinoXp, economyService),
     })
     return true
   }
 
-  if (cmdName === prefix + "lootbox" && isGroup) {
+  if (cmdName === prefix + "lootbox") {
     const quantity = parseQuantity(cmdArg1, 1)
     if (quantity <= 0) {
       await sock.sendMessage(from, { text: "Use: !lootbox <quantidade>" })
       return true
     }
 
-    // pega membros do grupo para os efeitos da lootbox
-    const metadata = await sock.groupMetadata(from)
-    const groupMembers = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
+    let groupMembers = []
+    if (isGroup) {
+      const metadata = await sock.groupMetadata(from)
+      groupMembers = (metadata?.participants || []).map((p) => jidNormalizedUser(p.id))
+    }
 
     const result = economyService.openLootbox(sender, quantity, groupMembers)
     if (!result.ok) {
@@ -3803,7 +4120,9 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       return true
     }
 
-    const WORK_COOLDOWN_MS = 90 * 60_000
+    const WORK_COOLDOWN_MS = typeof economyService.getWorkCooldownDurationMs === "function"
+      ? economyService.getWorkCooldownDurationMs(sender)
+      : 90 * 60_000
     const lastWorkAt = economyService.getWorkCooldown(sender)
     const remaining = (lastWorkAt + WORK_COOLDOWN_MS) - Date.now()
     if (remaining > 0) {
@@ -3817,6 +4136,8 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     economyService.incrementStat(sender, "works", 1)
 
     let gain = 0
+    let workLossAmount = 0
+    let workSafetyReferenceAmount = 150
     let message = ""
     let workStatus = "none"
     let xpReward = XP_REWARDS.workFail
@@ -3828,6 +4149,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         xpReward = XP_REWARDS.workFail
       } else {
         gain = Math.floor(Math.random() * 91) + 55
+        workSafetyReferenceAmount = gain
         message = `🍔 Delivery concluído! Você ganhou ${gain} ${CURRENCY_LABEL}.`
         workStatus = "win"
         xpReward = XP_REWARDS.workWin
@@ -3839,11 +4161,13 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         xpReward = XP_REWARDS.workFail
       } else {
         gain = 110
+        workSafetyReferenceAmount = gain
         message = `🌱 Serviço concluído! Você ganhou ${gain} ${CURRENCY_LABEL}.`
         workStatus = "win"
         xpReward = XP_REWARDS.workWin
       }
     } else if (work === "lavagem") {
+      workSafetyReferenceAmount = 320
       if (Math.random() < 0.8) {
         const lossByPercent = Math.floor(economyService.getCoins(sender) * 0.2)
         const lost = economyService.debitCoinsFlexible(sender, Math.min(lossByPercent, 1500), {
@@ -3851,11 +4175,13 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
           details: "Falha no trabalho lavagem",
           meta: { work },
         })
+        workLossAmount = lost
         message = `💀 Lavagem fracassou! Você perdeu ${lost} ${CURRENCY_LABEL}.`
         workStatus = "loss"
         xpReward = XP_REWARDS.workFail
       } else {
         gain = Math.floor(Math.random() * 301) + 320
+        workSafetyReferenceAmount = gain
         message = `💰 Lavagem concluída! Você ganhou ${gain} ${CURRENCY_LABEL}.`
         workStatus = "win"
         xpReward = XP_REWARDS.workWin
@@ -3865,18 +4191,20 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const roll = Math.random() * 100
       const baseGain = 150
       if (roll > 50) {
-        gain = Math.floor(baseGain * 2) // 2x payout branch
-        message = `🎲 Aposta vencida! Você ganhou ${gain} ${CURRENCY_LABEL} (2x multiplicador).`
+        gain = Math.floor(baseGain * 2)
+        workSafetyReferenceAmount = gain
+        message = `🎲 Você ganhou ${gain} ${CURRENCY_LABEL} no jogo do bicho!`
         workStatus = "win"
         xpReward = XP_REWARDS.workWin
       } else {
-        gain = Math.floor(baseGain * 0.5) // 0.5x payout branch (50% floor)
-        message = `🎲 Aposta parcial! Você ganhou ${gain} ${CURRENCY_LABEL} (0.5x multiplicador).`
+        gain = Math.floor(baseGain * 0.5)
+        workSafetyReferenceAmount = gain
+        message = `🎲 Você ganhou no jogo do bicho, mas te roubaram logo em seguida! Você ganhou apenas ${gain} ${CURRENCY_LABEL}.`
         workStatus = "win"
         xpReward = XP_REWARDS.workWin
       }
     } else if (work === "minerar") {
-      // Minigame work type: roll determines outcome (0% chance - zero payout or normal)
+      workSafetyReferenceAmount = 180
       const roll = Math.random() * 100
       if (roll < 30) {
         gain = 0
@@ -3885,11 +4213,13 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         xpReward = XP_REWARDS.workFail
       } else {
         gain = Math.floor(Math.random() * 151) + 180
+        workSafetyReferenceAmount = gain
         message = `⛏️ Mineração bem-sucedida! Você extraiu minérios e ganhou ${gain} ${CURRENCY_LABEL}.`
         workStatus = "win"
         xpReward = XP_REWARDS.workWin
       }
     } else if (work === "bitcoin") {
+      workSafetyReferenceAmount = 200
       // Standard work type: moderate difficulty, good base reward
       if (Math.random() < 0.15) {
         message = `💰 Mineração de Bitcoin falhou! Sua GPU superaqueceu e você perdeu tempo valioso.`
@@ -3897,6 +4227,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         xpReward = XP_REWARDS.workFail
       } else {
         gain = Math.floor(Math.random() * 151) + 200
+        workSafetyReferenceAmount = gain
         message = `💰 Mineração de Bitcoin realizada! Você ganhou ${gain} ${CURRENCY_LABEL} em criptos.`
         workStatus = "win"
         xpReward = XP_REWARDS.workWin
@@ -3923,6 +4254,26 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       if (claimBoost.active) {
         message += "\n✨ Multiplicador de rotina aplicado no trabalho."
       }
+    } else if ((workStatus === "fail" || workStatus === "zero") && typeof economyService.applyWorkSafetyToken === "function") {
+      const scaledReference = getLevelScaledAmount(workSafetyReferenceAmount, level, 0.045)
+      const workSafety = economyService.applyWorkSafetyToken(sender, 0, {
+        workType: work,
+        referenceAmount: scaledReference,
+        fallbackCompensation: 0,
+      })
+      if (workSafety.activated && workSafety.compensation > 0) {
+        message += `\n🦺 Token de Seguro no Trabalho ativado: compensação de *${workSafety.compensation}* ${CURRENCY_LABEL}.`
+      }
+    }
+
+    if (work === "lavagem" && workStatus === "loss" && workLossAmount > 0 && typeof economyService.applyWorkSafetyToken === "function") {
+      const workSafety = economyService.applyWorkSafetyToken(sender, workLossAmount, {
+        workType: work,
+        fallbackCompensation: 0,
+      })
+      if (workSafety.activated && workSafety.refunded > 0) {
+        message += `\n🦺 Token de Seguro no Trabalho ativado: reembolso de *${workSafety.refunded}* ${CURRENCY_LABEL}.`
+      }
     }
 
     telemetry.incrementCounter("economy.work.attempt", 1, {
@@ -3944,7 +4295,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     })
     await handleLevel100Milestone(sock, sender, xpResult)
     await sock.sendMessage(from, {
-      text: message + buildXpRewardText(xpResult, scaledWorkXp),
+      text: message + buildXpRewardText(xpResult, scaledWorkXp, economyService),
     })
     return true
   }
@@ -4009,7 +4360,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
                 meta: { groupId: from, createdBy: activeSession.createdBy, item: reward.itemKey, qty: added },
               })
             }
-            appliedRewardLines.push(`- @${winner.split("@")[0]}: ${added}x ${reward.name}`)
+            appliedRewardLines.push(`- @${winner.split("@")[0]}: ${added}x ${formatItemWithId(economyService, reward.itemKey)}`)
             continue
           }
 
@@ -4140,7 +4491,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     const rewardPreview = parsedRewards.rewards
       .map((reward) => {
         if (reward.type === "coins") return `- moedas=${reward.amount}`
-        if (reward.type === "item") return `- item:${reward.itemKey}-${reward.quantity}`
+        if (reward.type === "item") return `- item:${formatItemWithId(economyService, reward.itemKey)} x${reward.quantity}`
         return `- ${reward.text}`
       })
       .join("\n")
@@ -4171,13 +4522,6 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
   }
 
   if (cmdName === prefix + "usarpasse" && isGroup) {
-    if (!botHasGroupAdminPrivileges) {
-      await sock.sendMessage(from, {
-        text: "⚠️ Não consigo aplicar punições sem privilégio de administrador no grupo.",
-      })
-      return true
-    }
-
     const target = mentioned[0]
     const passType = Number.parseInt(cmdParts[2] || "", 10)
     const passSeverity = parseQuantity(cmdParts[3], 1)
@@ -4216,7 +4560,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  if ((cmdName === prefix + "setcoins" || cmdName === prefix + "addcoins" || cmdName === prefix + "removecoins" || cmdName === prefix + "additem" || cmdName === prefix + "removeitem") && isGroup) {
+  if ((cmdName === prefix + "setcoins" || cmdName === prefix + "addcoins" || cmdName === prefix + "removecoins" || cmdName === prefix + "additem" || cmdName === prefix + "removeitem" || cmdName === prefix + "mudarapelido") && isGroup) {
     if (!isOverrideSender) {
       await sock.sendMessage(from, { text: "Apenas overrides podem usar esse comando." })
       return true
@@ -4232,13 +4576,13 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       if (!Number.isFinite(amount) || amount < 0 || amount > limits.maxCoinsBalance) {
         return sock.sendMessage(from, { text: "Use: !setcoins [@user] <quantidade>" })
       }
-      const result = economyService.setCoins(target, amount, {
+      const balance = economyService.setCoins(target, amount, {
         type: "admin-setcoins",
         details: `Admin definiu saldo para ${amount}`,
         meta: { admin: sender },
       })
       await sock.sendMessage(from, {
-        text: `✅ Saldo de @${target.split("@")[0]} ajustado para *${result.balance}* ${CURRENCY_LABEL}.`,
+        text: `✅ Saldo de @${target.split("@")[0]} ajustado para *${balance}* ${CURRENCY_LABEL}.`,
         mentions: targetMentions,
       })
       return true
@@ -4249,12 +4593,12 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       if (amount <= 0 || amount > limits.maxCoinOperation) {
         return sock.sendMessage(from, { text: `Use: !addcoins [@user] [quantidade] (máx: ${limits.maxCoinOperation})` })
       }
-      economyService.creditCoins(target, amount, {
+      const credited = economyService.creditCoins(target, amount, {
         type: "admin-credit",
         details: `Admin adicionou ${amount}`,
         meta: { admin: sender },
       })
-      await sock.sendMessage(from, { text: `✅ ${amount} ${CURRENCY_LABEL} adicionadas para @${target.split("@")[0]}.`, mentions: targetMentions })
+      await sock.sendMessage(from, { text: `✅ ${credited} ${CURRENCY_LABEL} adicionadas para @${target.split("@")[0]}.`, mentions: targetMentions })
       return true
     }
 
@@ -4305,16 +4649,15 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const next = economyService.addItem(target, effectiveItem, qty)
       if (next <= 0) return sock.sendMessage(from, { text: "Item inválido." })
 
-      const itemDef = economyService.getItemDefinition(effectiveItem)
-      const itemName = itemDef?.name || effectiveItem
+      const itemDisplayName = formatItemWithId(economyService, effectiveItem)
       economyService.pushTransaction(target, {
         type: "admin-item-add",
         deltaCoins: 0,
-        details: `Admin adicionou ${qty}x ${effectiveItem}`,
+        details: `Admin adicionou ${qty}x ${itemDisplayName}`,
         meta: { admin: sender, item: effectiveItem, qty },
       })
       await sock.sendMessage(from, {
-        text: `✅ Item adicionado para @${target.split("@")[0]}: *${qty}x ${itemName}*`,
+        text: `✅ Item adicionado para @${target.split("@")[0]}: *${qty}x ${itemDisplayName}*`,
         mentions: targetMentions,
       })
       return true
@@ -4327,14 +4670,60 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       if (!item || !qtyInput || qty <= 0 || qty > limits.maxItemOperation) {
         return sock.sendMessage(from, { text: "Use: !removeitem [@user] <tipo> <quantidade>" })
       }
-      economyService.removeItem(target, item, qty)
+      const normalizedItem = economyService.normalizeItemKey(item)
+      if (!normalizedItem) {
+        return sock.sendMessage(from, { text: "Item inválido." })
+      }
+      economyService.removeItem(target, normalizedItem, qty)
+      const itemDisplayName = formatItemWithId(economyService, normalizedItem)
       economyService.pushTransaction(target, {
         type: "admin-item-remove",
         deltaCoins: 0,
-        details: `Admin removeu ${qty}x ${item}`,
-        meta: { admin: sender, item, qty },
+        details: `Admin removeu ${qty}x ${itemDisplayName}`,
+        meta: { admin: sender, item: normalizedItem, qty },
       })
-      await sock.sendMessage(from, { text: `✅ Item removido de @${target.split("@")[0]}.`, mentions: targetMentions })
+      await sock.sendMessage(from, {
+        text: `✅ Item removido de @${target.split("@")[0]}: *${qty}x ${itemDisplayName}*`,
+        mentions: targetMentions,
+      })
+      return true
+    }
+
+    if (cmdName === prefix + "mudarapelido") {
+      if (!mentionedTarget) {
+        return sock.sendMessage(from, { text: "Use: !mudarapelido @user <apelido-novo>" })
+      }
+
+      let label = ""
+      const rawInput = String(rawText || "").trim()
+      const commandToken = `${prefix}mudarapelido`
+      if (rawInput) {
+        const startsWithCommand = rawInput.toLowerCase().startsWith(commandToken.toLowerCase())
+        const afterCommand = startsWithCommand
+          ? rawInput.slice(commandToken.length).trimStart()
+          : rawInput
+        const mentionAndLabelMatch = afterCommand.match(/^@\S+\s+([\s\S]+)$/)
+        if (mentionAndLabelMatch?.[1]) {
+          label = String(mentionAndLabelMatch[1]).trim()
+        }
+      }
+      if (!label) {
+        label = String(cmdParts.slice(2).join(" ") || "").trim()
+      }
+      label = label.slice(0, 30)
+      if (!label) {
+        return sock.sendMessage(from, { text: "Use: !mudarapelido @user <apelido-novo>" })
+      }
+
+      if (typeof economyService.setPublicLabel !== "function") {
+        return sock.sendMessage(from, { text: "Não foi possível alterar apelido agora." })
+      }
+
+      economyService.setPublicLabel(target, label)
+      await sock.sendMessage(from, {
+        text: `✅ Apelido público de @${target.split("@")[0]} atualizado para: *${label}*`,
+        mentions: targetMentions,
+      })
       return true
     }
   }

@@ -42,6 +42,7 @@ const MAX_ITEM_STACK = 100_000
 const MAX_ITEM_OPERATION = 10_000
 const MAX_LOOTBOX_OPEN_PER_CALL = 10
 const MAX_FORGE_QUANTITY = 1_000
+const WORK_COOLDOWN_BASE_MS = 90 * 60 * 1000
 const DAILY_QUEST_COUNT = 3
 const WEEKLY_QUEST_COUNT = 5
 const BASE_XP_TO_LEVEL = 80
@@ -89,6 +90,9 @@ const PUNISHMENT_PASS_BASE_SELL = {
   13: 750,  // max 3 words
 }
 
+const PASS_ITEM_ID_BASE = 100_000
+const PASS_ITEM_ID_TYPE_FACTOR = 1_000
+
 function normalizePassSeverity(value, fallback = 1) {
   const parsed = Math.floor(Number(value) || 0)
   return parsed > 0 ? parsed : fallback
@@ -102,15 +106,25 @@ function isValidPunishmentType(type) {
 function buildPunishmentPassKey(type, severity = 1) {
   const safeType = Math.floor(Number(type) || 0)
   const safeSeverity = normalizePassSeverity(severity, 1)
-  return `passPunicao${safeType}x${safeSeverity}`
+  return String(PASS_ITEM_ID_BASE + (safeType * PASS_ITEM_ID_TYPE_FACTOR) + safeSeverity)
 }
 
 function parsePunishmentPassKey(itemKey = "") {
   const raw = String(itemKey || "")
-  const match = raw.match(/^passPunicao(1[0-3]|[1-9])x(\d+)$/i)
-  if (!match) return null
-  const type = Number.parseInt(match[1], 10)
-  const severity = normalizePassSeverity(match[2], 1)
+  const numeric = Number.parseInt(raw, 10)
+  if (/^\d+$/.test(raw) && Number.isFinite(numeric) && numeric >= (PASS_ITEM_ID_BASE + PASS_ITEM_ID_TYPE_FACTOR + 1)) {
+    const remainder = numeric - PASS_ITEM_ID_BASE
+    const type = Math.floor(remainder / PASS_ITEM_ID_TYPE_FACTOR)
+    const severity = remainder % PASS_ITEM_ID_TYPE_FACTOR
+    if (isValidPunishmentType(type) && severity > 0) {
+      return { type, severity, key: buildPunishmentPassKey(type, severity) }
+    }
+  }
+
+  const legacyMatch = raw.match(/^passPunicao(1[0-3]|[1-9])x(\d+)$/i)
+  if (!legacyMatch) return null
+  const type = Number.parseInt(legacyMatch[1], 10)
+  const severity = normalizePassSeverity(legacyMatch[2], 1)
   return { type, severity, key: buildPunishmentPassKey(type, severity) }
 }
 
@@ -144,8 +158,9 @@ const ITEM_DEFINITIONS = {
   // Defense
   escudo: {
     key: "escudo",
+    id: "1",
     aliases: ["escudob"],
-    name: "Escudo Básico",
+    name: "Escudo",
     price: 900,
     sellRate: 0.8,
     stackable: true,
@@ -154,58 +169,64 @@ const ITEM_DEFINITIONS = {
   },
   escudoReforcado: {
     key: "escudoReforcado",
+    id: "2",
     aliases: ["escudoforte"],
     name: "Escudo Reforçado",
     price: 2500,
     sellRate: 0.8,
     stackable: true,
     rarity: 3,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto (efeito reforçado ainda não implementado).",
+    description: "[PASSIVO] Ao ativar, converte-se em 3 proteções automáticas contra punições/roubos.",
   },
   // Risk Protection
   antiRouboCharm: {
     key: "antiRouboCharm",
+    id: "3",
     aliases: ["pingenteantiroubo", "pingentear", "pingenteantiroubo", "pingenteAntiRoubo"],
     name: "Pingente Anti-Roubo",
     price: 1200,
     sellRate: 0.8,
     stackable: true,
     rarity: 2,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto (bloqueio por pingente ainda não implementado).",
+    description: "[PASSIVO] Reduz em 5% a chance de sucesso de roubos contra você.",
   },
   casinoInsurance: {
     key: "casinoInsurance",
+    id: "4",
     aliases: ["tokensegurocassino", "seguroCassino"],
     name: "Token de Seguro no Cassino",
     price: 1800,
     sellRate: 0.8,
     stackable: true,
     rarity: 3,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto (seguro de cassino ainda não implementado).",
+    description: "[PASSIVO] Ao perder no cassino, consome 1 token e devolve 40% da perda.",
   },
   // Utility
   workSafetyToken: {
     key: "workSafetyToken",
+    id: "5",
     aliases: ["tokentrabalhoseguro", "seguroTrabalho"],
     name: "Token de Seguro no Trabalho",
     price: 600,
     sellRate: 0.8,
     stackable: true,
     rarity: 1,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto (seguro de trabalho ainda não implementado).",
+    description: "[PASSIVO] Em falhas de trabalho, consome 1 token e devolve 40% da perda/valor de referência.",
   },
   rrFocusToken: {
-    key: "rrFocusToken",
+    key: "rrtokensorte",
+    id: "6",
     aliases: ["tokensorterr", "tokenSorteRR"],
     name: "Token de Sorte na RR",
     price: 1400,
     sellRate: 0.8,
     stackable: true,
     rarity: 2,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto (foco de RR ainda não implementado).",
+    description: "[PASSIVO] Na Roleta Russa, reduz a chance de ser atingido. Consome 1 token ao vencer sem ser atingido.",
   },
   cooldownReducer: {
     key: "redutorCooldowns1",
+    id: "7",
     aliases: ["redutor", "redutorCooldowns"],
     name: "Redutor de Cooldowns",
     price: 1100,
@@ -216,16 +237,18 @@ const ITEM_DEFINITIONS = {
   },
   questRerollToken: {
     key: "questRerollToken",
+    id: "8",
     aliases: ["rerollmissao", "tokenRerolagem"],
     name: "Token de Re-rolagem",
     price: 800,
     sellRate: 0.8,
     stackable: true,
     rarity: 2,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto (reroll de missão ainda não implementado).",
+    description: "[MANUAL via !usaritem] Re-rola as missões diárias atuais.",
   },
   streakSaver: {
     key: "streakSaver",
+    id: "9",
     aliases: ["salvadorstreak", "salvaStreak"],
     name: "Salva-streak",
     price: 1300,
@@ -236,6 +259,7 @@ const ITEM_DEFINITIONS = {
   },
   salvageToken: {
     key: "salvageToken",
+    id: "10",
     aliases: ["seguro", "seguroGeral"],
     name: "Seguro Geral",
     price: 2000,
@@ -247,6 +271,7 @@ const ITEM_DEFINITIONS = {
   // Boosters
   xpBooster: {
     key: "xpBooster",
+    id: "11",
     aliases: ["boosterxp", "boosterXp"],
     name: "Booster de XP",
     price: 700,
@@ -257,36 +282,40 @@ const ITEM_DEFINITIONS = {
   },
   moedaDaSorte: {
     key: "moedaDaSorte",
+    id: "12",
     aliases: ["moedadasorte"],
     name: "Moeda da Sorte",
     price: 450,
     sellRate: 0.75,
     stackable: true,
     rarity: 1,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] +5% ganhos de moedas em daily/trabalho/cassino/roubo.",
   },
   espelhoDeLuz: {
     key: "espelhoDeLuz",
+    id: "13",
     aliases: ["espelhol"],
     name: "Espelho de Luz",
     price: 500,
     sellRate: 0.75,
     stackable: true,
     rarity: 1,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] Bloqueia automaticamente 1 punição/roubo por semana.",
   },
   boosterDeMoedas: {
     key: "boosterDeMoedas",
+    id: "14",
     aliases: ["boostermoedas"],
     name: "Booster de Moedas",
     price: 550,
     sellRate: 0.8,
     stackable: true,
     rarity: 1,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] +25% moedas recebidas em trabalho.",
   },
   questPointBooster: {
     key: "questPointBooster",
+    id: "15",
     aliases: ["boostermissao", "boosterMissao"],
     name: "Multiplicador de Recompensas (Quests)",
     price: 950,
@@ -297,6 +326,7 @@ const ITEM_DEFINITIONS = {
   },
   claimMultiplier: {
     key: "claimMultiplier",
+    id: "16",
     aliases: ["multiplicador", "multiplicadorRotina"],
     name: "Multiplicador de Rotina (!daily/!trabalho)",
     price: 1500,
@@ -307,27 +337,30 @@ const ITEM_DEFINITIONS = {
   },
   cristalDeAmplificacao: {
     key: "cristalDeAmplificacao",
+    id: "17",
     aliases: ["cristal"],
     name: "Cristal de Amplificação",
     price: 2200,
     sellRate: 0.78,
     stackable: true,
     rarity: 3,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] +12% ganhos no cassino.",
   },
   joiaDeProtecao: {
     key: "joiaDeProtecao",
+    id: "18",
     aliases: ["joiaprotecao"],
     name: "Joia de Proteção",
     price: 2400,
     sellRate: 0.78,
     stackable: true,
     rarity: 3,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] Reduz em 6% a chance de ser roubado.",
   },
   // Social
   teamContribBooster: {
     key: "teamContribBooster",
+    id: "19",
     aliases: ["boostertime", "multiplicadorTime"],
     name: "Multiplicador de Contribuições",
     price: 1600,
@@ -340,68 +373,75 @@ const ITEM_DEFINITIONS = {
   // ===== RARE ITEMS (Rarity 4) =====
   artefatoAntigo: {
     key: "artefatoAntigo",
+    id: "20",
     aliases: ["artefato"],
     name: "Artefato Antigo",
     price: 3500,
     sellRate: 0.75,
     stackable: true,
     rarity: 4,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] +10% XP em todas as fontes.",
   },
   joiaDeAssalto: {
     key: "joiaDeAssalto",
+    id: "21",
     aliases: ["joiaroubo", "joiaassalto"],
     name: "Joia de Assalto",
     price: 4000,
     sellRate: 0.75,
     stackable: true,
     rarity: 4,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] Aumenta em 8% sua chance de sucesso ao roubar.",
   },
   reliquiaEsquecida: {
-    key: "reliquiaEsquecida",
-    aliases: ["reliquia"],
+    key: "charmeKronos",
+    id: "22",
+    aliases: ["charmeKronos"],
     name: "Charme do Kronos",
     price: 4500,
     sellRate: 0.75,
     stackable: true,
     rarity: 4,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] +10% moedas obtidas em roubos bem-sucedidos.",
   },
   tesouroClassico: {
     key: "tesouroClassico",
+    id: "23",
     aliases: ["tesouro"],
     name: "Tesouro Clássico",
     price: 5000,
     sellRate: 0.75,
     stackable: true,
     rarity: 4,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] +12% recompensa de moedas no daily.",
   },
   coracaoOssiificado: {
     key: "coracaoOssificado",
+    id: "24",
     aliases: ["coracao"],
     name: "Amuleto de Defesa",
     price: 3800,
     sellRate: 0.74,
     stackable: true,
     rarity: 4,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] Bloqueia automaticamente 1 punição/roubo por dia.",
   },
   seloLendario: {
     key: "seloLendario",
+    id: "25",
     aliases: ["selo"],
     name: "Selo de Bônus Global",
     price: 4200,
     sellRate: 0.75,
     stackable: true,
     rarity: 4,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] +25% efetividade de contribuição em times.",
   },
 
   // ===== KRONOS CROWNS (Special, Rarity 5) =====
   kronosQuebrada: {
     key: "kronosQuebrada",
+    id: "26",
     aliases: ["coroakronosquebrada"],
     name: "Coroa Kronos (Quebrada)",
     price: 24000,
@@ -413,6 +453,7 @@ const ITEM_DEFINITIONS = {
   },
   kronosVerdadeira: {
     key: "kronosVerdadeira",
+    id: "0",
     aliases: ["coroakronosverdadeira"],
     name: "Coroa Kronos Verdadeira",
     price: 120000,
@@ -424,26 +465,29 @@ const ITEM_DEFINITIONS = {
   },
   tesouroLendario: {
     key: "tesouroLendario",
+    id: "27",
     aliases: ["tesouro"],
     name: "Tesouro Lendário",
     price: 150000,
     sellRate: 0.76,
     stackable: true,
     rarity: 5,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] +15% ganhos de moedas em múltiplas fontes.",
   },
   pedraClimatica: {
     key: "pedraClimatica",
+    id: "28",
     aliases: ["pedra"],
     name: "Token de Pico Semanal",
     price: 100000,
     sellRate: 0.76,
     stackable: true,
     rarity: 5,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] Reduz em 25% o cooldown de !trabalho.",
   },
   coracaoDoUniverso: {
     key: "coracaoDoUniverso",
+    id: "29",
     aliases: ["coracao"],
     name: "Renda Diária Suprema",
     price: 180000,
@@ -451,22 +495,24 @@ const ITEM_DEFINITIONS = {
     stackable: true,
     rarity: 5,
     permanent: true,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] +40% moedas no daily.",
   },
   marcaEterna: {
     key: "marcaEterna",
+    id: "30",
     aliases: ["marca"],
     name: "Marca de Crescimento",
     price: 160000,
     sellRate: 0.76,
     stackable: true,
     rarity: 5,
-    description: "[SEM EFEITO FUNCIONAL] Item colecionável por enquanto.",
+    description: "[PASSIVO] +6% XP em todas as fontes.",
   },
 
   // ===== LOOTBOX & REGULAR ITEMS =====
   lootbox: {
     key: "lootbox",
+    id: "31",
     aliases: ["caixa", "lootcaixa"],
     name: "Lootbox",
     price: 900,
@@ -479,6 +525,7 @@ const ITEM_DEFINITIONS = {
   // ===== DISCOUNT COUPONS (buyable and earnable, not in shop) =====
   coupon5pct: {
     key: "coupon5pct",
+    id: "32",
     aliases: ["cupom5"],
     name: "Discount Coupon (5%)",
     price: 0,
@@ -490,6 +537,7 @@ const ITEM_DEFINITIONS = {
   },
   coupon10pct: {
     key: "coupon10pct",
+    id: "33",
     aliases: ["cupom10"],
     name: "Discount Coupon (10%)",
     price: 0,
@@ -501,6 +549,7 @@ const ITEM_DEFINITIONS = {
   },
   coupon25pct: {
     key: "coupon25pct",
+    id: "34",
     aliases: ["cupom25"],
     name: "Discount Coupon (25%)",
     price: 0,
@@ -512,6 +561,7 @@ const ITEM_DEFINITIONS = {
   },
   coupon40pct: {
     key: "coupon40pct",
+    id: "35",
     aliases: ["cupom40"],
     name: "Discount Coupon (40%)",
     price: 0,
@@ -523,6 +573,33 @@ const ITEM_DEFINITIONS = {
   },
 
 }
+
+const LEGACY_ITEM_KEY_TO_ID = {}
+const seenItemNumericIds = new Set()
+
+for (const item of Object.values(ITEM_DEFINITIONS)) {
+  const legacyKey = String(item?.key || "").trim()
+  const numericId = String(item?.id || "").trim()
+  if (!legacyKey) continue
+  if (!numericId || !/^\d+$/.test(numericId)) {
+    throw new Error(`Item sem id numérico válido em ITEM_DEFINITIONS: ${legacyKey}`)
+  }
+  if (seenItemNumericIds.has(numericId)) {
+    throw new Error(`ID de item duplicado em ITEM_DEFINITIONS: ${numericId}`)
+  }
+  seenItemNumericIds.add(numericId)
+  LEGACY_ITEM_KEY_TO_ID[legacyKey] = numericId
+  item.legacyKey = legacyKey
+  item.id = numericId
+  item.key = numericId
+}
+
+const ITEM_DEFINITIONS_BY_ID = Object.fromEntries(
+  Object.values(ITEM_DEFINITIONS).map((item) => [String(item?.key || ""), item])
+)
+
+const KRONOS_VERDADEIRA_ITEM_ID = LEGACY_ITEM_KEY_TO_ID.kronosVerdadeira
+const KRONOS_QUEBRADA_ITEM_ID = LEGACY_ITEM_KEY_TO_ID.kronosQuebrada
 
 const SHIELD_PRICE = ITEM_DEFINITIONS.escudo.price
 
@@ -614,12 +691,15 @@ const DEFAULT_USER_STATS = {
   itemsBought: 0,
   shieldsUsed: 0,
   questsCompleted: 0,
+  tradesCompleted: 0,
+  forgedPasses: 0,
 }
 
 const DEFAULT_PROGRESSION = {
   level: 1,
   xp: 0,
   seasonPoints: 0,
+  dailyQuestRerollNonce: 0,
   lastQuestDayKey: null,
   dailyQuests: [],
   teamId: null,
@@ -672,8 +752,61 @@ let economyCache = {
   seasonState: buildDefaultSeasonState(),
 }
 
+function splitDeviceSuffix(value = "") {
+  return String(value || "").split(":")[0]
+}
+
+function parseUserParts(value = "") {
+  const base = splitDeviceSuffix(String(value || "").trim().toLowerCase())
+  const atIndex = base.indexOf("@")
+  if (atIndex < 0) return { base, userPart: base, domain: "" }
+  return {
+    base,
+    userPart: base.slice(0, atIndex),
+    domain: base.slice(atIndex + 1),
+  }
+}
+
+function canonicalUserHandle(userPart = "") {
+  const cleaned = String(userPart || "").trim().toLowerCase()
+  if (!cleaned) return ""
+  const digits = cleaned.replace(/\D+/g, "")
+  return digits || cleaned
+}
+
 function normalizeUserId(userId = "") {
-  return String(userId || "").trim().toLowerCase()
+  const { base, userPart, domain } = parseUserParts(userId)
+  if (!base || !userPart) return ""
+  if (domain === "s.whatsapp.net" || domain === "lid") {
+    return `${canonicalUserHandle(userPart)}@s.whatsapp.net`
+  }
+  return base
+}
+
+function getUserIdAliases(userId = "") {
+  const aliases = new Set()
+  const { base, userPart, domain } = parseUserParts(userId)
+  const normalized = normalizeUserId(userId)
+  if (normalized) aliases.add(normalized)
+  if (base) aliases.add(base)
+
+  if ((domain === "s.whatsapp.net" || domain === "lid") && userPart) {
+    const canonical = canonicalUserHandle(userPart)
+    if (canonical) {
+      aliases.add(`${canonical}@s.whatsapp.net`)
+      aliases.add(`${canonical}@lid`)
+    }
+  }
+
+  return Array.from(aliases).filter(Boolean)
+}
+
+function pickPreferredUserRecord(current = null, incoming = null) {
+  if (!current) return incoming
+  if (!incoming) return current
+  const currentUpdated = Math.floor(Number(current.updatedAt) || 0)
+  const incomingUpdated = Math.floor(Number(incoming.updatedAt) || 0)
+  return incomingUpdated > currentUpdated ? incoming : current
 }
 
 function capPositiveInt(value, cap, fallback = 0) {
@@ -767,6 +900,22 @@ function loadEconomy() {
     if (!economyCache.users || typeof economyCache.users !== "object") {
       economyCache.users = {}
     }
+
+    const migratedUsers = {}
+    let hasUserIdMigration = false
+    for (const [rawUserId, payload] of Object.entries(economyCache.users)) {
+      const normalized = normalizeUserId(rawUserId)
+      if (!normalized) {
+        hasUserIdMigration = true
+        continue
+      }
+      if (normalized !== rawUserId) {
+        hasUserIdMigration = true
+      }
+      migratedUsers[normalized] = pickPreferredUserRecord(migratedUsers[normalized], payload)
+    }
+    economyCache.users = migratedUsers
+
     if (!economyCache.seasonState || typeof economyCache.seasonState !== "object") {
       economyCache.seasonState = buildDefaultSeasonState(now)
     }
@@ -780,6 +929,9 @@ function loadEconomy() {
       ? Math.floor(economyCache.seasonState.endDate)
       : (economyCache.seasonState.startDate + SEASON_DURATION_MS)
     economyCache.seasonState.resetPolicy = economyCache.seasonState.resetPolicy === "hard" ? "hard" : "soft"
+    if (hasUserIdMigration) {
+      saveEconomy(true)
+    }
     recordDailyEconomyHealthSnapshot("load")
   } catch (err) {
     console.error("Erro ao carregar economia:", err)
@@ -955,9 +1107,9 @@ function migrateUserShape(user) {
     }
   }
   
-  // Migrar dados antigos de "kronos" para "kronosQuebrada"
+  // Migrar dados antigos de "kronos" para a Kronos quebrada canônica
   if (user.items.kronos && user.items.kronos > 0) {
-    user.items.kronosQuebrada = (Number(user.items.kronosQuebrada) || 0) + Number(user.items.kronos)
+    user.items[KRONOS_QUEBRADA_ITEM_ID] = (Number(user.items[KRONOS_QUEBRADA_ITEM_ID]) || 0) + Number(user.items.kronos)
     delete user.items.kronos
   }
 
@@ -970,26 +1122,37 @@ function migrateUserShape(user) {
 
   // Migrar chaves antigas/temporárias de itens para as chaves canônicas atuais
   const ITEM_KEY_MIGRATIONS = {
-    pingenteAntiRoubo: "antiRouboCharm",
-    seguroCassino: "casinoInsurance",
-    seguroTrabalho: "workSafetyToken",
-    tokenSorteRR: "rrFocusToken",
-    redutorCooldowns: "redutorCooldowns1",
-    tokenRerolagem: "questRerollToken",
-    salvaStreak: "streakSaver",
-    seguroGeral: "salvageToken",
-    boosterXp: "xpBooster",
-    boosterMissao: "questPointBooster",
-    multiplicadorRotina: "claimMultiplier",
-    multiplicadorTime: "teamContribBooster",
+    pingenteAntiRoubo: LEGACY_ITEM_KEY_TO_ID.antiRouboCharm,
+    seguroCassino: LEGACY_ITEM_KEY_TO_ID.casinoInsurance,
+    seguroTrabalho: LEGACY_ITEM_KEY_TO_ID.workSafetyToken,
+    tokenSorteRR: LEGACY_ITEM_KEY_TO_ID.rrtokensorte,
+    rrFocusToken: LEGACY_ITEM_KEY_TO_ID.rrtokensorte,
+    redutorCooldowns: LEGACY_ITEM_KEY_TO_ID.redutorCooldowns1,
+    tokenRerolagem: LEGACY_ITEM_KEY_TO_ID.questRerollToken,
+    salvaStreak: LEGACY_ITEM_KEY_TO_ID.streakSaver,
+    seguroGeral: LEGACY_ITEM_KEY_TO_ID.salvageToken,
+    boosterXp: LEGACY_ITEM_KEY_TO_ID.xpBooster,
+    boosterMissao: LEGACY_ITEM_KEY_TO_ID.questPointBooster,
+    multiplicadorRotina: LEGACY_ITEM_KEY_TO_ID.claimMultiplier,
+    multiplicadorTime: LEGACY_ITEM_KEY_TO_ID.teamContribBooster,
   }
   for (const [legacyKey, canonicalKey] of Object.entries(ITEM_KEY_MIGRATIONS)) {
+    if (!canonicalKey) continue
     const qty = Math.max(0, Math.floor(Number(user.items[legacyKey]) || 0))
     if (qty > 0) {
       user.items[canonicalKey] = Math.max(0, Math.floor(Number(user.items[canonicalKey]) || 0)) + qty
       delete user.items[legacyKey]
     }
   }
+
+  const migratedItems = {}
+  for (const [rawKey, rawQty] of Object.entries(user.items || {})) {
+    const key = normalizeItemKey(rawKey)
+    const qty = Math.max(0, Math.floor(Number(rawQty) || 0))
+    if (!key || qty <= 0) continue
+    migratedItems[key] = Math.max(0, Math.floor(Number(migratedItems[key]) || 0)) + qty
+  }
+  user.items = migratedItems
   
   if (!user.buffs || typeof user.buffs !== "object") {
     user.buffs = {
@@ -1001,6 +1164,8 @@ function migrateUserShape(user) {
       questRewardMultiplierCharges: 0,
       claimMultiplierCharges: 0,
       teamContribExpiresAt: 0,
+      espelhoDeLuzWeekKey: null,
+      coracaoOssificadoDayKey: null,
     }
   }
   if (!Number.isFinite(user.buffs.kronosExpiresAt)) user.buffs.kronosExpiresAt = 0
@@ -1013,6 +1178,12 @@ function migrateUserShape(user) {
   if (!Number.isFinite(user.buffs.questRewardMultiplierCharges) || user.buffs.questRewardMultiplierCharges < 0) user.buffs.questRewardMultiplierCharges = 0
   if (!Number.isFinite(user.buffs.claimMultiplierCharges) || user.buffs.claimMultiplierCharges < 0) user.buffs.claimMultiplierCharges = 0
   if (!Number.isFinite(user.buffs.teamContribExpiresAt) || user.buffs.teamContribExpiresAt < 0) user.buffs.teamContribExpiresAt = 0
+  if (typeof user.buffs.espelhoDeLuzWeekKey !== "string" && user.buffs.espelhoDeLuzWeekKey !== null) {
+    user.buffs.espelhoDeLuzWeekKey = null
+  }
+  if (typeof user.buffs.coracaoOssificadoDayKey !== "string" && user.buffs.coracaoOssificadoDayKey !== null) {
+    user.buffs.coracaoOssificadoDayKey = null
+  }
   if (!user.cooldowns || typeof user.cooldowns !== "object") {
     user.cooldowns = {
       dailyClaimKey: null,
@@ -1070,6 +1241,9 @@ function migrateUserShape(user) {
   if (typeof user.progression.lastQuestDayKey !== "string" && user.progression.lastQuestDayKey !== null) {
     user.progression.lastQuestDayKey = null
   }
+  if (!Number.isFinite(user.progression.dailyQuestRerollNonce) || user.progression.dailyQuestRerollNonce < 0) {
+    user.progression.dailyQuestRerollNonce = 0
+  }
   if (!Array.isArray(user.progression.weeklyQuests)) user.progression.weeklyQuests = []
   if (typeof user.progression.lastQuestWeekKey !== "string" && user.progression.lastQuestWeekKey !== null) {
     user.progression.lastQuestWeekKey = null
@@ -1101,6 +1275,17 @@ function ensureUser(userId) {
   const normalized = normalizeUserId(userId)
   if (!normalized) return null
 
+  let migratedAlias = false
+  const aliases = getUserIdAliases(userId)
+  for (const alias of aliases) {
+    if (!alias || alias === normalized) continue
+    const aliasRecord = economyCache.users[alias]
+    if (!aliasRecord) continue
+    economyCache.users[normalized] = pickPreferredUserRecord(economyCache.users[normalized], aliasRecord)
+    delete economyCache.users[alias]
+    migratedAlias = true
+  }
+
   if (!economyCache.users[normalized]) {
     economyCache.users[normalized] = {
       coins: DEFAULT_COINS,
@@ -1114,6 +1299,8 @@ function ensureUser(userId) {
         questRewardMultiplierCharges: 0,
         claimMultiplierCharges: 0,
         teamContribExpiresAt: 0,
+        espelhoDeLuzWeekKey: null,
+        coracaoOssificadoDayKey: null,
       },
       cooldowns: {
         dailyClaimKey: null,
@@ -1137,6 +1324,8 @@ function ensureUser(userId) {
       updatedAt: Date.now(),
     }
     saveEconomy()
+  } else if (migratedAlias) {
+    saveEconomy()
   }
 
   const user = economyCache.users[normalized]
@@ -1145,9 +1334,118 @@ function ensureUser(userId) {
 }
 
 function deleteUserProfile(userId) {
+  const aliases = new Set(getUserIdAliases(userId))
   const normalized = normalizeUserId(userId)
-  if (!normalized || !economyCache.users[normalized]) return false
-  delete economyCache.users[normalized]
+  const { userPart } = parseUserParts(normalized || userId)
+  const canonicalTarget = canonicalUserHandle(userPart)
+  let removed = false
+
+  for (const key of Object.keys(economyCache.users || {})) {
+    let shouldRemove = aliases.has(key)
+
+    if (!shouldRemove) {
+      const keyAliases = getUserIdAliases(key)
+      shouldRemove = keyAliases.some((alias) => aliases.has(alias))
+    }
+
+    if (!shouldRemove && canonicalTarget) {
+      const parsed = parseUserParts(key)
+      const canonicalKey = canonicalUserHandle(parsed.userPart)
+      shouldRemove = Boolean(canonicalKey && canonicalKey === canonicalTarget)
+    }
+
+    if (!shouldRemove) continue
+    delete economyCache.users[key]
+    removed = true
+  }
+
+  if (!removed) return false
+  saveEconomy(true)
+  return true
+}
+
+function wipeUserData(userId) {
+  const aliases = new Set(getUserIdAliases(userId))
+  const normalized = normalizeUserId(userId)
+  const { userPart } = parseUserParts(normalized || userId)
+  const canonicalTarget = canonicalUserHandle(userPart)
+  const matchedKeys = []
+
+  for (const key of Object.keys(economyCache.users || {})) {
+    let shouldMatch = aliases.has(key)
+
+    if (!shouldMatch) {
+      const keyAliases = getUserIdAliases(key)
+      shouldMatch = keyAliases.some((alias) => aliases.has(alias))
+    }
+
+    if (!shouldMatch && canonicalTarget) {
+      const parsed = parseUserParts(key)
+      const canonicalKey = canonicalUserHandle(parsed.userPart)
+      shouldMatch = Boolean(canonicalKey && canonicalKey === canonicalTarget)
+    }
+
+    if (shouldMatch) matchedKeys.push(key)
+  }
+
+  if (matchedKeys.length === 0) return false
+
+  const targetKey = normalized || matchedKeys[0]
+  let targetUser = economyCache.users[targetKey] || null
+
+  for (const key of matchedKeys) {
+    if (key === targetKey) continue
+    targetUser = pickPreferredUserRecord(targetUser, economyCache.users[key])
+    delete economyCache.users[key]
+  }
+
+  if (!targetUser) {
+    targetUser = economyCache.users[targetKey]
+  }
+  if (!targetUser || typeof targetUser !== "object") return false
+
+  const preferences = {
+    mentionOptIn: Boolean(targetUser?.preferences?.mentionOptIn),
+    publicLabel: String(targetUser?.preferences?.publicLabel || "").trim().slice(0, 30),
+  }
+  const createdAt = Math.floor(Number(targetUser?.createdAt) || Date.now())
+
+  economyCache.users[targetKey] = {
+    ...targetUser,
+    coins: 0,
+    items: {},
+    buffs: {
+      kronosExpiresAt: 0,
+      kronosTempShieldDayKey: null,
+      kronosTempShields: 0,
+      kronosVerdadeiraActive: false,
+      xpBoosterExpiresAt: 0,
+      questRewardMultiplierCharges: 0,
+      claimMultiplierCharges: 0,
+      teamContribExpiresAt: 0,
+      espelhoDeLuzWeekKey: null,
+      coracaoOssificadoDayKey: null,
+    },
+    cooldowns: {
+      dailyClaimKey: null,
+      workAt: 0,
+      stealAt: 0,
+      stealDailyKey: null,
+      stealTargets: {},
+      stealAttemptsToday: 0,
+      carePackageLastClaimedAt: 0,
+    },
+    stats: {
+      ...DEFAULT_USER_STATS,
+    },
+    progression: buildDefaultProgression(),
+    transactions: [],
+    preferences,
+    createdAt,
+    updatedAt: Date.now(),
+  }
+
+  migrateUserShape(economyCache.users[targetKey])
   saveEconomy(true)
   return true
 }
@@ -1213,6 +1511,8 @@ function creditCoins(userId, amount, transaction = null) {
   if (applied <= 0) return 0
 
   user.coins = current + applied
+  if (!Number.isFinite(user.stats.coinsLifetimeEarned)) user.stats.coinsLifetimeEarned = 0
+  user.stats.coinsLifetimeEarned = Math.max(0, Math.floor(Number(user.stats.coinsLifetimeEarned) || 0) + applied)
   touchUser(user)
   saveEconomy()
   if (transaction) {
@@ -1328,8 +1628,14 @@ function debitCoinsFlexible(userId, amount, transaction = null) {
 }
 
 function normalizeItemKey(itemKey = "") {
-  const normalized = String(itemKey || "").trim().toLowerCase()
-  if (!normalized) return null
+  const raw = String(itemKey || "").trim()
+  if (!raw) return null
+
+  if (/^\d+$/.test(raw)) {
+    return raw
+  }
+
+  const normalized = raw.toLowerCase()
 
   if (["mute", "silenciar", "silencio", "silêncio"].includes(normalized)) {
     return buildPunishmentPassKey(5, 1)
@@ -1347,9 +1653,14 @@ function normalizeItemKey(itemKey = "") {
     return passKey.key
   }
 
+  const mappedLegacy = LEGACY_ITEM_KEY_TO_ID[raw] || LEGACY_ITEM_KEY_TO_ID[normalized]
+  if (mappedLegacy) {
+    return mappedLegacy
+  }
+
   const entries = Object.values(ITEM_DEFINITIONS)
   const found = entries.find((item) => {
-    const canonical = String(item.key || "").toLowerCase()
+    const canonical = String(item.legacyKey || item.key || "").toLowerCase()
     const aliases = (item.aliases || []).map((alias) => String(alias || "").toLowerCase())
     return canonical === normalized || aliases.includes(normalized)
   })
@@ -1363,9 +1674,7 @@ function getItemDefinition(itemKey = "") {
   if (passParsed) {
     return getPunishmentPassDefinition(passParsed.type, passParsed.severity)
   }
-  if (ITEM_DEFINITIONS[key]) return ITEM_DEFINITIONS[key]
-  const fallback = Object.values(ITEM_DEFINITIONS).find((item) => String(item?.key || "") === key)
-  return fallback || null
+  return ITEM_DEFINITIONS_BY_ID[key] || null
 }
 
 function getItemQuantity(userId, itemKey) {
@@ -1420,7 +1729,11 @@ function consumeClaimMultiplier(userId, source = "") {
 }
 
 function getTeamContributionMultiplier(userId) {
-  return getTeamContributionMultiplierEngine(buildItemEffectsDeps(), userId)
+  const base = getTeamContributionMultiplierEngine(buildItemEffectsDeps(), userId)
+  if (getItemQuantity(userId, "seloLendario") > 0) {
+    return Number((base * 1.25).toFixed(2))
+  }
+  return base
 }
 
 function consumeStreakSaver(userId) {
@@ -1435,15 +1748,16 @@ function useItem(userId, itemKey) {
   return useItemEngine(buildItemEffectsDeps(), userId, itemKey)
 }
 
-function grantKronosBenefits(userId, itemKey = "kronosQuebrada", quantity = 1) {
+function grantKronosBenefits(userId, itemKey = KRONOS_QUEBRADA_ITEM_ID, quantity = 1) {
   const user = ensureUser(userId)
   const qty = Math.max(1, Math.floor(Number(quantity) || 1))
-  const def = getItemDefinition(itemKey)
+  const normalizedItemKey = normalizeItemKey(itemKey)
+  const def = getItemDefinition(normalizedItemKey)
   if (!user || !def) return
   
   const now = Date.now()
   
-  if (itemKey === "kronosVerdadeira") {
+  if (normalizedItemKey === KRONOS_VERDADEIRA_ITEM_ID) {
     // Coroa Kronos Verdadeira é permanente
     user.buffs.kronosVerdadeiraActive = true
     touchUser(user)
@@ -1461,7 +1775,7 @@ function syncKronosStateFromInventory(userId) {
   const user = ensureUser(userId)
   if (!user) return
 
-  const hasPermanentCrown = getItemQuantity(userId, "kronosVerdadeira") > 0
+  const hasPermanentCrown = getItemQuantity(userId, KRONOS_VERDADEIRA_ITEM_ID) > 0
   if (!hasPermanentCrown) {
     user.buffs.kronosVerdadeiraActive = false
     user.progression.permanentCrown = false
@@ -1471,7 +1785,7 @@ function syncKronosStateFromInventory(userId) {
   }
 
   const now = Date.now()
-  const hasBrokenCrown = getItemQuantity(userId, "kronosQuebrada") > 0
+  const hasBrokenCrown = getItemQuantity(userId, KRONOS_QUEBRADA_ITEM_ID) > 0
   if (!hasBrokenCrown && (Number(user.buffs.kronosExpiresAt) || 0) > now) {
     user.buffs.kronosExpiresAt = now
   }
@@ -1485,13 +1799,14 @@ function syncKronosStateFromInventory(userId) {
   saveEconomy()
 }
 
-function removeKronosDuration(userId, itemKey = "kronosQuebrada", quantity = 1) {
+function removeKronosDuration(userId, itemKey = KRONOS_QUEBRADA_ITEM_ID, quantity = 1) {
   const user = ensureUser(userId)
   const qty = Math.max(1, Math.floor(Number(quantity) || 1))
-  const def = getItemDefinition(itemKey)
+  const normalizedItemKey = normalizeItemKey(itemKey)
+  const def = getItemDefinition(normalizedItemKey)
   if (!user || !def) return
   
-  if (itemKey === "kronosVerdadeira") {
+  if (normalizedItemKey === KRONOS_VERDADEIRA_ITEM_ID) {
     // Não pode remover Coroa Kronos Verdadeira (é permanente)
     return
   }
@@ -1509,12 +1824,12 @@ function addItem(userId, itemKey, quantity = 1) {
   if (!key || qty <= 0) return 0
   const current = getItemQuantity(userId, key)
   const next = setItemQuantity(userId, key, Math.min(MAX_ITEM_STACK, current + qty))
-  if (key === "kronosQuebrada") {
+  if (key === KRONOS_QUEBRADA_ITEM_ID) {
     const applied = Math.max(0, next - current)
-    if (applied > 0) grantKronosBenefits(userId, "kronosQuebrada", applied)
-  } else if (key === "kronosVerdadeira") {
+    if (applied > 0) grantKronosBenefits(userId, KRONOS_QUEBRADA_ITEM_ID, applied)
+  } else if (key === KRONOS_VERDADEIRA_ITEM_ID) {
     const applied = Math.max(0, next - current)
-    if (applied > 0) grantKronosBenefits(userId, "kronosVerdadeira", applied)
+    if (applied > 0) grantKronosBenefits(userId, KRONOS_VERDADEIRA_ITEM_ID, applied)
   }
   return next
 }
@@ -1526,12 +1841,12 @@ function removeItem(userId, itemKey, quantity = 1) {
   const current = getItemQuantity(userId, key)
   const next = Math.max(0, current - qty)
   setItemQuantity(userId, key, next)
-  if (key === "kronosQuebrada") {
-    removeKronosDuration(userId, "kronosQuebrada", Math.min(current, qty))
-  } else if (key === "kronosVerdadeira") {
+  if (key === KRONOS_QUEBRADA_ITEM_ID) {
+    removeKronosDuration(userId, KRONOS_QUEBRADA_ITEM_ID, Math.min(current, qty))
+  } else if (key === KRONOS_VERDADEIRA_ITEM_ID) {
     syncKronosStateFromInventory(userId)
   }
-  if (key === "kronosQuebrada") {
+  if (key === KRONOS_QUEBRADA_ITEM_ID) {
     syncKronosStateFromInventory(userId)
   }
   return next
@@ -1555,6 +1870,22 @@ function consumeShield(userId) {
   const user = ensureUser(userId)
   if (!user) return false
 
+  const weekKey = getWeekKey()
+  if (getItemQuantity(userId, "espelhoDeLuz") > 0 && user.buffs.espelhoDeLuzWeekKey !== weekKey) {
+    user.buffs.espelhoDeLuzWeekKey = weekKey
+    touchUser(user)
+    saveEconomy()
+    return true
+  }
+
+  const dayKey = getDayKey()
+  if (getItemQuantity(userId, "coracaoOssificado") > 0 && user.buffs.coracaoOssificadoDayKey !== dayKey) {
+    user.buffs.coracaoOssificadoDayKey = dayKey
+    touchUser(user)
+    saveEconomy()
+    return true
+  }
+
   const temporaryShields = Math.max(0, Math.floor(Number(user.buffs.kronosTempShields) || 0))
   if (temporaryShields > 0) {
     user.buffs.kronosTempShields = temporaryShields - 1
@@ -1564,10 +1895,112 @@ function consumeShield(userId) {
     return true
   }
 
-  if (getItemQuantity(userId, "escudo") <= 0) return false
-  removeItem(userId, "escudo", 1)
-  incrementStat(userId, "shieldsUsed", 1)
-  return true
+  if (getItemQuantity(userId, "escudo") > 0) {
+    removeItem(userId, "escudo", 1)
+    incrementStat(userId, "shieldsUsed", 1)
+    return true
+  }
+
+  if (getItemQuantity(userId, "escudoReforcado") > 0) {
+    removeItem(userId, "escudoReforcado", 1)
+    addItem(userId, "escudo", 3)
+    removeItem(userId, "escudo", 1)
+    incrementStat(userId, "shieldsUsed", 1)
+    return true
+  }
+
+  return false
+}
+
+function applyCasinoInsurance(userId, lostAmount = 0, options = {}) {
+  const threshold = Math.max(1, Math.floor(Number(options?.threshold) || 1))
+  const wager = Math.max(0, Math.floor(Number(options?.wager) || lostAmount || 0))
+  if (wager < threshold) {
+    return { ok: false, activated: false, reason: "below-threshold", refunded: 0 }
+  }
+
+  const available = getItemQuantity(userId, "casinoInsurance")
+  if (available <= 0) {
+    return { ok: false, activated: false, reason: "no-token", refunded: 0 }
+  }
+
+  const loss = Math.max(0, Math.floor(Number(lostAmount) || 0))
+  if (loss <= 0) {
+    return { ok: false, activated: false, reason: "no-loss", refunded: 0 }
+  }
+
+  const refund = Math.max(0, Math.floor(loss * 0.4))
+  if (refund <= 0) {
+    return { ok: false, activated: false, reason: "refund-zero", refunded: 0 }
+  }
+
+  removeItem(userId, "casinoInsurance", 1)
+  const credited = creditCoins(userId, refund, {
+    type: "casino-insurance-refund",
+    details: "Seguro de cassino ativado",
+    meta: {
+      wager,
+      loss,
+      threshold,
+    },
+  })
+
+  return {
+    ok: true,
+    activated: credited > 0,
+    refunded: credited,
+    consumed: credited > 0 ? 1 : 0,
+  }
+}
+
+function applyWorkSafetyToken(userId, lostAmount = 0, options = {}) {
+  const available = getItemQuantity(userId, "workSafetyToken")
+  if (available <= 0) {
+    return { ok: false, activated: false, reason: "no-token", refunded: 0, compensation: 0 }
+  }
+
+  const loss = Math.max(0, Math.floor(Number(lostAmount) || 0))
+  const referenceAmount = Math.max(0, Math.floor(Number(options?.referenceAmount) || 0))
+  const fallbackCompensation = Math.max(0, Math.floor(Number(options?.fallbackCompensation) || 0))
+  const workType = String(options?.workType || "unknown")
+
+  let credited = 0
+  let mode = "none"
+  if (loss > 0) {
+    const refund = Math.max(0, Math.floor(loss * 0.4))
+    if (refund > 0) {
+      credited = creditCoins(userId, refund, {
+        type: "work-safety-refund",
+        details: `Seguro de trabalho ativado (${workType})`,
+        meta: { loss, workType },
+      })
+      mode = "refund"
+    }
+  } else if (referenceAmount > 0 || fallbackCompensation > 0) {
+    const compensation = referenceAmount > 0
+      ? Math.max(0, Math.floor(referenceAmount * 0.4))
+      : fallbackCompensation
+    credited = creditCoins(userId, compensation, {
+      type: "work-safety-compensation",
+      details: `Compensação por falha de trabalho (${workType})`,
+      meta: { workType, referenceAmount },
+    })
+    mode = "compensation"
+  }
+
+  if (credited <= 0) {
+    return { ok: false, activated: false, reason: "zero-credit", refunded: 0, compensation: 0 }
+  }
+
+  removeItem(userId, "workSafetyToken", 1)
+  return {
+    ok: true,
+    activated: true,
+    mode,
+    consumed: 1,
+    refunded: mode === "refund" ? credited : 0,
+    compensation: mode === "compensation" ? credited : 0,
+  }
 }
 
 function buyShield(userId) {
@@ -1619,10 +2052,26 @@ function refreshKronosTemporaryShields(userId) {
 function applyKronosGainMultiplier(userId, amount, type = "generic") {
   const base = Math.max(0, Math.floor(Number(amount) || 0))
   if (base <= 0) return 0
-  if (!hasActiveKronos(userId)) return base
-  if (type === "daily") return Math.floor(base * 1.1)
-  if (type === "casino" || type === "steal" || type === "work") return Math.floor(base * 1.3)
-  return base
+  let withItems = base
+  if (getItemQuantity(userId, "moedaDaSorte") > 0) withItems = Math.floor(withItems * 1.05)
+  if (getItemQuantity(userId, "tesouroLendario") > 0) withItems = Math.floor(withItems * 1.15)
+  if (type === "daily" && getItemQuantity(userId, "tesouroClassico") > 0) withItems = Math.floor(withItems * 1.12)
+  if (type === "daily" && getItemQuantity(userId, "coracaoDoUniverso") > 0) withItems = Math.floor(withItems * 1.4)
+  if (type === "work" && getItemQuantity(userId, "boosterDeMoedas") > 0) withItems = Math.floor(withItems * 1.25)
+  if (type === "casino" && getItemQuantity(userId, "cristalDeAmplificacao") > 0) withItems = Math.floor(withItems * 1.12)
+  if (type === "steal" && getItemQuantity(userId, "reliquiaEsquecida") > 0) withItems = Math.floor(withItems * 1.1)
+
+  if (!hasActiveKronos(userId)) return withItems
+  if (type === "daily") return Math.floor(withItems * 1.1)
+  if (type === "casino" || type === "steal" || type === "work") return Math.floor(withItems * 1.3)
+  return withItems
+}
+
+function getXpItemMultiplier(userId) {
+  let multiplier = 1
+  if (getItemQuantity(userId, "artefatoAntigo") > 0) multiplier *= 1.1
+  if (getItemQuantity(userId, "marcaEterna") > 0) multiplier *= 1.06
+  return Number(multiplier.toFixed(4))
 }
 
 function getStealSuccessChance(victimId, thiefId = "") {
@@ -1643,6 +2092,7 @@ function buildStealDeps() {
     hasActiveKronos,
     getCoins,
     consumeShield,
+    getItemQuantity,
     debitCoinsFlexible,
     creditCoins,
     incrementStat,
@@ -2032,13 +2482,13 @@ function getItemCatalog() {
 }
 
 function getShopIndexText() {
-  const lines = ["Loja (indice)"]
+  const lines = ["Loja (ID do item)"]
   const catalog = getItemCatalog().filter((item) => item.buyable !== false)
   catalog.forEach((item, idx) => {
-    lines.push(`${idx + 1}. ${item.name} (${item.key}) - ${item.price} Epsteincoins`)
+    lines.push(`${idx + 1}. ${item.name} (ID ${item.key}) - ${item.price} Epsteincoins`)
   })
   lines.push("")
-  lines.push("Compre com: !comprar <item> [quantidade]")
+  lines.push("Compre com: !comprar <id|nome> [quantidade]")
   lines.push("Compre para outro: !comprarpara @usuario <item> [quantidade]")
   return lines.join("\n")
 }
@@ -2164,9 +2614,9 @@ function getDailyQuestState(userId, dayKey = getDayKey()) {
 function addXp(userId, amount = 0, meta = {}) {
   const user = ensureUser(userId)
   const baseAmount = Math.max(0, Math.floor(Number(amount) || 0))
-  const parsedAmount = isXpBoosterActive(userId)
-    ? Math.max(0, Math.floor(baseAmount * 1.15))
-    : baseAmount
+  const itemMultiplier = getXpItemMultiplier(userId)
+  const xpBoosterMultiplier = isXpBoosterActive(userId) ? 1.15 : 1
+  const parsedAmount = Math.max(0, Math.floor(baseAmount * itemMultiplier * xpBoosterMultiplier))
   if (!user || parsedAmount <= 0) {
     return {
       ok: false,
@@ -2353,10 +2803,26 @@ function setMentionOptIn(userId = "", enabled = false) {
 function setPublicLabel(userId = "", label = "") {
   const user = ensureUser(userId)
   if (!user) return false
-  user.preferences.publicLabel = String(label || "").trim().slice(0, 32)
+  user.preferences.publicLabel = String(label || "").trim().slice(0, 30)
   touchUser(user)
   saveEconomy()
   return true
+}
+
+function findUsersByPublicLabel(label = "") {
+  const wanted = String(label || "").trim().toLowerCase()
+  if (!wanted) return []
+
+  return Object.keys(economyCache.users)
+    .map((userId) => {
+      const current = String(economyCache.users?.[userId]?.preferences?.publicLabel || "").trim()
+      return {
+        userId,
+        publicLabel: current,
+      }
+    })
+    .filter((entry) => entry.publicLabel && entry.publicLabel.toLowerCase() === wanted)
+    .sort((a, b) => a.userId.localeCompare(b.userId))
 }
 
 function incrementStat(userId, key, amount = 1) {
@@ -2420,6 +2886,14 @@ function getWorkCooldown(userId) {
   return Math.floor(Number(user.cooldowns.workAt) || 0)
 }
 
+function getWorkCooldownDurationMs(userId) {
+  const base = WORK_COOLDOWN_BASE_MS
+  if (getItemQuantity(userId, "pedraClimatica") > 0) {
+    return Math.floor(base * 0.75)
+  }
+  return base
+}
+
 function setStealCooldown(userId, timestamp = Date.now()) {
   const user = ensureUser(userId)
   if (!user) return
@@ -2448,6 +2922,7 @@ function buildForgeDeps() {
     addItem,
     removeItem,
     pickRandomPunishmentType,
+    incrementStat,
   }
 }
 
@@ -2560,11 +3035,14 @@ module.exports = {
   getTeamContributionMultiplier,
   consumeStreakSaver,
   applySalvageInsurance,
+  applyCasinoInsurance,
+  applyWorkSafetyToken,
   applyCooldownReducer,
   claimCarePackage,
   hasActiveKronos,
   isXpBoosterActive,
   applyKronosGainMultiplier,
+  getXpItemMultiplier,
   getStealSuccessChance,
   canAttemptSteal,
   getGlobalRanking,
@@ -2580,6 +3058,7 @@ module.exports = {
   incrementStat,
   setWorkCooldown,
   getWorkCooldown,
+  getWorkCooldownDurationMs,
   setStealCooldown,
   getStealCooldown,
   getProfile,
@@ -2587,11 +3066,13 @@ module.exports = {
   isMentionOptIn,
   setMentionOptIn,
   setPublicLabel,
+  findUsersByPublicLabel,
   openLootbox,
   forgePunishmentPass,
   applyForgedPassTypeChoice,
   createPunishmentPassKey,
   getOperationLimits,
+  wipeUserData,
   deleteUserProfile,
   levelThresholds,
   getLevelThresholds,

@@ -1,5 +1,5 @@
 const telemetry = require("../services/telemetryService")
-
+const storageModule = require("../storage.js")
 const RR_TURN_TIMEOUT_MS = 60_000
 const RR_TURN_TIMEOUT_SECONDS = Math.floor(RR_TURN_TIMEOUT_MS / 1000)
 const LOBBY_BET_GRACE_MS = 15_000
@@ -45,7 +45,7 @@ async function handleGameCommands(ctx) {
     isGroup,
     text,
     msg,
-    storage,
+    storage = storageModule,
     gameManager,
     economyService,
     caraOuCoroa,
@@ -129,6 +129,30 @@ async function handleGameCommands(ctx) {
     })
   }
 
+  function consumeRrLuckTokenOnWin(winnerIds = [], options = {}) {
+    const uniqueWinners = [...new Set((winnerIds || []).filter(Boolean))]
+    const consumedBy = []
+    if (uniqueWinners.length === 0) return consumedBy
+    if (typeof economyService?.getItemQuantity !== "function") return consumedBy
+    if (typeof economyService?.removeItem !== "function") return consumedBy
+
+    const reason = String(options?.reason || "rr-win")
+    for (const winnerId of uniqueWinners) {
+      const qty = economyService.getItemQuantity(winnerId, "rrtokensorte")
+      if (qty <= 0) continue
+      economyService.removeItem(winnerId, "rrtokensorte", 1)
+      consumedBy.push(winnerId)
+      telemetry.appendEvent("game.rr.token.consume", {
+        groupId: from,
+        lobbyId: options?.lobbyId || null,
+        userId: winnerId,
+        reason,
+      })
+    }
+
+    return consumedBy
+  }
+
   function getGraceStates() {
     const states = storage.getGameStates(from)
     return Object.keys(states || {})
@@ -141,15 +165,18 @@ async function handleGameCommands(ctx) {
     if (!Array.isArray(playerIds) || playerIds.length === 0) {
       return { ok: true, pool: 0, buyInByPlayer: {}, playerBetByPlayer: {} }
     }
+    // Exclude modo livre users from paying buy-in (except for casino)
+    const isCasino = String(gameType || "").toLowerCase().includes("cassino")
+    const filteredPlayers = isCasino ? playerIds : playerIds.filter((id) => !storage.isModoLivreUser(id))
     if (buyInAmount <= 0) {
-      const normalizedBets = playerIds.reduce((acc, playerId) => {
+      const normalizedBets = filteredPlayers.reduce((acc, playerId) => {
         acc[playerId] = sanitizeLobbyBet(playerBetByPlayer[playerId], 1)
         return acc
       }, {})
       return { ok: true, pool: 0, buyInByPlayer: {}, playerBetByPlayer: normalizedBets }
     }
 
-    const uniquePlayers = [...new Set(playerIds.filter(Boolean))]
+    const uniquePlayers = [...new Set(filteredPlayers.filter(Boolean))]
     const normalizedBets = uniquePlayers.reduce((acc, playerId) => {
       acc[playerId] = sanitizeLobbyBet(playerBetByPlayer[playerId], 1)
       return acc
@@ -216,6 +243,10 @@ async function handleGameCommands(ctx) {
       incrementUserStat(timedOutPlayer, "gameRrShotLoss", 1)
 
       if (winners.length > 0) {
+        consumeRrLuckTokenOnWin(winners, {
+          lobbyId,
+          reason: "rr-timeout-win",
+        })
         winners.forEach((playerId) => {
           incrementUserStat(playerId, "gameRrWin", 1)
           incrementUserStat(playerId, "gameRrBetWin", 1)
@@ -434,8 +465,9 @@ async function handleGameCommands(ctx) {
         `Lobby ID: *${lobbyId}*\n\n` +
         `Criador já entrou automaticamente no lobby.\n` +
         `Para entrar: *!entrar ${lobbyId}* (ou *!join ${lobbyId}*)\n` +
-        `Para iniciar: *!começar ${lobbyId}* (ou *!comecar ${lobbyId}* / *!start ${lobbyId}*) [aposta]\n` +
+        `Para iniciar: *!começar ${lobbyId} <aposta>* (ou *!comecar ${lobbyId} <aposta>* / *!start ${lobbyId} <aposta>*)\n` +
         `Entrada por jogador: *${getGameBuyIn("rr")}* Epsteincoins (cobrada ao iniciar).\n` +
+        `Bet da RR: *1 a 5* (mínimo obrigatório 1).\n` +
         `Exemplo: *!começar ${lobbyId} 3*`,
     })
     return true
@@ -496,27 +528,9 @@ async function handleGameCommands(ctx) {
 
   if (cmdName === prefix + "aposta" && isGroup) {
     const explicitLobbyId = normalizeLobbyId(cmdArg1)
-    let targetLobbyId = ""
-    let betToken = ""
-
-    if (explicitLobbyId) {
-      targetLobbyId = explicitLobbyId
-      betToken = cmdArg2
-    } else {
-      betToken = cmdArg1
-      const playerGraceStates = getGraceStates().filter((entry) =>
-        Array.isArray(entry.state?.players) && entry.state.players.includes(sender)
-      )
-
-      if (playerGraceStates.length === 0) return false
-      if (playerGraceStates.length > 1) {
-        await sock.sendMessage(from, {
-          text: "Você está em múltiplos lobbies em período de aposta. Use: !aposta <LobbyID> <1-10>",
-        })
-        return true
-      }
-      targetLobbyId = playerGraceStates[0].lobbyId
-    }
+    if (!explicitLobbyId) return false
+    const targetLobbyId = explicitLobbyId
+    const betToken = String(cmdArg2 || "").trim().toLowerCase()
 
     const graceKey = getLobbyGraceStateKey(targetLobbyId)
     const graceState = storage.getGameState(from, graceKey)
@@ -529,10 +543,65 @@ async function handleGameCommands(ctx) {
       return true
     }
 
+    if (betToken === "skip") {
+      graceState.forceStart = true
+      storage.setGameState(from, graceKey, graceState)
+      await sock.sendMessage(from, {
+        text: `⏩ Lobby *${targetLobbyId}*: fase de aposta pulada por @${sender.split("@")[0]}.`,
+        mentions: [sender],
+      })
+
+      await handleGameCommands({
+        sock,
+        from,
+        sender,
+        cmd: `${prefix}começar ${targetLobbyId}`,
+        cmdName: `${prefix}comecar`,
+        cmdArg1: targetLobbyId,
+        cmdArg2: graceState.rrBetValueToken || "",
+        mentioned,
+        prefix,
+        isGroup,
+        text,
+        msg,
+        storage,
+        gameManager,
+        economyService,
+        caraOuCoroa,
+        adivinhacao,
+        batataquente,
+        dueloDados,
+        roletaRussa,
+        startPeriodicGame,
+        GAME_REWARDS,
+        BASE_GAME_REWARD,
+        normalizeUnifiedGameType,
+        normalizeLobbyId,
+        activeGameKey,
+        resolveActiveLobbyForPlayer,
+        getLobbyCreateBlockMessage,
+        getGameBuyIn,
+        collectLobbyBuyIn,
+        distributeLobbyBuyInPool,
+        parsePositiveInt,
+        isResenhaModeEnabled,
+        rewardPlayer,
+        rewardPlayers,
+        incrementUserStat,
+        applyRandomGamePunishment,
+        createPendingTargetForWinner,
+        jidNormalizedUser,
+        createLobbyWarningCallback,
+        createLobbyTimeoutCallback,
+        buildGameStatsText,
+      })
+      return true
+    }
+
     const betRaw = Number.parseInt(String(betToken || ""), 10)
     if (!Number.isFinite(betRaw) || betRaw < 1 || betRaw > 10) {
       await sock.sendMessage(from, {
-        text: "Use: !aposta <LobbyID> <1-10>",
+        text: "Use: !aposta <LobbyID> <1-10> ou !aposta <LobbyID> skip",
       })
       return true
     }
@@ -576,7 +645,7 @@ async function handleGameCommands(ctx) {
     if (!existingGraceState?.forceStart) {
       if (existingGraceState) {
         await sock.sendMessage(from, {
-          text: `Lobby *${lobbyId}* já está no período de aposta. Use: !aposta ${lobbyId} <1-10>`,
+          text: `Lobby *${lobbyId}* já está no período de aposta. Use: !aposta ${lobbyId} <1-10> ou !aposta ${lobbyId} skip`,
         })
         return true
       }
@@ -602,7 +671,7 @@ async function handleGameCommands(ctx) {
         text:
           `⏳ Lobby *${lobbyId}* entra em período de aposta por 15s.\n` +
           `Cada jogador pode definir bet de *1x a 10x* para multiplicar o buy-in.\n` +
-          `Use: *!aposta ${lobbyId} <1-10>*).\n` +
+          `Use: *!aposta ${lobbyId} <1-10>* ou *!aposta ${lobbyId} skip*.\n` +
           `Se não escolher, fica em *1x*.`,
         mentions: session.players || [],
       })
@@ -845,7 +914,26 @@ async function handleGameCommands(ctx) {
       }
 
       const buyInAmount = getGameBuyIn(session.gameType)
-      const buyInResult = collectLobbyBuyInWithBets(session.players, buyInAmount, session.gameType, graceBetByPlayer)
+      const betRaw = Number.parseInt(String(cmdArg2 ?? ""), 10)
+      if (String(cmdArg2 || "").trim() && (!Number.isFinite(betRaw) || betRaw < 1 || betRaw > 5)) {
+        await sock.sendMessage(from, { text: "Use: !começar <LobbyID> <bet 1-5> para iniciar a RR." })
+        return true
+      }
+      const betValue = Number.isFinite(betRaw) ? Math.max(1, Math.min(5, betRaw)) : 1
+
+      const isSoloRr = session.players.length === 1
+      const buyInResult = isSoloRr
+        ? {
+            ok: true,
+            pool: 0,
+            buyInByPlayer: {
+              [session.players[0]]: buyInAmount * sanitizeLobbyBet(graceBetByPlayer[session.players[0]], 1),
+            },
+            playerBetByPlayer: {
+              [session.players[0]]: sanitizeLobbyBet(graceBetByPlayer[session.players[0]], 1),
+            },
+          }
+        : collectLobbyBuyInWithBets(session.players, buyInAmount, session.gameType, graceBetByPlayer)
       if (!buyInResult.ok) {
         await sock.sendMessage(from, {
           text: `Sem saldo para entrada multiplicada (base ${buyInAmount}) para: ${buyInResult.insufficient.map((p) => `@${p.split("@")[0]}`).join(" ")}`,
@@ -854,13 +942,15 @@ async function handleGameCommands(ctx) {
         return true
       }
 
-      const betRaw = Number.parseInt(String(cmdArg2 ?? "0"), 10)
-      const betValue = Number.isFinite(betRaw) ? Math.max(0, Math.min(5, betRaw)) : 0
       const state = roletaRussa.start(from, session.players, { betValue })
       state.buyInPool = buyInResult.pool || 0
       state.buyInAmount = buyInAmount
       state.buyInByPlayer = buyInResult.buyInByPlayer || {}
       state.playerBetByPlayer = buyInResult.playerBetByPlayer || {}
+      state.isSoloRr = isSoloRr
+      state.soloRiskAmount = isSoloRr
+        ? Math.max(0, Number(state.buyInByPlayer?.[session.players[0]]) || 0)
+        : 0
       storage.setGameState(from, stateKey, state)
       gameManager.clearOptInSession(from, lobbyId)
 
@@ -883,6 +973,56 @@ async function handleGameCommands(ctx) {
         mentions: startMentions,
       })
       scheduleRrTurnTimeout(lobbyId, stateKey)
+      return true
+    }
+
+    if (session.gameType === "embaralhado") {
+      if (session.players.length < 3) {
+        await sock.sendMessage(from, { text: "Precisamos de pelo menos 3 jogadores para Embaralhado!" })
+        return true
+      }
+      gameManager.clearOptInSession(from, lobbyId)
+      const startResult = await startPeriodicGame("embaralhado", {
+        triggeredBy: sender,
+        automatic: false,
+      })
+      if (!startResult.ok) {
+        await sock.sendMessage(from, { text: startResult.message })
+      }
+      return true
+    }
+
+    if (session.gameType === "reação") {
+      if (session.players.length < 3) {
+        await sock.sendMessage(from, { text: "Precisamos de pelo menos 3 jogadores para Reação!" })
+        return true
+      }
+      gameManager.clearOptInSession(from, lobbyId)
+      const startResult = await startPeriodicGame("reação", {
+        triggeredBy: sender,
+        automatic: false,
+        reactionParticipants: session.players,
+      })
+      if (!startResult.ok) {
+        await sock.sendMessage(from, { text: startResult.message })
+      }
+      return true
+    }
+
+    if (session.gameType === "comando") {
+      if (session.players.length < 3) {
+        await sock.sendMessage(from, { text: "Precisamos de pelo menos 3 jogadores para Comando!" })
+        return true
+      }
+      gameManager.clearOptInSession(from, lobbyId)
+      const startResult = await startPeriodicGame("comando", {
+        triggeredBy: sender,
+        automatic: false,
+        comandoParticipants: session.players,
+      })
+      if (!startResult.ok) {
+        await sock.sendMessage(from, { text: startResult.message })
+      }
       return true
     }
 
@@ -1016,7 +1156,7 @@ async function handleGameCommands(ctx) {
 
     const { lobbyId, stateKey, state } = resolved
 
-    const target = mentioned[0]
+    const target = mentioned[0] || jidNormalizedUser(msg?.message?.extendedTextMessage?.contextInfo?.participant || "")
     if (!target) {
       await sock.sendMessage(from, { text: "Marque alguém para passar a batata!" })
       return true
@@ -1148,12 +1288,61 @@ async function handleGameCommands(ctx) {
       lobbyId,
       hit: Boolean(result.hit),
     })
+
+    const canAttemptRrLuckDodge =
+      result.hit &&
+      !result.allWin &&
+      !result.autoWin &&
+      typeof economyService?.getItemQuantity === "function" &&
+      typeof economyService?.removeItem === "function" &&
+      economyService.getItemQuantity(sender, "rrtokensorte") > 0
+
+    if (canAttemptRrLuckDodge) {
+      const dodgeChance = 0.5
+      const dodged = Math.random() < dodgeChance
+      if (dodged) {
+        state.loser = null
+        state.currentPlayerIndex = (state.currentPlayerIndex + 1) % state.players.length
+        storage.setGameState(from, stateKey, state)
+
+        const nextPlayerAfterDodge = roletaRussa.getCurrentPlayer(state)
+        const dodgeMentions = Array.from(new Set([
+          sender,
+          ...(nextPlayerAfterDodge ? [nextPlayerAfterDodge] : []),
+        ]))
+
+        await sock.sendMessage(from, {
+          text:
+            `🍀 *SORTE NA RR!*\n` +
+            `@${sender.split("@")[0]} desviou do tiro com o efeito do *rrtokensorte* no lobby *${lobbyId}*.\n` +
+            `O token só é consumido em vitória sem ser atingido.\n\n` +
+            `${roletaRussa.formatStatus(state)}`,
+          mentions: dodgeMentions,
+        })
+
+        scheduleRrTurnTimeout(lobbyId, stateKey)
+        return true
+      }
+    }
+
     storage.setGameState(from, stateKey, state)
     const betMultiplier = parsePositiveInt(state.betMultiplier, 1)
     const betValueRaw = Number.parseInt(String(state.betValue), 10)
     const betValue = Number.isFinite(betValueRaw) ? Math.max(0, Math.min(5, betValueRaw)) : Math.max(0, betMultiplier - 1)
     const soloCoinMultiplier = Math.max(1, betValue)
     const rrCoinMultiplier = state.players.length === 1 ? soloCoinMultiplier : betMultiplier
+    const soloPlayerId = Array.isArray(state.players) && state.players.length === 1 ? state.players[0] : ""
+    const fallbackSoloRisk = (() => {
+      if (!soloPlayerId) return 0
+      const fromBuyInMap = Math.max(0, Math.floor(Number(state.buyInByPlayer?.[soloPlayerId]) || 0))
+      if (fromBuyInMap > 0) return fromBuyInMap
+      const baseBuyIn = Math.max(0, Math.floor(Number(state.buyInAmount) || 0))
+      const playerBet = Math.max(1, Math.floor(Number(state.playerBetByPlayer?.[soloPlayerId]) || 1))
+      const computed = baseBuyIn * playerBet
+      if (computed > 0) return computed
+      return BASE_GAME_REWARD * rrCoinMultiplier
+    })()
+    const soloRiskValue = Math.max(0, Math.floor(Number(state.soloRiskAmount) || 0)) || fallbackSoloRisk
 
     if (result.autoWin) {
       const winners = Array.isArray(result.winners) && result.winners.length > 0
@@ -1165,14 +1354,25 @@ async function handleGameCommands(ctx) {
         grantGameXp(playerId, GAME_XP_REWARDS.rrWin, "rr-win", { lobbyId, mode: "auto-win" })
       })
       if (state.players.length === 1) {
-        await rewardPlayer(sender, GAME_REWARDS.ROLETA_WIN, rrCoinMultiplier, "Roleta Russa (solo)")
+        const soloGain = soloRiskValue
+        if (soloGain > 0) {
+          await rewardPlayer(sender, soloGain, 1, "Roleta Russa (solo)")
+        }
       }
+      const winnersWithoutHit = Boolean(result.hit)
+        ? []
+        : winners
+      const consumedRrLuck = consumeRrLuckTokenOnWin(winnersWithoutHit, {
+        lobbyId,
+        reason: "rr-auto-win",
+      })
       await distributeLobbyBuyInPool(winners, state.buyInPool, "Roleta Russa", getLobbyPayoutOptions(state))
       await sock.sendMessage(from, {
         text:
           `*CLICK*\n` +
           `✅ @${sender.split("@")[0]} sobreviveu e ultrapassou a aposta (*${betValue}*) no lobby *${lobbyId}*!\n` +
-          `🏆 Vitória automática no modo solo.`,
+          `🏆 Vitória automática no modo solo.` +
+          (consumedRrLuck.length > 0 ? "\n🍀 rrtokensorte consumido por vitória sem tiro." : ""),
         mentions: winners,
       })
       telemetry.incrementCounter("game.rr.completed", 1, {
@@ -1206,7 +1406,17 @@ async function handleGameCommands(ctx) {
           grantGameXp(playerId, GAME_XP_REWARDS.rrWin, "rr-win", { lobbyId, mode: "all-win" })
         })
         if (winners.length > 0) {
+          const consumedRrLuck = consumeRrLuckTokenOnWin(winners, {
+            lobbyId,
+            reason: "rr-all-win",
+          })
           await distributeLobbyBuyInPool(winners, state.buyInPool, "Roleta Russa", getLobbyPayoutOptions(state))
+          if (consumedRrLuck.length > 0) {
+            await sock.sendMessage(from, {
+              text: `🍀 rrtokensorte consumido por vitória sem tiro: ${consumedRrLuck.map((p) => `@${p.split("@")[0]}`).join(" ")}`,
+              mentions: consumedRrLuck,
+            })
+          }
         }
         await sock.sendMessage(from, {
           text:
@@ -1244,7 +1454,9 @@ async function handleGameCommands(ctx) {
         mentions: [result.loser],
       })
 
-      const rrLoss = BASE_GAME_REWARD * rrCoinMultiplier
+      const rrLoss = state.players.length === 1
+        ? soloRiskValue
+        : (BASE_GAME_REWARD * rrCoinMultiplier)
       const rrTaken = economyService.debitCoinsFlexible(result.loser, rrLoss, {
         type: "game-loss",
         details: "Derrota em Roleta Russa",
@@ -1269,7 +1481,17 @@ async function handleGameCommands(ctx) {
         incrementUserStat(playerId, "gameRrBetWin", 1)
         grantGameXp(playerId, GAME_XP_REWARDS.rrWin, "rr-win", { lobbyId, mode: "hit" })
       })
+      const consumedRrLuck = consumeRrLuckTokenOnWin(winners, {
+        lobbyId,
+        reason: "rr-hit-win",
+      })
       await distributeLobbyBuyInPool(winners, state.buyInPool, "Roleta Russa", getLobbyPayoutOptions(state))
+      if (consumedRrLuck.length > 0) {
+        await sock.sendMessage(from, {
+          text: `🍀 rrtokensorte consumido por vitória sem tiro: ${consumedRrLuck.map((p) => `@${p.split("@")[0]}`).join(" ")}`,
+          mentions: consumedRrLuck,
+        })
+      }
       telemetry.incrementCounter("game.rr.completed", 1, {
         result: result.guaranteed ? "guaranteed-hit" : "hit",
       })
@@ -1299,20 +1521,29 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((cmd === prefix + "embaralhado" || (isStartCommand && normalizeUnifiedGameType(cmdArg1) === "embaralhado")) && isGroup) {
-    const participants = await getCommandParticipants()
-    if (participants.length < 3) {
-      await sock.sendMessage(from, { text: "São necessários pelo menos 3 participantes para iniciar o Embaralhado por comando." })
+  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "embaralhado") && isGroup) {
+    const blockedReason = getLobbyCreateBlockMessage("embaralhado", "Embaralhado")
+    if (blockedReason) {
+      await sock.sendMessage(from, { text: blockedReason })
       return true
     }
 
-    const startResult = await startPeriodicGame("embaralhado", {
-      triggeredBy: sender,
-      automatic: false,
+    const lobbyId = gameManager.createOptInSession(from, "embaralhado", 3, null, 120000, {
+      initialPlayers: [sender],
+      onLobbyWarning: createLobbyWarningCallback,
+      onLobbyTimeout: createLobbyTimeoutCallback,
     })
-    if (!startResult.ok) {
-      await sock.sendMessage(from, { text: startResult.message })
-    }
+    incrementUserStat(sender, "lobbiesCreated", 1)
+    incrementUserStat(sender, "lobbiesJoined", 1)
+    await sock.sendMessage(from, {
+      text:
+        `🔤 Embaralhado criado!\n` +
+        `Lobby ID: *${lobbyId}*\n\n` +
+        `Criador já entrou automaticamente no lobby.\n` +
+        `Para entrar: *!entrar ${lobbyId}*\n` +
+        `Para iniciar: *!começar ${lobbyId}*\n` +
+        `Mínimo de 3 jogadores.`,
+    })
     return true
   }
 
@@ -1334,38 +1565,54 @@ async function handleGameCommands(ctx) {
   }
 
   if ((isStartCommand && ["reacao", "reação"].includes(normalizeUnifiedGameType(cmdArg1))) && isGroup) {
-    const participants = await getCommandParticipants()
-
-    if (participants.length < 3) {
-      await sock.sendMessage(from, { text: "São necessários pelo menos 3 participantes para iniciar a Reação por comando." })
+    const blockedReason = getLobbyCreateBlockMessage("reação", "Reação")
+    if (blockedReason) {
+      await sock.sendMessage(from, { text: blockedReason })
       return true
     }
 
-    const startResult = await startPeriodicGame("reação", {
-      triggeredBy: sender,
-      automatic: false,
-      reactionParticipants: participants,
+    const lobbyId = gameManager.createOptInSession(from, "reação", 3, null, 120000, {
+      initialPlayers: [sender],
+      onLobbyWarning: createLobbyWarningCallback,
+      onLobbyTimeout: createLobbyTimeoutCallback,
     })
-    if (!startResult.ok) {
-      await sock.sendMessage(from, { text: startResult.message })
-    }
+    incrementUserStat(sender, "lobbiesCreated", 1)
+    incrementUserStat(sender, "lobbiesJoined", 1)
+    await sock.sendMessage(from, {
+      text:
+        `⚡ Reação criada!\n` +
+        `Lobby ID: *${lobbyId}*\n\n` +
+        `Criador já entrou automaticamente no lobby.\n` +
+        `Para entrar: *!entrar ${lobbyId}*\n` +
+        `Para iniciar: *!começar ${lobbyId}*\n` +
+        `Mínimo de 3 jogadores.`,
+    })
     return true
   }
 
   if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "comando") && isGroup) {
-    const participants = await getCommandParticipants()
-    if (participants.length < 3) {
-      await sock.sendMessage(from, { text: "São necessários pelo menos 3 participantes para iniciar o Comando por comando." })
+    const blockedReason = getLobbyCreateBlockMessage("comando", "Comando")
+    if (blockedReason) {
+      await sock.sendMessage(from, { text: blockedReason })
       return true
     }
 
-    const startResult = await startPeriodicGame("comando", {
-      triggeredBy: sender,
-      automatic: false,
+    const lobbyId = gameManager.createOptInSession(from, "comando", 3, null, 120000, {
+      initialPlayers: [sender],
+      onLobbyWarning: createLobbyWarningCallback,
+      onLobbyTimeout: createLobbyTimeoutCallback,
     })
-    if (!startResult.ok) {
-      await sock.sendMessage(from, { text: startResult.message })
-    }
+    incrementUserStat(sender, "lobbiesCreated", 1)
+    incrementUserStat(sender, "lobbiesJoined", 1)
+    await sock.sendMessage(from, {
+      text:
+        `🎯 Comando criado!\n` +
+        `Lobby ID: *${lobbyId}*\n\n` +
+        `Criador já entrou automaticamente no lobby.\n` +
+        `Para entrar: *!entrar ${lobbyId}*\n` +
+        `Para iniciar: *!começar ${lobbyId}*\n` +
+        `Mínimo de 3 jogadores.`,
+    })
     return true
   }
 
@@ -1518,11 +1765,8 @@ async function handleGameMessageFlow(ctx) {
   return false
 }
 
-// Retrocompatibilidade: alguns ambientes ainda referenciam handleGamesCommand.
-const handleGamesCommand = handleGameCommands
 
 module.exports = {
   handleGameCommands,
-  handleGamesCommand,
   handleGameMessageFlow,
 }

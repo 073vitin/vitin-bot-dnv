@@ -6,14 +6,15 @@ const COMMAND_HELP = {
   economia: {
     name: "Economia",
     aliases: ["economia"],
-    description: "Mostra submenu de economia com comandos de progressão, escambo (trades) e times",
+    description: "Mostra submenu de economia com categorias geral, rotina, social e extras",
     usage: "!economia [submenu]",
-    submenus: ["escambo", "times", "progressao"],
+    submenus: ["geral", "rotina", "social", "extras"],
     commonUsage: [
       "!economia - Ver menu completo",
-      "!economia escambo - Ver comandos de trade",
-      "!economia times - Ver comandos de time",
-      "!economia progressao - Ver rotina diária",
+      "!economia geral - Perfil, consultas e utilidades",
+      "!economia rotina - Loop de ganho de moedas",
+      "!economia social - Trocas, doações e times",
+      "!economia extras - Cupons, loteria e passes",
     ],
     details: "A economia é o sistema de progressão principal. Você ganha coins, XP e itens para subir de nível.",
   },
@@ -73,9 +74,9 @@ const COMMAND_HELP = {
     description: "Envia um guia completo de como progredir na economia (em DM)",
     usage: "!guia",
     commonUsage: [
-      "!guia - Recebe guia em 2 partes no privado",
+      "!guia - Recebe guia em 3 seções no privado",
     ],
-    details: "Aprenda a rotina básica: daily + trabalho + missões. Inclui rotas de risco e dicas práticas.",
+    details: "Guia em 3 seções: rotina de moedas, social/itens (time e trade), e dicas com tutorial de progressão.",
   },
 
   daily: {
@@ -89,17 +90,32 @@ const COMMAND_HELP = {
     details: "uma vez por dia você pode resgatar coins + XP automático. Reseta à meia-noite.",
   },
 
+  carepackage: {
+    name: "Cesta Básica (Care Package)",
+    aliases: ["carepackage", "cestabásica", "cestabasica"],
+    description: "Resgata pacote de ajuda para saldo baixo",
+    usage: "!carepackage",
+    commonUsage: [
+      "!carepackage - Tentar resgatar pacote de ajuda",
+      "!cestabásica - Alias em português",
+    ],
+    details: "Disponível para contas elegíveis (saldo baixo) e com cooldown de resgate.",
+  },
+
   trabalho: {
     name: "Trabalho",
     aliases: ["trabalho"],
-    description: "Trabalha para ganhar coins (ifood, capinar ou lavagem)",
-    usage: "!trabalho <ifood|capinar|lavagem>",
+    description: "Trabalha para ganhar coins em 6 opções com risco e recompensa diferentes",
+    usage: "!trabalho <ifood|capinar|lavagem|aposta|minerar|bitcoin>",
     commonUsage: [
-      "!trabalho ifood - Fazer delivery (risco baixo, ganho 55-145)",
-      "!trabalho capinar - Capinar (risco médio, ganho 110)",
-      "!trabalho lavagem - Lavar dinheiro (risco alto, perde até 1500)",
+      "!trabalho ifood - payout 55-145, risco baixo (10% sem pagamento)",
+      "!trabalho capinar - payout 110 fixo, risco médio (20% sem pagamento)",
+      "!trabalho lavagem - payout 320-620, risco extremo (80% falha e perda de ate 20% da carteira, limite 1500)",
+      "!trabalho aposta - payout 75-300, risco moderado (50% 0.5x, 50% 2x)",
+      "!trabalho minerar - payout 0-330, risco medio-alto (30% zerado, 70% entre 180-330)",
+      "!trabalho bitcoin - payout 200-350, risco baixo-medio (15% sem pagamento)",
     ],
-    details: "Cada trabalho tem risco e recompensa diferentes. Cooldown de 90 minutos. Ganhos escalam com seu nível.",
+    details: "Como funciona: cada uso aplica cooldown (base 90 minutos), depois roda chance de sucesso/falha do trabalho escolhido. Pagamentos de coins escalam com seu nível e podem ser afetados por buffs ativos.",
   },
 
   extrato: {
@@ -112,6 +128,17 @@ const COMMAND_HELP = {
       "!extrato @usuario - Ver histórico de outro",
     ],
     details: "Veja quando ganhou/perdeu coins e o motivo. Útil para rastrear sua economia.",
+  },
+
+  item: {
+    name: "Item",
+    aliases: ["item"],
+    description: "Mostra detalhes de um item da economia",
+    usage: "!item <nome_do_item>",
+    commonUsage: [
+      "!item escudo - Ver descrição e valor do item",
+    ],
+    details: "Útil para consultar efeito, preço e categoria de itens antes de comprar/usar.",
   },
 
   coinsranking: {
@@ -138,12 +165,11 @@ const COMMAND_HELP = {
 
   cassino: {
     name: "Cassino",
-    aliases: ["cassino", "aposta"],
+    aliases: ["cassino"],
     description: "Joga na máquina caça-níqueis (chance de ganhar ou perder coins)",
     usage: "!cassino <quantidade>",
     commonUsage: [
       "!cassino 100 - Apostar 100 coins",
-      "!aposta 50 - Alias de cassino",
     ],
     details: "Jogo de azar. Pode multiplicar sua aposta ou perder tudo. Alto risco, alto retorno.",
   },
@@ -162,15 +188,15 @@ const COMMAND_HELP = {
 
   comprar: {
     name: "Comprar",
-    aliases: ["comprar"],
+    aliases: ["comprar", "comprarpara"],
     description: "Compra um item da loja para você ou para outro",
-    usage: "!comprar <item|indice> [quantidade]",
+    usage: "!comprar <item|id> [quantidade]",
     commonUsage: [
       "!comprar escudo - Comprar 1 escudo",
-      "!comprar 1 3 - Comprar item índice 1, quantidade 3",
+      "!comprar 1 3 - Comprar item de ID 1, quantidade 3",
       "!comprarpara @user escudo - Comprar para outro usuário",
     ],
-    details: "Use nomes de itens ou índices da loja. Coins são debitados da sua conta.",
+    details: "Use nomes de itens ou IDs da loja. Coins são debitados da sua conta.",
   },
 
   vender: {
@@ -245,7 +271,7 @@ const COMMAND_HELP = {
 
   trade: {
     name: "Trade (Escambo)",
-    aliases: ["trade", "troca"],
+    aliases: ["trade", "troca", "escambo"],
     description: "Sistema de troca de coins e itens com outro usuário",
     usage: "!trade @user <coins> [item:quantidade...]",
     commonUsage: [
@@ -259,14 +285,14 @@ const COMMAND_HELP = {
 
   time: {
     name: "Sistema de Times",
-    aliases: ["time", "team"],
+    aliases: ["time"],
     description: "Cria e gerencia times com seus amigos",
     usage: "!time <ação> [args]",
     commonUsage: [
-      "!time create nome - Criar um time",
-      "!time accept <id> - Entrar em um time",
+      "!time criar nome - Criar um time",
+      "!time aceitar <id> - Entrar em um time",
       "!time info - Ver info do seu time",
-      "!time members - Listar membros",
+      "!time membros - Listar membros",
       "!time depositarcoins 50 - Adicionar coins ao pool",
     ],
     details: "Times organizam colaboração econômica e gerenciamento de pool de recursos.",
@@ -294,7 +320,7 @@ const COMMAND_HELP = {
       "!apelido - Ver apelido atual",
       "!apelido MeuNome - Definir novo apelido",
     ],
-    details: "Até 32 caracteres. Necessário se desativar menções no !mentions.",
+    details: "Até 30 caracteres",
   },
 
   cupom: {
@@ -625,6 +651,17 @@ const COMMAND_HELP = {
     details: "A próxima mensagem será enviada privadamente aos admins.",
   },
 
+  pergunta: {
+    name: "Pergunta Privada",
+    aliases: ["pergunta"],
+    description: "[DM] Envia pergunta privada com protocolo para os desenvolvedores.",
+    usage: "!pergunta",
+    commonUsage: [
+      "!pergunta - Ativar captura da proxima mensagem como pergunta",
+    ],
+    details: "Sua proxima mensagem vira uma pergunta com protocolo de 5 caracteres e é enviada para os desenvolvedores. Assim que um deles responder, a resposta será enviada na sua DM.",
+  },
+
   sticker: {
     name: "Criar Sticker",
     aliases: ["sticker", "s", "fig", "f"],
@@ -786,10 +823,9 @@ const COMMAND_HELP = {
     name: "Usar Item",
     aliases: ["usaritem"],
     description: "Usa um item do seu inventário",
-    usage: "!usaritem <item> [@user]",
+    usage: "!usaritem <item>",
     commonUsage: [
-      "!usaritem escudo - Usar escudo em si mesmo",
-      "!usaritem poção @usuario - Usar em outro",
+      "!usaritem boosterxp - Usar o booster de xp",
     ],
     details: "Itens consumíveis têm efeitos imediatos.",
   },
@@ -884,12 +920,11 @@ const COMMAND_HELP = {
 
   timeranking: {
     name: "Time Ranking",
-    aliases: ["timeranking", "teamranking"],
+    aliases: ["timeranking"],
     description: "Mostra ranking de times mais ricos",
     usage: "!timeranking",
     commonUsage: [
       "!timeranking - Ver top times",
-      "!teamranking - Alias",
     ],
     details: "Ranking baseado no total de coins da equipe.",
   },
