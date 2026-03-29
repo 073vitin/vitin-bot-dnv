@@ -32,6 +32,13 @@ function clearRrTurnTimeout(groupId, lobbyId) {
 }
 
 async function handleGameCommands(ctx) {
+    // Modo Livre: warn and filter
+    const modoLivreActive = storage.isModoLivreUser(sender)
+    if (modoLivreActive) {
+      await sock.sendMessage(from, {
+        text: "⚠️ *Modo Livre* está ativado para você! Você não ganhará nem gastará moedas nos jogos (exceto apostas de cassino). Para desativar, use !modolivre."
+      })
+    }
   const {
     sock,
     from,
@@ -165,15 +172,18 @@ async function handleGameCommands(ctx) {
     if (!Array.isArray(playerIds) || playerIds.length === 0) {
       return { ok: true, pool: 0, buyInByPlayer: {}, playerBetByPlayer: {} }
     }
+    // Exclude modo livre users from paying buy-in (except for casino)
+    const isCasino = String(gameType || "").toLowerCase().includes("cassino")
+    const filteredPlayers = isCasino ? playerIds : playerIds.filter((id) => !storage.isModoLivreUser(id))
     if (buyInAmount <= 0) {
-      const normalizedBets = playerIds.reduce((acc, playerId) => {
+      const normalizedBets = filteredPlayers.reduce((acc, playerId) => {
         acc[playerId] = sanitizeLobbyBet(playerBetByPlayer[playerId], 1)
         return acc
       }, {})
       return { ok: true, pool: 0, buyInByPlayer: {}, playerBetByPlayer: normalizedBets }
     }
 
-    const uniquePlayers = [...new Set(playerIds.filter(Boolean))]
+    const uniquePlayers = [...new Set(filteredPlayers.filter(Boolean))]
     const normalizedBets = uniquePlayers.reduce((acc, playerId) => {
       acc[playerId] = sanitizeLobbyBet(playerBetByPlayer[playerId], 1)
       return acc

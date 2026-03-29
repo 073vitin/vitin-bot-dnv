@@ -843,7 +843,7 @@ const COMMAND_HELP = {
 
   cestabásica: {
     name: "Cesta Básica",
-    aliases: ["cestabásica", "cestabásika"],
+    aliases: ["cestabásica", "carepackage"],
     description: "Reclama cesta básica de coins quando balance está baixo",
     usage: "!cestabásica",
     commonUsage: [

@@ -1461,10 +1461,10 @@ app.get("/", (req,res)=>{
               "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
                 "<h3 style=\\"margin:0 0 10px 0\\">Performance</h3>" +
                 "<p style=\\"margin:4px 0\\">Estado da conexão: <b>" + escapeHtml(snapshot.connectionState) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Uptime do bot (sessão atual): <b>" + formatElapsed(snapshot.uptimeMs) + "</b> | Desde autenticação atual: <b>" + formatElapsed(snapshot.authUptimeMs) + "</b></p>" +
+                "<p style=\\"margin:4px 0\\">Uptime do bot (sessão atual): <b>" + formatElapsed(snapshot.uptimeMs) + "</b> | Desde autenticação atual: <b>" + formatElapsed(snapshot.authUptimeMs) + "</b></p>" +
                 "<p style=\\"margin:4px 0\\">Autenticado em: <b>" + formatDateTime(snapshot.authenticatedAt) + "</b> | Conectado em: <b>" + formatDateTime(snapshot.connectedAt) + "</b></p>" +
                 "<p style=\\"margin:4px 0\\">Mensagens recebidas: <b>" + Number(snapshot.messagesReceived || 0) + "</b> | Erros: <b>" + Number(snapshot.messagesErrored || 0) + "</b> | Ignoradas (sem conteúdo): <b>" + Number(snapshot.ignoredNoMessage || 0) + "</b> | Ignoradas (fromMe): <b>" + Number(snapshot.ignoredFromMe || 0) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Lifetime desde <b>" + formatDateTime(readPath(snapshot, [\"lifetime\", \"sinceAt\"], 0)) + "</b>: mensagens <b>" + Number(readPath(snapshot, [\"lifetime\", \"messagesReceived\"], 0)) + "</b>, erros <b>" + Number(readPath(snapshot, [\"lifetime\", \"messagesErrored\"], 0)) + "</b>, ignoradas sem conteúdo <b>" + Number(readPath(snapshot, [\"lifetime\", \"ignoredNoMessage\"], 0)) + "</b>, ignoradas fromMe <b>" + Number(readPath(snapshot, [\"lifetime\", \"ignoredFromMe\"], 0)) + "</b>, comandos <b>" + Number(readPath(snapshot, [\"lifetime\", \"commandsExecuted\"], 0)) + "</b>, reconexões <b>" + Number(readPath(snapshot, [\"lifetime\", \"reconnects\"], 0)) + "</b>, uptime autenticado <b>" + formatElapsed(readPath(snapshot, [\"lifetime\", \"authUptimeMs\"], 0)) + "</b>, boots <b>" + Number(readPath(snapshot, [\"lifetime\", \"bootCount\"], 0)) + "</b></p>" +
+                "<p style=\\"margin:4px 0\\">Lifetime desde <b>" + formatDateTime(readPath(snapshot, ["lifetime", "sinceAt"], 0)) + "</b>: mensagens <b>" + Number(readPath(snapshot, ["lifetime", "messagesReceived"], 0)) + "</b>, erros <b>" + Number(readPath(snapshot, ["lifetime", "messagesErrored"], 0)) + "</b>, ignoradas sem conteúdo <b>" + Number(readPath(snapshot, ["lifetime", "ignoredNoMessage"], 0)) + "</b>, ignoradas fromMe <b>" + Number(readPath(snapshot, ["lifetime", "ignoredFromMe"], 0)) + "</b>, comandos <b>" + Number(readPath(snapshot, ["lifetime", "commandsExecuted"], 0)) + "</b>, reconexões <b>" + Number(readPath(snapshot, ["lifetime", "reconnects"], 0)) + "</b>, uptime autenticado <b>" + formatElapsed(readPath(snapshot, ["lifetime", "authUptimeMs"], 0)) + "</b>, boots <b>" + Number(readPath(snapshot, ["lifetime", "bootCount"], 0)) + "</b></p>" +
                 "<p style=\\"margin:4px 0\\">Último comando: <b>" + escapeHtml(snapshot.lastCommand || "-") + "</b> | Último processamento: <b>" + formatDateTime(snapshot.lastProcessedAt) + "</b> | Reconexões: <b>" + Number(snapshot.reconnects || 0) + "</b></p>" +
                 "<p style=\\"margin:4px 0\\">Memória: heap <b>" + Number(readPath(snapshot, ["memory", "heapUsed"], 0)) + " MB</b> | rss <b>" + Number(readPath(snapshot, ["memory", "rss"], 0)) + " MB</b> | Registrados <b>" + Number(snapshot.registeredUsers || 0) + "</b></p>" +
                 "<table style=\\"width:100%;margin-top:12px;border-collapse:collapse;font-family:monospace;font-size:12px\\">" +
@@ -2434,6 +2434,22 @@ async function startBot(){
       return
     }
 
+    if (cmdName === prefix + "modolivre") {
+      const isActive = storage.isModoLivreUser(sender)
+      if (isActive) {
+        storage.removeModoLivreUser([sender])
+        await sock.sendMessage(from, {
+          text: "Modo Livre desativado! Você voltará a ganhar e gastar moedas normalmente nos jogos."
+        })
+      } else {
+        storage.addModoLivreUser([sender], { enabledBy: sender })
+        await sock.sendMessage(from, {
+          text: "Modo Livre ativado! Você não ganhará nem gastará moedas nos jogos (exceto apostas de cassino). O bot avisará sempre que este modo estiver ativo."
+        })
+      }
+      return
+    }
+
     if (cmdName === prefix + "toggleoverride") {
       if (isGroup) return
 
@@ -3187,7 +3203,14 @@ async function startBot(){
       return parsed
     }
 
-    async function rewardPlayer(playerId, baseAmount = BASE_GAME_REWARD, multiplier = 1, reasonLabel = "jogo") {
+    async function rewardPlayer(playerId, baseAmount = BASE_GAME_REWARD, multiplier = 1) {
+      if (storage.isModoLivreUser(playerId)) {
+        await sock.sendMessage(from, {
+          text: `⚠️ @${playerId.split("@")[0]} está em *Modo Livre* e não recebe moedas.`,
+          mentions: [playerId],
+        })
+        return 0
+      }
       const safeBase = Math.max(0, Math.floor(Number(baseAmount) || 0))
       if (safeBase <= 0) return 0
       const safeMultiplier = Math.max(1, parsePositiveInt(multiplier, 1))
