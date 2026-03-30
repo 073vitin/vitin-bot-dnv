@@ -943,7 +943,7 @@ async function perfilAM(ctx){
     })
   }
 
- const usuarioId = mentions
+  const usuarioId = mentions
   const mem = getMemoria(usuarioId)
   const alvo = alvosAM[from]?.find(a => a.id === usuarioId)
 
@@ -960,7 +960,7 @@ async function perfilAM(ctx){
   return sock.sendMessage(from, {
     text: `👁️ *PERFIL DO ALVO*
 
-👤 Usuário: @user`
+👤 Usuário: @user
 🎭 Personagem: *${alvo.personagem}*
 ${nivelTexto}
 
@@ -973,7 +973,6 @@ _Eu os conheço melhor do que eles mesmos..._`,
     mentions: [usuarioId]
   })
 }
-
 // =========================
 // COMANDO: !amstatus
 // =========================
