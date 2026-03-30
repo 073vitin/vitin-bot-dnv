@@ -327,10 +327,8 @@ async function AM_EscolherAlvoAposMonologo(ctx){
     perguntasUsadas[maisAtivo] = []
   }
 
-  const numero = maisAtivo.split("@")
-  
   return enviarQuebrado(sock, from, [
-    `@${numero}`,
+    `@${maisAtivo.split("@")}`,
     "Você será o meu primeiro.",
     "Bem-vindo ao jogo."
   ], [maisAtivo])
@@ -695,14 +693,10 @@ async function AM_Perseguir(ctx){
 
   if (Math.random() > chance) return
 
-  const userId = String(alvoEscolhido.id).split("@")
-  if (!userId) return
-
   return enviarQuebrado(ctx.sock, ctx.from, [
-    `@${userId}`,
+    `@${alvoEscolhido.id.split("@")}`,
     "Eu ainda estou aqui.",
-    "Observando você.",
-    `Você é o meu ${alvoEscolhido.personagem}.`
+    "Observando você."
   ], [alvoEscolhido.id])
 }
 
