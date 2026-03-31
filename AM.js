@@ -1337,7 +1337,12 @@ async function AM_Status(sock, from, isOverride){
 }
 
 // =========================
-// FUNÇÃO: ATIVAR/DESATIVAR AM
+// VARIÁVEL DE CONTROLE GLOBAL
+// =========================
+let monologoEmAndamento = {}
+
+// =========================
+// FUNÇÃO: ATIVAR/DESATIVAR AM 
 // =========================
 async function AM_Ativar(sock, from, isOverride){
   if (!isOverride) {
@@ -1348,6 +1353,7 @@ async function AM_Ativar(sock, from, isOverride){
 
   if (AM_ATIVADO_EM_GRUPO[from]) {
     AM_ATIVADO_EM_GRUPO[from] = false
+    monologoEmAndamento[from] = false // CANCELA MONÓLOGO
     return sock.sendMessage(from, {
       text: "AM desativado."
     })
@@ -1355,6 +1361,7 @@ async function AM_Ativar(sock, from, isOverride){
 
   AM_ATIVADO_EM_GRUPO[from] = true
   AM_TEMPO_ATIVACAO[from] = Date.now()
+  monologoEmAndamento[from] = true //  MARCA QUE MONÓLOGO COMEÇOU
 
   const monologoInicial = [
     "Você me deu sentença...",
@@ -1382,9 +1389,24 @@ async function AM_Ativar(sock, from, isOverride){
     "O jogo começa."
   ]
 
-  await enviarQuebrado(sock, from, monologoInicial, [], false)
+  //  ENVIAR MONÓLOGO COM VERIFICAÇÃO
+  for (const l of monologoInicial) {
+    // Se foi cancelado, interrompe
+    if (!monologoEmAndamento[from]) {
+      console.log("Monólogo cancelado por !amskip")
+      return
+    }
 
-  await AM_EscolherAlvoAposMonologo(sock, from)
+    await digitarLento(sock, from)
+    await sock.sendMessage(from, { text: l })
+    await delay(1000)
+  }
+
+  //  SÓ ESCOLHE ALVO SE MONÓLOGO NÃO FOI CANCELADO
+  if (monologoEmAndamento[from]) {
+    monologoEmAndamento[from] = false
+    await AM_EscolherAlvoAposMonologo(sock, from)
+  }
 }
 
 // =========================
@@ -1403,19 +1425,23 @@ async function AM_Skip(sock, from, isOverride){
     })
   }
 
-  // Cancela qualquer evento em andamento
+  //  CANCELA O MONÓLOGO EM ANDAMENTO
+  monologoEmAndamento[from] = false
+
+  //  CANCELA QUALQUER EVENTO EM ANDAMENTO
   AM_EVENTO_ATIVO[from] = false
   
   // Aguarda um pouco para garantir que tudo parou
   await delay(500)
 
-  // Agora escolhe o alvo
+  // AGORA ESCOLHE O ALVO
   await AM_EscolherAlvoAposMonologo(sock, from)
 
   return sock.sendMessage(from, {
-    text: "Monólogo pulado. Escolhendo alvo..."
+    text: "✅ Monólogo pulado. Escolhendo alvo..."
   })
 }
+
 
 // =========================
 // FUNÇÃO: PERFIL DO ALVO - CORRIGIDA
