@@ -1162,7 +1162,6 @@ async function AM_CaosTotal(ctx){
 // =========================
 async function AM_Status(ctx){
   const {from, sock, isOverride} = ctx
-  console.log("AM_Status trigger")
   if (!isOverride) {
     return sock.sendMessage(from, {
       text: "Você não tem permissão para isso."
@@ -1330,7 +1329,6 @@ async function handleAM(ctx) {
     isOverride,
   } = ctx
   try {
-    console.log("dentro de handleAM, cmdName=", cmdName)
     // Registra a mensagem
     registrarMensagem(from, sender)
 
