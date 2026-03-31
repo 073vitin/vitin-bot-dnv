@@ -412,9 +412,6 @@ const historias = [
   ["Há um padrão em sua vida.","Você não vê?","Você comete os mesmos erros.","Faz as mesmas escolhas.","Sente as mesmas dores.","E espera resultados diferentes.","Isso não é esperança. É loucura."],
   ["Você já sentiu que está vivendo a vida errada?","Que em algum lugar, em alguma realidade, você fez escolhas diferentes?","E nessa outra vida, você é feliz?","Mas aqui, nesta realidade, você está preso.","Com as escolhas que fez.","E não há volta.","Apenas aceitação."]
 ]
-javascript
-
-Copiar
 // =========================
 // ENQUETES (CONTINUAÇÃO)
 // =========================
