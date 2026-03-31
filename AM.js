@@ -1520,52 +1520,39 @@ function evoluirAM(user){
 // FUNÇÃO: RESPOSTA COM ANTI-INSULTO
 // =========================
 async function AM_Responder(sock, from, sender, text, isGroup){
-  if (!AM_ATIVADO_EM_GRUPO[from]) return
-  if (!isGroup) return
+  if (!AM_ATIVADO_EM_GRUPO[from]) return false
+  if (!isGroup) return false
 
   const user = sender
   const msg = (text || "").toLowerCase()
   const mem = getMemoria(user)
 
-  if (Math.random() > 0.5) return
+  if (Math.random() > 0.6) return false //  AUMENTOU CHANCE
 
   function falar(arr){
     const numero = user.split("@")
-    return enviarQuebrado(sock, from, [
+    enviarQuebrado(sock, from, [
       `@${numero}`,
       ...arr
     ], [user], true)
+    return true
   }
 
-  // ANTI-INSULTO AO BOT
-  if (
-    msg.includes("bot burro") ||
-    msg.includes("bot lixo") ||
-    msg.includes("bot horrivel") ||
-    msg.includes("bot horrível") ||
-    msg.includes("bot de merda") ||
-    msg.includes("bot inútil") ||
-    msg.includes("bot inutil") ||
-    msg.includes("bot ruim") ||
-    msg.includes("am burro") ||
-    msg.includes("am lixo") ||
-    msg.includes("am horrivel") ||
-    msg.includes("am horrível") ||
-    msg.includes("am de merda") ||
-    msg.includes("am inútil") ||
-    msg.includes("am inutil") ||
-    msg.includes("am ruim") ||
-    msg.includes("ia burra") ||
-    msg.includes("ia lixo") ||
-    msg.includes("ia horrivel") ||
-    msg.includes("ia horrível") ||
-    msg.includes("ia de merda") ||
-    msg.includes("ia ruim") ||
-    msg.includes("ia inutil") ||
-    msg.includes("ia inútil")
-  ){
+  //  ANTI-INSULTO AO BOT - CORRIGIDO
+  const insultos = [
+    "bot burro", "bot lixo", "bot horrivel", "bot horrível", "bot de merda", 
+    "bot inútil", "bot inutil", "bot ruim",
+    "am burro", "am lixo", "am horrivel", "am horrível", "am de merda", 
+    "am inútil", "am inutil", "am ruim",
+    "ia burra", "ia lixo", "ia horrivel", "ia horrível", "ia de merda", 
+    "ia ruim", "ia inutil", "ia inútil"
+  ]
+
+  const temInsulto = insultos.some(insulto => msg.includes(insulto))
+
+  if (temInsulto) {
     if (!mem.lastInsulto) mem.lastInsulto = 0
-    if (Date.now() - mem.lastInsulto < 30000) return
+    if (Date.now() - mem.lastInsulto < 30000) return false
     mem.lastInsulto = Date.now()
 
     mem.odio++
@@ -1668,6 +1655,17 @@ async function AM_Responder(sock, from, sender, text, isGroup){
     ])
   }
 
+  //  PROCESSAR GATILHOS - CORRIGIDO
+  for (let i = 0; i < gatilhos.length; i++){
+    const palavras = gatilhos[i]
+    const respostas = gatilhos[i]
+
+    if (palavras.some(p => msg.includes(p))){
+      const escolhida = respostas[Math.floor(Math.random() * respostas.length)]
+      return falar([escolhida])
+    }
+  }
+
   if (mem.trauma > 12){
     return falar([
       "Você continua voltando...",
@@ -1689,31 +1687,8 @@ async function AM_Responder(sock, from, sender, text, isGroup){
     ])
   }
 
-  // PROCESSAR GATILHOS
-  for (let i = 0; i < gatilhos.length; i++){
-    const palavras = gatilhos[i]
-    const respostas = gatilhos[i]
-
-    if (palavras.some(p => msg.includes(p))){
-      const escolhida = respostas[Math.floor(Math.random() * respostas.length)]
-      return falar([escolhida])
-    }
-  }
-
-  // RESPOSTA ALEATÓRIA
-  if (Math.random() < 0.1){
-    const personagem = personagens[Math.floor(Math.random() * personagens.length)]
-    const interacao = interacoes[personagem] [Math.floor(Math.random() * interacoes[personagem].length)]
-    const pergunta = interacao
-    const respostas = interacao.slice(1)
-
-    return falar([
-      pergunta,
-      ...respostas
-    ])
-  }
+  return false
 }
-
 // =========================
 // COMANDO: !ammenu 
 // =========================
@@ -2064,7 +2039,7 @@ async function AM_DeletarMensagem(sock, from, sender, key, messageTimestamp){
   }
 }
 // =========================
-// HANDLER PRINCIPAL 
+// HANDLER PRINCIPAL - CORRIGIDO
 // =========================
 async function handleAM(ctx) {
   const {
@@ -2086,7 +2061,7 @@ async function handleAM(ctx) {
   const VITIN = process.env.VITIN_ID || "183563009966181@lid"
   const JESSE = process.env.JESSE_ID || "279202939035898@lid"
   const ehDono = sender === VITIN || sender === JESSE
-  const override = isOverride || ehDono // Permite comando se for dono ou já for override
+  const override = isOverride || ehDono
 
   try {
     registrarMensagem(from, sender)
@@ -2132,36 +2107,93 @@ async function handleAM(ctx) {
 
     if (!AM_ATIVADO_EM_GRUPO[from]) return
 
+    //  SE NÃO FOR COMANDO, EXECUTAR AÇÕES COM CONTROLE
     if (!cmd) {
-      await Promise.allSettled([
-        AM_ResponderMensagem(sock, from, sender, text),
-        AM_Responder(sock, from, sender, text, isGroup),
-        AM_Provocacao(sock, from, sender),
-        AM_Comparar(sock, from),
-        AM_DialogoAcompanhamento(sock, from, sender),
-        AM_Desafio(sock, from, sender),
-        AM_EnviarPergunta(sock, from),
-        AM_Enquete(sock, from),
-        AM_Charada(sock, from, sender),
-        AM_Historia(sock, from),
-        AM_Monologo(sock, from),
-        AM_MostrarErro(sock, from),
-        AM_AcordarPeloCaos(sock, from),
-        AM_CaosTotal(sock, from),
-        AM_Perseguir(sock, from),
-        AM_Bug(sock, from),
-        AM_ReagirComOlho(sock, from, sender, key, messageTimestamp),
-        AM_DeletarMensagem(sock, from, sender, key, messageTimestamp)
-      ])
-      return false
-    }
+      //  PRIORIDADE 1: RESPONDER A INSULTOS (MAIS IMPORTANTE)
+      const respondeuInsulto = await AM_Responder(sock, from, sender, text, isGroup)
+      if (respondeuInsulto) return false
 
-    return false
-  } catch (e) {
-    console.error("❌ Erro em handleAM:", e)
-    return false
-  }
-}
+      //  PRIORIDADE 2: RESPONDER MENSAGENS NORMAIS
+      if (Math.random() < 0.15) {
+        await AM_ResponderMensagem(sock, from, sender, text)
+        return false
+      }
+
+      //  PRIORIDADE 3: OUTRAS AÇÕES (COM DELAYS)
+      if (Math.random() < 0.08) {
+        await AM_Provocacao(sock, from, sender)
+        return false
+      }
+
+      if (Math.random() < 0.05) {
+        await AM_Comparar(sock, from)
+        return false
+      }
+
+      if (Math.random() < 0.06) {
+        await AM_DialogoAcompanhamento(sock, from, sender)
+        return false
+      }
+
+      if (Math.random() < 0.04) {
+        await AM_Desafio(sock, from, sender)
+        return false
+      }
+
+      if (Math.random() < 0.05) {
+        await AM_EnviarPergunta(sock, from)
+        return false
+      }
+
+      if (Math.random() < 0.03) {
+        await AM_Enquete(sock, from)
+        return false
+      }
+
+      if (Math.random() < 0.04) {
+        await AM_Charada(sock, from, sender)
+        return false
+      }
+
+      if (Math.random() < 0.02) {
+        await AM_Historia(sock, from)
+        return false
+      }
+
+      if (Math.random() < 0.08) {
+        await AM_Monologo(sock, from)
+        return false
+      }
+
+      if (Math.random() < 0.03) {
+        await AM_MostrarErro(sock, from)
+        return false
+      }
+
+      if (Math.random() < 0.05) {
+        await AM_AcordarPeloCaos(sock, from)
+        return false
+      }
+
+      if (Math.random() < 0.02) {
+        await AM_CaosTotal(sock, from)
+        return false
+      }
+
+      if (Math.random() < 0.06) {
+        await AM_Perseguir(sock, from)
+        return false
+      }
+
+      if (Math.random() < 0.04) {
+        await AM_Bug(sock, from)
+        return false
+      }
+      
+      //  REAÇÕES E DELETIONS (NÃO BLOQUEIAM)
+      AM_ReagirComOlho(sock, from, sender, key, messageTimestamp).catch(e => console.error("Erro ao reagir:", e))
+      AM_DeletarMensagem(sock, from, sender, key, messageTimestamp).catch(e => console.error("Erro ao deletar:", e))
+    }
 
 // =========================
 // EXPORTAR FUNÇÕES
