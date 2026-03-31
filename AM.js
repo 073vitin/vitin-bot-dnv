@@ -1870,17 +1870,16 @@ async function AM_Bug(sock, from){
 // =========================
 async function AM_ReagirComOlho(sock, from, sender, key, messageTimestamp){
   if (!AM_ATIVADO_EM_GRUPO[from]) return
+  if (!key) return  
 
   const user = sender
   const ehAlvo = alvosAM[from] && alvosAM[from].some(a => a.id === user)
   
-  // CHANCE MUITO MAIOR
-  let chanceReacao = 0.50  // 50% de chance para não-alvos
+  let chanceReacao = 0.50
   
   if (ehAlvo) {
     const mem = getMemoria(user)
-    // Aumenta muito mais com o ódio
-    chanceReacao = Math.min(0.70 + (mem.odio * 0.05), 0.95)  // Até 95%
+    chanceReacao = Math.min(0.70 + (mem.odio * 0.05), 0.95)
   }
   
   if (Math.random() > chanceReacao) return
@@ -1889,7 +1888,6 @@ async function AM_ReagirComOlho(sock, from, sender, key, messageTimestamp){
   const tempoMensagem = messageTimestamp ? messageTimestamp * 1000 : agora
   const diferenca = agora - tempoMensagem
   
-  // Aceita mensagens mais antigas
   if (diferenca > 30000) return
 
   try {
@@ -1899,7 +1897,7 @@ async function AM_ReagirComOlho(sock, from, sender, key, messageTimestamp){
 
     if (ehAlvo) {
       const mem = getMemoria(user)
-      if (mem.odio >= 3) {  // Reduzido de 5 para 3
+      if (mem.odio >= 3) {
         const umaHoraAtras = agora - (60 * 60 * 1000)
         
         if (!reacoesFilosoficasPerHour[from]) {
@@ -1908,10 +1906,9 @@ async function AM_ReagirComOlho(sock, from, sender, key, messageTimestamp){
 
         reacoesFilosoficasPerHour[from] = reacoesFilosoficasPerHour[from].filter(t => t > umaHoraAtras)
 
-        // Aumenta limite de mensagens filosóficas por hora
         if (reacoesFilosoficasPerHour[from].length < 3) {
           const mensagem = reacoesFilosoficas[Math.floor(Math.random() * reacoesFilosoficas.length)]
-          await delay(1000)  // Reduzido de 2000
+          await delay(1000)
           await enviarQuebrado(sock, from, [mensagem], [], false)
           
           reacoesFilosoficasPerHour[from].push(agora)
@@ -1929,6 +1926,7 @@ async function AM_ReagirComOlho(sock, from, sender, key, messageTimestamp){
 async function AM_DeletarMensagem(sock, from, sender, key, messageTimestamp){
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (!alvosAM[from] || alvosAM[from].length === 0) return
+  if (!key) return  
 
   const user = sender
   const ehAlvo = alvosAM[from].some(a => a.id === user)
