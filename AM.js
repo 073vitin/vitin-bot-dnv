@@ -2037,7 +2037,7 @@ async function AM_DeletarMensagem(sock, from, sender, key, messageTimestamp){
   }
 }
 // =========================
-// HANDLER PRINCIPAL - COMPLETO
+// HANDLER PRINCIPAL 
 // =========================
 async function handleAM(ctx) {
   const {
@@ -2055,27 +2055,33 @@ async function handleAM(ctx) {
     messageTimestamp
   } = ctx
 
+  // VERIFICAÇÃO DE DONOS (VITIN E JESSE)
+  const VITIN = process.env.VITIN_ID || "183563009966181@lid"
+  const JESSE = process.env.JESSE_ID || "279202939035898@lid"
+  const ehDono = sender === VITIN || sender === JESSE
+  const override = isOverride || ehDono // Permite comando se for dono ou já for override
+
   try {
     registrarMensagem(from, sender)
     capturarResposta(sender, from, text)
 
     if (cmdName === prefix + "amativar") {
-      await AM_Ativar(sock, from, isOverride)
+      await AM_Ativar(sock, from, override)
       return true
     }
 
     if (cmdName === prefix + "amskip") {
-      await AM_Skip(sock, from, isOverride)
+      await AM_Skip(sock, from, override)
       return true
     }
 
     if (cmdName === prefix + "amperfil") {
-      await AM_Perfil(sock, from, isOverride)
+      await AM_Perfil(sock, from, override)
       return true
     }
 
     if (cmdName === prefix + "amstatus") {
-      await AM_Status(sock, from, isOverride)
+      await AM_Status(sock, from, override)
       return true
     }
 
@@ -2093,7 +2099,7 @@ async function handleAM(ctx) {
     }
 
     if (cmdName === prefix + "desligaram") {
-      await desligarAM(sock, from, sender, isGroup, isOverride)
+      await desligarAM(sock, from, sender, isGroup, override)
       return true
     }
 
