@@ -1,3 +1,5 @@
+let botIniciado = false
+
 process.on("uncaughtException", console.error)
 process.on("unhandledRejection", console.error)
 
@@ -1736,6 +1738,8 @@ async function videoToSticker(buffer){
 // INICIAR BOT
 // =========================
 async function startBot(){
+  if (botIniciado) return
+  botIniciado = true
   const authDir = process.env.BOT_AUTH_DIR
     ? path.resolve(process.env.BOT_AUTH_DIR)
     : path.join(__dirname, ".data", "auth")
@@ -1827,7 +1831,10 @@ async function startBot(){
       const reason = lastDisconnect?.error?.output?.statusCode
       if(reason !== DisconnectReason.loggedOut){
         console.log("Reconectando...")
-        setTimeout(startBot,5000)
+        botIniciado = false
+setTimeout(() => {
+  startBot()
+}, 5000)
       }
     }
   })
@@ -4190,5 +4197,3 @@ async function startBot(){
   })
 }
 startBot()
-
-
