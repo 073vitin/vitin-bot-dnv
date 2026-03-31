@@ -941,7 +941,7 @@ Vínculos limpos: *${linkedCleanup.teamsLeft}* saída(s) de equipe, *${linkedCle
     return true
   }
 
-  if (cmdName === prefix + "missao" || cmdName === prefix + "missoes") {
+  if (cmdName === prefix + "missao" || cmdName === prefix + "missoes" || cmdName === prefix + "missões" || cmdName === prefix + "missão") {
     const action = String(cmdArg1 || "").trim().toLowerCase()
 
     if (action === "claim" || action === "resgatar") {
