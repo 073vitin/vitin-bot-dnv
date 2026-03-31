@@ -1286,7 +1286,35 @@ async function AM_Perfil(ctx){
 
   return ctx.sock.sendMessage(ctx.from, { text: perfil })
 }
+// =========================
+// FUNÇÃO: HANDLER PRINCIPAL 
+// =========================
+async function handleAM(ctx) {
+  if (!AM_ATIVADO_EM_GRUPO[ctx.from]) return
 
+  // Registra a mensagem
+  registrarMensagem(ctx.from, ctx.sender)
+
+  // Captura resposta pendente
+  capturarResposta(ctx)
+
+  // Executa todas as funções em paralelo
+  await Promise.allSettled([
+    AM_ResponderMensagem(ctx),
+    AM_Provocacao(ctx),
+    AM_Comparar(ctx),
+    AM_DialogoAcompanhamento(ctx),
+    AM_Desafio(ctx),
+    AM_EnviarPergunta(ctx),
+    AM_Enquete(ctx),
+    AM_Charada(ctx),
+    AM_Historia(ctx),
+    AM_Monologo(ctx),
+    AM_MostrarErro(ctx),
+    AM_AcordarPeloCaos(ctx),
+    AM_CaosTotal(ctx)
+  ])
+}
 // =========================
 // EXPORTAR FUNÇÕES
 // =========================
