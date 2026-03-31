@@ -1319,6 +1319,7 @@ async function handleAM(ctx) {
 // EXPORTAR FUNÇÕES
 // =========================
 module.exports = {
+  handleAM,
   AM_Ativar,
   AM_Skip,
   AM_Perfil,
