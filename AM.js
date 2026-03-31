@@ -109,7 +109,7 @@ async function aguardarResposta(user, group, tempo = 60000){
 }
 
 function capturarResposta(ctx){
-  const {sender, from} = ctx
+  const {sender, from, text} = ctx
   const key = sender + from
 
   if (respostasPendentes[key]){
@@ -912,7 +912,7 @@ async function AM_Enquete(ctx) {
 // FUNÇÃO: CHARADA (40% CHANCE, MAX 1/HORA)
 // =========================
 async function AM_Charada(ctx) {
-  const { sock, from, sender, text } = ctx // Destructure sock, from, sender, text from ctx
+  const { sock, from, sender} = ctx // Destructure sock, from, sender, text from ctx
   if (!sock) return console.error("sock is undefined in AM_Charada")
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (!alvosAM[from] || alvosAM[from].length === 0) return
@@ -972,6 +972,7 @@ async function AM_Charada(ctx) {
 // FUNÇÃO: HISTÓRIA (25% CHANCE, MAX 1/HORA)
 // =========================
 async function AM_Historia(ctx){
+  const {from, sock} = ctx
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (!alvosAM[from] || alvosAM[from].length === 0) return
   if (AM_EVENTO_ATIVO[from]) return
@@ -996,6 +997,7 @@ async function AM_Historia(ctx){
 // FUNÇÃO: MONÓLOGO (1 POR MINUTO, 1s DELAY)
 // =========================
 async function AM_Monologo(ctx){
+  const {from, sock} = ctx
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (AM_EVENTO_ATIVO[from]) return
 
@@ -1027,6 +1029,7 @@ async function AM_Monologo(ctx){
 // FUNÇÃO: MOSTRAR ERRO (MAX 1/DIA)
 // =========================
 async function AM_MostrarErro(ctx){
+  const {from} = ctx
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (AM_EVENTO_ATIVO[from]) return
 
@@ -1063,6 +1066,7 @@ async function AM_MostrarErro(ctx){
 // FUNÇÃO: ACORDAR PELO CAOS (REAGE AO GRUPO MOVIMENTADO)
 // =========================
 async function AM_AcordarPeloCaos(ctx){
+  const {from, sock} = ctx
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (AM_EVENTO_ATIVO[from]) return
 
@@ -1103,6 +1107,7 @@ async function AM_AcordarPeloCaos(ctx){
 // FUNÇÃO: CAOS TOTAL (ATIVA COM 10+ MENSAGENS/MIN, DELAY DE 10 MINUTOS)
 // =========================
 async function AM_CaosTotal(ctx){
+  const {from, sock} = ctx
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (AM_EVENTO_ATIVO[from]) return
 
@@ -1155,7 +1160,8 @@ async function AM_CaosTotal(ctx){
 // =========================
 // FUNÇÃO: STATUS DO AM (MOSTRA BARRA DE ÓDIO) 
 // =========================
-async function AM_Status(sock, from, isOverride){
+async function AM_Status(ctx){
+  const {from, sock, isOverride} = ctx
   console.log("AM_Status trigger")
   if (isOverride) {
     return sock.sendMessage(from, {
@@ -1202,6 +1208,7 @@ async function AM_Status(sock, from, isOverride){
 // FUNÇÃO: ATIVAR/DESATIVAR AM
 // =========================
 async function AM_Ativar(ctx){
+  const {from, sock, isOverride} = ctx
   if (isOverride) {
     return sock.sendMessage(from, {
       text: "Você não tem permissão para isso."
@@ -1253,6 +1260,7 @@ async function AM_Ativar(ctx){
 // FUNÇÃO: PULAR MONÓLOGO INICIAL (SKIP INTRO)
 // =========================
 async function AM_Skip(ctx){
+  const {from, sock, isOverride} = ctx
   if (isOverride) {
     return sock.sendMessage(from, {
       text: "Você não tem permissão para isso."
@@ -1277,6 +1285,7 @@ async function AM_Skip(ctx){
 // FUNÇÃO: PERFIL DO ALVO
 // =========================
 async function AM_Perfil(ctx){
+  const {from, sock, isOverride} = ctx
   if (isOverride) {
     return sock.sendMessage(from, {
       text: "Você não tem permissão para isso."
@@ -1315,12 +1324,10 @@ async function handleAM(ctx) {
     sock,
     from,
     sender,
-    text,
     prefix,
     cmd,
     cmdName,
-    isGroup,
-    isOverride: isOverrideSender,
+    isOverride,
   } = ctx
   try {
     console.log("dentro de handleAM, cmdName=", cmdName)
