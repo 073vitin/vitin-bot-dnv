@@ -95,7 +95,7 @@ function getMaisAtivo(group){
 // =========================
 // RESPOSTA
 // =========================
-function aguardarResposta(user, group, tempo = 60000){
+async function aguardarResposta(user, group, tempo = 60000){
   return new Promise(resolve => {
     respostasPendentes[user + group] = resolve
 
@@ -108,7 +108,8 @@ function aguardarResposta(user, group, tempo = 60000){
   })
 }
 
-function capturarResposta(sender, from){
+function capturarResposta(ctx){
+  const {sender, from} = ctx
   const key = sender + from
 
   if (respostasPendentes[key]){
@@ -588,8 +589,10 @@ function escolherPerguntaUnica(alvoId, personagem){
 // =========================
 // FUNÇÃO: ESCOLHER ALVO APÓS MONÓLOGO
 // =========================
-async function AM_EscolherAlvoAposMonologo(ctx){
-  const { sock, from } = ctx
+async function AM_EscolherAlvoAposMonologo(ctx) {
+  const { sock, from } = ctx // Destructure sock and from from ctx
+
+  if (!sock) return console.error("sock is undefined in AM_EscolherAlvoAposMonologo")
 
   if (AM_EVENTO_ATIVO[from]) return
   AM_EVENTO_ATIVO[from] = true
@@ -629,7 +632,9 @@ async function AM_EscolherAlvoAposMonologo(ctx){
 // =========================
 // FUNÇÃO: ENVIAR PERGUNTA ESPECÍFICA
 // =========================
-async function AM_EnviarPergunta(ctx){
+async function AM_EnviarPergunta(ctx) {
+  const { sock, from } = ctx // Destructure sock and from from ctx
+  if (!sock) return console.error("sock is undefined in AM_EnviarPergunta")
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (!alvosAM[from] || alvosAM[from].length === 0) return
   if (AM_EVENTO_ATIVO[from]) return
@@ -667,7 +672,9 @@ async function AM_EnviarPergunta(ctx){
 // =========================
 // FUNÇÃO: RESPONDER MENSAGEM NORMAL
 // =========================
-async function AM_ResponderMensagem(ctx){
+async function AM_ResponderMensagem(ctx) {
+  const { sock, from, sender, text } = ctx // Destructure sock, from, sender, text from ctx
+  if (!sock) return console.error("sock is undefined in AM_ResponderMensagem")
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (!alvosAM[from] || alvosAM[from].length === 0) return
   if (AM_EVENTO_ATIVO[from]) return
@@ -701,7 +708,9 @@ async function AM_ResponderMensagem(ctx){
 // =========================
 // FUNÇÃO: PROVOCAÇÃO CONTEXTUAL (MAX 2/HORA)
 // =========================
-async function AM_Provocacao(ctx){
+async function AM_Provocacao(ctx) {
+  const { sock, from, sender } = ctx // Destructure sock, from, sender from ctx
+  if (!sock) return console.error("sock is undefined in AM_Provocacao")
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (!alvosAM[from] || alvosAM[from].length === 0) return
   if (AM_EVENTO_ATIVO[from]) return
@@ -737,7 +746,9 @@ async function AM_Provocacao(ctx){
 // =========================
 // FUNÇÃO: COMPARAÇÃO ENTRE ALVOS (50% CHANCE, 1x/HORA)
 // =========================
-async function AM_Comparar(ctx){
+async function AM_Comparar(ctx) {
+  const { sock, from } = ctx // Destructure sock and from from ctx
+  if (!sock) return console.error("sock is undefined in AM_Comparar")
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (!alvosAM[from] || alvosAM[from].length < 2) return
   if (AM_EVENTO_ATIVO[from]) return
@@ -787,7 +798,9 @@ async function AM_Comparar(ctx){
 // =========================
 // FUNÇÃO: DIÁLOGO DE ACOMPANHAMENTO
 // =========================
-async function AM_DialogoAcompanhamento(ctx){
+async function AM_DialogoAcompanhamento(ctx) {
+  const { sock, from, sender } = ctx // Destructure sock, from, sender from ctx
+  if (!sock) return console.error("sock is undefined in AM_DialogoAcompanhamento")
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (!alvosAM[from] || alvosAM[from].length === 0) return
   if (AM_EVENTO_ATIVO[from]) return
@@ -822,7 +835,9 @@ async function AM_DialogoAcompanhamento(ctx){
 // =========================
 // FUNÇÃO: DESAFIO (30% CHANCE)
 // =========================
-async function AM_Desafio(ctx){
+async function AM_Desafio(ctx) {
+  const { sock, from, sender } = ctx // Destructure sock, from, sender from ctx
+  if (!sock) return console.error("sock is undefined in AM_Desafio")
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (!alvosAM[from] || alvosAM[from].length === 0) return
   if (AM_EVENTO_ATIVO[from]) return
@@ -850,7 +865,9 @@ async function AM_Desafio(ctx){
 // =========================
 // FUNÇÃO: ENQUETE (50% CHANCE, MAX 2/HORA)
 // =========================
-async function AM_Enquete(ctx){
+async function AM_Enquete(ctx) {
+  const { sock, from } = ctx // Destructure sock and from from ctx
+  if (!sock) return console.error("sock is undefined in AM_Enquete")
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (!alvosAM[from] || alvosAM[from].length < 2) return
   if (AM_EVENTO_ATIVO[from]) return
@@ -894,7 +911,9 @@ async function AM_Enquete(ctx){
 // =========================
 // FUNÇÃO: CHARADA (40% CHANCE, MAX 1/HORA)
 // =========================
-async function AM_Charada(ctx){
+async function AM_Charada(ctx) {
+  const { sock, from, sender, text } = ctx // Destructure sock, from, sender, text from ctx
+  if (!sock) return console.error("sock is undefined in AM_Charada")
   if (!AM_ATIVADO_EM_GRUPO[from]) return
   if (!alvosAM[from] || alvosAM[from].length === 0) return
   if (AM_EVENTO_ATIVO[from]) return
