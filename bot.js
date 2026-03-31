@@ -792,7 +792,6 @@ function getBroadcastTitle(type = "aviso") {
 
 function parseBroadcastMentionModeToken(value = "") {
   const normalized = String(value || "").trim().toLowerCase()
-  if (normalized === "r") return "T"
   if (normalized === "t") return "T"
   if (normalized === "n") return "N"
   if (normalized === "a") return "A"
@@ -801,7 +800,7 @@ function parseBroadcastMentionModeToken(value = "") {
 
 function shouldAppendMassMentionHint(messageContent = {}) {
   const mentions = Array.isArray(messageContent?.mentions) ? messageContent.mentions.filter(Boolean) : []
-  if (mentions.length <= 2) return false
+  if (mentions.length <= 3) return false
   const text = typeof messageContent?.text === "string" ? messageContent.text : ""
   if (!text) return false
 
@@ -1370,6 +1369,7 @@ app.get("/", (req,res)=>{
   const paramSimple = String(req.query?.simple || "").trim().toLowerCase()
   const _simpleToggle = String(process.env.SIMPLE_DASHBOARD || process.env.SERVE_SIMPLE_PAGE || "").trim().toLowerCase()
   const isSimple = [paramSimple, _simpleToggle].some(v => v === "1" || v === "true" || v === "yes")
+  console.log(`[Dashboard] Request for /, simple param: "${paramSimple}", env toggle: "${_simpleToggle}", isSimple: ${isSimple}`)
   if (isSimple) {
     console.log("Serving simple dashboard page (simple mode active). paramSimple=", paramSimple, "env=", _simpleToggle)
     res.send(`<!doctype html>
