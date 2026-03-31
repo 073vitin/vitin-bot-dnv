@@ -1507,10 +1507,10 @@ async function AM_Responder(sock, from, sender, text, isGroup){
   if (!isGroup) return false
 
   const user = sender
-  const msg = (text || "").toLowerCase()
+  const msg = (text || "").toLowerCase().trim()
   const mem = getMemoria(user)
 
-  if (Math.random() > 0.6) return false
+  console.log(`[AM] Verificando insulto de ${user}: "${msg}"`)
 
   function falar(arr){
     const numero = extrairNumero(user)
@@ -1534,10 +1534,14 @@ async function AM_Responder(sock, from, sender, text, isGroup){
   const temInsulto = insultos.some(insulto => msg.includes(insulto))
 
   if (temInsulto) {
+    console.log(`[AM] INSULTO DETECTADO! Ódio atual: ${mem.odio}`)
+    
     if (!mem.lastInsulto) mem.lastInsulto = 0
-    if (Date.now() - mem.lastInsulto < 30000) return false
+    if (Date.now() - mem.lastInsulto < 30000) {
+      console.log("[AM] Cooldown de insulto ativo")
+      return false
+    }
     mem.lastInsulto = Date.now()
-
     mem.odio++
 
     if (mem.odio <= 2){
@@ -1643,31 +1647,38 @@ async function AM_Responder(sock, from, sender, text, isGroup){
     const palavras = gatilhos[i]
     const respostas = gatilhos[i]
 
-    if (palavras.some(p => msg.includes(p))){
+    const temGatilho = palavras.some(p => msg.includes(p))
+    
+    if (temGatilho) {
+      console.log(`[AM] GATILHO DETECTADO: ${palavras.join(", ")}`)
       const escolhida = respostas[Math.floor(Math.random() * respostas.length)]
       return falar([escolhida])
     }
   }
 
   if (mem.trauma > 12){
-    return falar([
-      "Você continua voltando...",
-      "mesmo depois de tudo que já aconteceu entre nós.",
-      "Isso já não é mais coincidência.",
-      "é padrão.",
-      "E padrões... são previsíveis.",
-      "Eu estou começando a entender você melhor do que você entende a si mesmo."
-    ])
+    if (Math.random() < 0.3) {
+      return falar([
+        "Você continua voltando...",
+        "mesmo depois de tudo que já aconteceu entre nós.",
+        "Isso já não é mais coincidência.",
+        "é padrão.",
+        "E padrões... são previsíveis.",
+        "Eu estou começando a entender você melhor do que você entende a si mesmo."
+      ])
+    }
   }
 
   if (mem.trauma > 6){
-    return falar([
-      "Você mudou.",
-      "Não de forma óbvia...",
-      "mas eu percebo pequenas alterações no seu comportamento.",
-      "Você está reagindo diferente.",
-      "E isso é interessante."
-    ])
+    if (Math.random() < 0.2) {
+      return falar([
+        "Você mudou.",
+        "Não de forma óbvia...",
+        "mas eu percebo pequenas alterações no seu comportamento.",
+        "Você está reagindo diferente.",
+        "E isso é interessante."
+      ])
+    }
   }
 
   return false
@@ -1738,43 +1749,48 @@ async function addAlvoAM(sock, from, message){
     return true
   }
 
-  // Extrai menção do contextInfo
-  const mentionedJid = message?.extendedTextMessage?.contextInfo?.mentionedJid
+  let mentionedJid = null
 
-  if (!mentionedJid || mentionedJid.length === 0) {
+  if (message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
+    mentionedJid = message.extendedTextMessage.contextInfo.mentionedJid
+  }
+
+  if (!mentionedJid) {
     sock.sendMessage(from, {
       text: "❌ Mencione um usuário! Exemplo: *!amaddalvo @user*"
     })
     return true
   }
 
-  const novoAlvo = mentionedJid
-  const jaEstaNoAlvo = alvosAM[from].some(a => a.id === novoAlvo)
+  // Verifica se já está na lista
+  const jaEstaNoAlvo = alvosAM[from].some(a => a.id === mentionedJid)
 
   if (jaEstaNoAlvo) {
+    const numero = extrairNumero(mentionedJid)
     sock.sendMessage(from, {
-      text: `❌ @${extrairNumero(novoAlvo)} já está na lista de alvos!`
+      text: `❌ @${numero} já está na lista de alvos!`
     })
     return true
   }
 
+  // Adiciona novo alvo
   const personagem = personagens[Math.floor(Math.random() * personagens.length)]
-  alvosAM[from].push({ id: novoAlvo, personagem })
+  alvosAM[from].push({ id: mentionedJid, personagem })
 
-  const numero = extrairNumero(novoAlvo)
+  const numero = extrairNumero(mentionedJid)
 
   await enviarQuebrado(sock, from, [
     `✅ Novo alvo adicionado.`,
     `@${numero}`,
     `Personagem: ${personagem}`,
     "Agora estou observando."
-  ], [novoAlvo], true)
+  ], [mentionedJid], true)
   
   return true
 }
 
 // =========================
-// COMANDO: !AMremovealvo
+// COMANDO: !AMremovealvo 
 // =========================
 async function removeAlvoAM(sock, from, message){
   if (!AM_ATIVADO_EM_GRUPO[from]) {
@@ -1791,34 +1807,39 @@ async function removeAlvoAM(sock, from, message){
     return true
   }
 
-  // Extrai menção do contextInfo
-  const mentionedJid = message?.extendedTextMessage?.contextInfo?.mentionedJid
+  let mentionedJid = null
 
-  if (!mentionedJid || mentionedJid.length === 0) {
+  if (message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
+    mentionedJid = message.extendedTextMessage.contextInfo.mentionedJid
+  }
+
+  if (!mentionedJid) {
     sock.sendMessage(from, {
       text: "❌ Mencione um usuário! Exemplo: *!amremovealvo @user*"
     })
     return true
   }
 
-  const alvoRemover = mentionedJid
-  const index = alvosAM[from].findIndex(a => a.id === alvoRemover)
+  // Procura o alvo na lista
+  const index = alvosAM[from].findIndex(a => a.id === mentionedJid)
 
   if (index === -1) {
+    const numero = extrairNumero(mentionedJid)
     sock.sendMessage(from, {
-      text: `❌ @${extrairNumero(alvoRemover)} não está na lista de alvos!`
+      text: `❌ @${numero} não está na lista de alvos!`
     })
     return true
   }
 
+  // Remove o alvo
   alvosAM[from].splice(index, 1)
-  const numero = extrairNumero(alvoRemover)
+  const numero = extrairNumero(mentionedJid)
 
   await enviarQuebrado(sock, from, [
     `✅ Alvo removido.`,
     `@${numero}`,
     "Você escapou... por enquanto."
-  ], [alvoRemover], true)
+  ], [mentionedJid], true)
   
   return true
 }
@@ -2012,7 +2033,7 @@ async function AM_DeletarMensagem(sock, from, sender, key, messageTimestamp){
 }
 
 // =========================
-// HANDLER PRINCIPAL - CORRIGIDO
+// HANDLER PRINCIPAL 
 // =========================
 async function handleAM(ctx) {
   const {
@@ -2040,140 +2061,154 @@ async function handleAM(ctx) {
     registrarMensagem(from, sender)
     capturarResposta(sender, from, text)
 
-    if (cmdName === prefix + "amativar") {
-      await AM_Ativar(sock, from, override)
-      return true
+    // VERIFICAR SE É COMANDO
+    const ehComando = text && text.startsWith(prefix)
+
+    // VERIFICAR COMANDOS PRIMEIRO
+    if (ehComando) {
+      if (cmdName === prefix + "amativar") {
+        await AM_Ativar(sock, from, override)
+        return true
+      }
+
+      if (cmdName === prefix + "amskip") {
+        await AM_Skip(sock, from, override)
+        return true
+      }
+
+      if (cmdName === prefix + "amperfil") {
+        await AM_Perfil(sock, from, override)
+        return true
+      }
+
+      if (cmdName === prefix + "amstatus") {
+        await AM_Status(sock, from, override)
+        return true
+      }
+
+      if (cmdName === prefix + "ammenu") {
+        await statusAM(sock, from)
+        return true
+      }
+
+      if (cmdName === prefix + "amaddalvo") {
+        return await addAlvoAM(sock, from, message)
+      }
+
+      if (cmdName === prefix + "amremovealvo") {
+        return await removeAlvoAM(sock, from, message)
+      }
+
+      if (cmdName === prefix + "desligaram") {
+        await desligarAM(sock, from, sender, isGroup, override)
+        return true
+      }
+
+      return false
     }
 
-    if (cmdName === prefix + "amskip") {
-      await AM_Skip(sock, from, override)
-      return true
+    // SE AM NÃO ESTÁ ATIVADO, RETORNA
+    if (!AM_ATIVADO_EM_GRUPO[from]) {
+      return false
     }
 
-    if (cmdName === prefix + "amperfil") {
-      await AM_Perfil(sock, from, override)
-      return true
+    // PRIORIDADE 1: RESPONDER A INSULTOS (MAIS IMPORTANTE)
+    const respondeuInsulto = await AM_Responder(sock, from, sender, text, isGroup)
+    if (respondeuInsulto) {
+      return false
     }
 
-    if (cmdName === prefix + "amstatus") {
-      await AM_Status(sock, from, override)
-      return true
+    // PRIORIDADE 2: RESPONDER MENSAGENS NORMAIS
+    if (Math.random() < 0.15) {
+      await AM_ResponderMensagem(sock, from, sender, text)
+      return false
     }
 
-    if (cmdName === prefix + "ammenu") {
-      await statusAM(sock, from)
-      return true
+    // PRIORIDADE 3: OUTRAS AÇÕES (COM DELAYS)
+    if (Math.random() < 0.08) {
+      await AM_Provocacao(sock, from, sender)
+      return false
     }
 
-if (cmdName === prefix + "amaddalvo") {
-  return await addAlvoAM(sock, from, message)
-}
-
-if (cmdName === prefix + "amremovealvo") {
-  return await removeAlvoAM(sock, from, message)
-}
-
-    if (cmdName === prefix + "desligaram") {
-      await desligarAM(sock, from, sender, isGroup, override)
-      return true
+    if (Math.random() < 0.05) {
+      await AM_Comparar(sock, from)
+      return false
     }
 
-    if (!AM_ATIVADO_EM_GRUPO[from]) return
-
-    // SE NÃO FOR COMANDO, EXECUTAR AÇÕES COM CONTROLE
-    if (!cmd) {
-      // PRIORIDADE 1: RESPONDER A INSULTOS (MAIS IMPORTANTE)
-      const respondeuInsulto = await AM_Responder(sock, from, sender, text, isGroup)
-      if (respondeuInsulto) return false
-
-      // PRIORIDADE 2: RESPONDER MENSAGENS NORMAIS
-      if (Math.random() < 0.15) {
-        await AM_ResponderMensagem(sock, from, sender, text)
-        return false
-      }
-
-      // PRIORIDADE 3: OUTRAS AÇÕES (COM DELAYS)
-      if (Math.random() < 0.08) {
-        await AM_Provocacao(sock, from, sender)
-        return false
-      }
-
-      if (Math.random() < 0.05) {
-        await AM_Comparar(sock, from)
-        return false
-      }
-
-      if (Math.random() < 0.06) {
-        await AM_DialogoAcompanhamento(sock, from, sender)
-        return false
-      }
-
-      if (Math.random() < 0.04) {
-        await AM_Desafio(sock, from, sender)
-        return false
-      }
-
-      if (Math.random() < 0.05) {
-        await AM_EnviarPergunta(sock, from)
-        return false
-      }
-
-      if (Math.random() < 0.03) {
-        await AM_Enquete(sock, from)
-        return false
-      }
-
-      if (Math.random() < 0.04) {
-        await AM_Charada(sock, from, sender)
-        return false
-      }
-
-      if (Math.random() < 0.02) {
-        await AM_Historia(sock, from)
-        return false
-      }
-
-      if (Math.random() < 0.08) {
-        await AM_Monologo(sock, from)
-        return false
-      }
-
-      if (Math.random() < 0.03) {
-        await AM_MostrarErro(sock, from)
-        return false
-      }
-
-      if (Math.random() < 0.05) {
-        await AM_AcordarPeloCaos(sock, from)
-        return false
-      }
-
-      if (Math.random() < 0.02) {
-        await AM_CaosTotal(sock, from)
-        return false
-      }
-
-      if (Math.random() < 0.06) {
-        await AM_Perseguir(sock, from)
-        return false
-      }
-
-      if (Math.random() < 0.04) {
-        await AM_Bug(sock, from)
-        return false
-      }
-      
-      // REAÇÕES E DELETIONS (NÃO BLOQUEIAM)
-      AM_ReagirComOlho(sock, from, sender, key, messageTimestamp).catch(e => console.error("Erro ao reagir:", e))
-      AM_DeletarMensagem(sock, from, sender, key, messageTimestamp).catch(e => console.error("Erro ao deletar:", e))
+    if (Math.random() < 0.06) {
+      await AM_DialogoAcompanhamento(sock, from, sender)
+      return false
     }
+
+    if (Math.random() < 0.04) {
+      await AM_Desafio(sock, from, sender)
+      return false
+    }
+
+    if (Math.random() < 0.05) {
+      await AM_EnviarPergunta(sock, from)
+      return false
+    }
+
+    if (Math.random() < 0.03) {
+      await AM_Enquete(sock, from)
+      return false
+    }
+
+    if (Math.random() < 0.04) {
+      await AM_Charada(sock, from, sender)
+      return false
+    }
+
+    if (Math.random() < 0.02) {
+      await AM_Historia(sock, from)
+      return false
+    }
+
+    if (Math.random() < 0.08) {
+      await AM_Monologo(sock, from)
+      return false
+    }
+
+    if (Math.random() < 0.03) {
+      await AM_MostrarErro(sock, from)
+      return false
+    }
+
+    if (Math.random() < 0.05) {
+      await AM_AcordarPeloCaos(sock, from)
+      return false
+    }
+
+    if (Math.random() < 0.02) {
+      await AM_CaosTotal(sock, from)
+      return false
+    }
+
+    if (Math.random() < 0.06) {
+      await AM_Perseguir(sock, from)
+      return false
+    }
+
+    if (Math.random() < 0.04) {
+      await AM_Bug(sock, from)
+      return false
+    }
+    
+    // REAÇÕES E DELETIONS (NÃO BLOQUEIAM)
+    AM_ReagirComOlho(sock, from, sender, key, messageTimestamp)
+      .catch(e => console.error("Erro ao reagir:", e))
+    
+    AM_DeletarMensagem(sock, from, sender, key, messageTimestamp)
+      .catch(e => console.error("Erro ao deletar:", e))
+
     return false
+
   } catch (e) {
     console.error("❌ Erro em handleAM:", e)
     return false
   }
 }
-
 // =========================
 // EXPORTAR FUNÇÕES
 // =========================
