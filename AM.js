@@ -1974,7 +1974,6 @@ module.exports = {
   AM_Perseguir,
   evoluirAM,
   AM_Responder,
-  ativarAM,
   statusAM,
   addAlvoAM,
   removeAlvoAM,
