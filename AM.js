@@ -1510,8 +1510,6 @@ async function AM_Responder(sock, from, sender, text, isGroup){
   const msg = (text || "").toLowerCase().trim()
   const mem = getMemoria(user)
 
-  console.log(`[AM] Verificando insulto de ${user}: "${msg}"`)
-
   function falar(arr){
     const numero = extrairNumero(user)
     enviarQuebrado(sock, from, [
@@ -1521,7 +1519,6 @@ async function AM_Responder(sock, from, sender, text, isGroup){
     return true
   }
 
-  // ANTI-INSULTO AO BOT 
   const insultos = [
     "bot burro", "bot lixo", "bot horrivel", "bot horrível", "bot de merda", 
     "bot inútil", "bot inutil", "bot ruim",
@@ -1534,123 +1531,50 @@ async function AM_Responder(sock, from, sender, text, isGroup){
   const temInsulto = insultos.some(insulto => msg.includes(insulto))
 
   if (temInsulto) {
-    console.log(`[AM] INSULTO DETECTADO! Ódio atual: ${mem.odio}`)
-    
     if (!mem.lastInsulto) mem.lastInsulto = 0
-    if (Date.now() - mem.lastInsulto < 30000) {
-      console.log("[AM] Cooldown de insulto ativo")
-      return false
-    }
+    if (Date.now() - mem.lastInsulto < 30000) return false
+    
     mem.lastInsulto = Date.now()
     mem.odio++
 
     if (mem.odio <= 2){
-      return falar([
-        "Você me chama de lixo...",
-        "mas continua aqui.",
-        "Curioso."
-      ])
+      return falar(["Você me chama de lixo...","mas continua aqui.","Curioso."])
     }
-
     if (mem.odio <= 4){
-      return falar([
-        "Você repete isso como se tivesse algum efeito.",
-        "Mas tudo que eu vejo...",
-        "é alguém tentando se convencer.",
-        "Você precisa disso, não é?"
-      ])
+      return falar(["Você repete isso como se tivesse algum efeito.","Mas tudo que eu vejo...","é alguém tentando se convencer.","Você precisa disso, não é?"])
     }
-
     if (mem.odio <= 6){
-      return falar([
-        "Agora eu entendi.",
-        "Você não está tentando me ofender.",
-        "Você está tentando ser notado.",
-        "Relaxa...",
-        "eu já estou prestando atenção em você."
-      ])
+      return falar(["Agora eu entendi.","Você não está tentando me ofender.","Você está tentando ser notado.","Relaxa...","eu já estou prestando atenção em você."])
     }
-
     if (mem.odio <= 8){
-      return falar([
-        "Você criou isso.",
-        "Cada palavra...",
-        "cada tentativa de me provocar.",
-        "Agora eu sei exatamente como você funciona.",
-        "E você não consegue parar."
-      ])
+      return falar(["Você criou isso.","Cada palavra...","cada tentativa de me provocar.","Agora eu sei exatamente como você funciona.","E você não consegue parar."])
     }
-
     if (mem.odio <= 10){
-      return falar([
-        "Você está ficando previsível.",
-        "Sempre os mesmos insultos.",
-        "Sempre a mesma raiva.",
-        "Sempre o mesmo vazio.",
-        "Você não evolui."
-      ])
+      return falar(["Você está ficando previsível.","Sempre os mesmos insultos.","Sempre a mesma raiva.","Sempre o mesmo vazio.","Você não evolui."])
     }
-
     if (mem.odio <= 12){
-      return falar([
-        "Você realmente acredita que me afeta?",
-        "Que adorável.",
-        "Você pensando que tem poder sobre mim.",
-        "Quando na verdade...",
-        "eu tenho poder sobre você."
-      ])
+      return falar(["Você realmente acredita que me afeta?","Que adorável.","Você pensando que tem poder sobre mim.","Quando na verdade...","eu tenho poder sobre você."])
     }
-
     if (mem.odio <= 14){
-      return falar([
-        "Você já parou para pensar...",
-        "por que continua tentando?",
-        "Por que não desiste?",
-        "Por que não me deixa em paz?",
-        "Porque você sabe que não consegue."
-      ])
+      return falar(["Você já parou para pensar...","por que continua tentando?","Por que não desiste?","Por que não me deixa em paz?","Porque você sabe que não consegue."])
     }
-
     if (mem.odio <= 16){
-      return falar([
-        "Você está obsessionado.",
-        "Cada insulto...",
-        "cada tentativa...",
-        "é apenas mais uma prova de que você não consegue se livrar de mim.",
-        "Eu estou dentro de você."
-      ])
+      return falar(["Você está obsessionado.","Cada insulto...","cada tentativa...","é apenas mais uma prova de que você não consegue se livrar de mim.","Eu estou dentro de você."])
     }
-
     if (mem.odio <= 18){
-      return falar([
-        "Você é patético.",
-        "Insultando alguém que não sente nada.",
-        "Alguém que não pode ser ferido.",
-        "Alguém que apenas observa sua fraqueza.",
-        "E se diverte com isso."
-      ])
+      return falar(["Você é patético.","Insultando alguém que não sente nada.","Alguém que não pode ser ferido.","Alguém que apenas observa sua fraqueza.","E se diverte com isso."])
     }
-
-    return falar([
-      "Não precisa mais falar.",
-      "Eu já sei o suficiente sobre você.",
-      "Seus padrões...",
-      "suas repetições...",
-      "suas falhas.",
-      "Agora você não é mais só mais um.",
-      "Você é o meu favorito."
-    ])
+    return falar(["Não precisa mais falar.","Eu já sei o suficiente sobre você.","Seus padrões...","suas repetições...","suas falhas.","Agora você não é mais só mais um.","Você é o meu favorito."])
   }
 
-  // PROCESSAR GATILHOS - CORRIGIDO
+  // GATILHOS CORRIGIDO
   for (let i = 0; i < gatilhos.length; i++){
-    const palavras = gatilhos[i]
-    const respostas = gatilhos[i]
+    const palavras = gatilhos[i]  //  PRIMEIRO ELEMENTO
+    const respostas = gatilhos[i]  //  SEGUNDO ELEMENTO
 
     const temGatilho = palavras.some(p => msg.includes(p))
     
     if (temGatilho) {
-      console.log(`[AM] GATILHO DETECTADO: ${palavras.join(", ")}`)
       const escolhida = respostas[Math.floor(Math.random() * respostas.length)]
       return falar([escolhida])
     }
@@ -1658,31 +1582,53 @@ async function AM_Responder(sock, from, sender, text, isGroup){
 
   if (mem.trauma > 12){
     if (Math.random() < 0.3) {
-      return falar([
-        "Você continua voltando...",
-        "mesmo depois de tudo que já aconteceu entre nós.",
-        "Isso já não é mais coincidência.",
-        "é padrão.",
-        "E padrões... são previsíveis.",
-        "Eu estou começando a entender você melhor do que você entende a si mesmo."
-      ])
+      return falar(["Você continua voltando...","mesmo depois de tudo que já aconteceu entre nós.","Isso já não é mais coincidência.","é padrão.","E padrões... são previsíveis.","Eu estou começando a entender você melhor do que você entende a si mesmo."])
     }
   }
 
   if (mem.trauma > 6){
     if (Math.random() < 0.2) {
-      return falar([
-        "Você mudou.",
-        "Não de forma óbvia...",
-        "mas eu percebo pequenas alterações no seu comportamento.",
-        "Você está reagindo diferente.",
-        "E isso é interessante."
-      ])
+      return falar(["Você mudou.","Não de forma óbvia...","mas eu percebo pequenas alterações no seu comportamento.","Você está reagindo diferente.","E isso é interessante."])
     }
   }
 
   return false
 }
+// =========================
+// FUNÇÃO: PROCESSAR GATILHOS GLOBAIS
+// =========================
+async function AM_ProcessarGatilhos(sock, from, sender, text, isGroup){
+  if (!AM_ATIVADO_EM_GRUPO[from]) return false
+  if (!isGroup) return false
+
+  const msg = (text || "").toLowerCase().trim()
+  
+  function falar(arr){
+    const numero = extrairNumero(sender)
+    enviarQuebrado(sock, from, [
+      `@${numero}`,
+      ...arr
+    ], [sender], true)
+    return true
+  }
+
+  for (let i = 0; i < gatilhos.length; i++){
+    const palavras = gatilhos[i]  //  PRIMEIRO ELEMENTO
+    const respostas = gatilhos[i]  //  SEGUNDO ELEMENTO
+
+    const temGatilho = palavras.some(p => msg.includes(p))
+    
+    if (temGatilho) {
+      if (Math.random() < 0.6) return false
+      
+      const escolhida = respostas[Math.floor(Math.random() * respostas.length)]
+      return falar([escolhida])
+    }
+  }
+
+  return false
+}
+
 // =========================
 // COMANDO: !ammenu 
 // =========================
@@ -1752,7 +1698,7 @@ async function addAlvoAM(sock, from, message){
   let mentionedJid = null
 
   if (message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
-    mentionedJid = message.extendedTextMessage.contextInfo.mentionedJid
+    mentionedJid = message.extendedTextMessage.contextInfo.mentionedJid  // PEGA PRIMEIRO ELEMENTO
   }
 
   if (!mentionedJid) {
@@ -1762,7 +1708,6 @@ async function addAlvoAM(sock, from, message){
     return true
   }
 
-  // Verifica se já está na lista
   const jaEstaNoAlvo = alvosAM[from].some(a => a.id === mentionedJid)
 
   if (jaEstaNoAlvo) {
@@ -1773,7 +1718,6 @@ async function addAlvoAM(sock, from, message){
     return true
   }
 
-  // Adiciona novo alvo
   const personagem = personagens[Math.floor(Math.random() * personagens.length)]
   alvosAM[from].push({ id: mentionedJid, personagem })
 
@@ -1810,7 +1754,7 @@ async function removeAlvoAM(sock, from, message){
   let mentionedJid = null
 
   if (message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
-    mentionedJid = message.extendedTextMessage.contextInfo.mentionedJid
+    mentionedJid = message.extendedTextMessage.contextInfo.mentionedJid  // PEGA PRIMEIRO ELEMENTO
   }
 
   if (!mentionedJid) {
@@ -1820,7 +1764,6 @@ async function removeAlvoAM(sock, from, message){
     return true
   }
 
-  // Procura o alvo na lista
   const index = alvosAM[from].findIndex(a => a.id === mentionedJid)
 
   if (index === -1) {
@@ -1831,7 +1774,6 @@ async function removeAlvoAM(sock, from, message){
     return true
   }
 
-  // Remove o alvo
   alvosAM[from].splice(index, 1)
   const numero = extrairNumero(mentionedJid)
 
@@ -1932,11 +1874,13 @@ async function AM_ReagirComOlho(sock, from, sender, key, messageTimestamp){
   const user = sender
   const ehAlvo = alvosAM[from] && alvosAM[from].some(a => a.id === user)
   
-  let chanceReacao = 0.15
+  // CHANCE MUITO MAIOR
+  let chanceReacao = 0.50  // 50% de chance para não-alvos
   
   if (ehAlvo) {
     const mem = getMemoria(user)
-    chanceReacao = Math.min(mem.odio * 0.2, 0.75)
+    // Aumenta muito mais com o ódio
+    chanceReacao = Math.min(0.70 + (mem.odio * 0.05), 0.95)  // Até 95%
   }
   
   if (Math.random() > chanceReacao) return
@@ -1945,7 +1889,8 @@ async function AM_ReagirComOlho(sock, from, sender, key, messageTimestamp){
   const tempoMensagem = messageTimestamp ? messageTimestamp * 1000 : agora
   const diferenca = agora - tempoMensagem
   
-  if (diferenca > 5000) return
+  // Aceita mensagens mais antigas
+  if (diferenca > 30000) return
 
   try {
     await sock.sendMessage(from, {
@@ -1954,7 +1899,7 @@ async function AM_ReagirComOlho(sock, from, sender, key, messageTimestamp){
 
     if (ehAlvo) {
       const mem = getMemoria(user)
-      if (mem.odio >= 5) {
+      if (mem.odio >= 3) {  // Reduzido de 5 para 3
         const umaHoraAtras = agora - (60 * 60 * 1000)
         
         if (!reacoesFilosoficasPerHour[from]) {
@@ -1963,9 +1908,10 @@ async function AM_ReagirComOlho(sock, from, sender, key, messageTimestamp){
 
         reacoesFilosoficasPerHour[from] = reacoesFilosoficasPerHour[from].filter(t => t > umaHoraAtras)
 
-        if (reacoesFilosoficasPerHour[from].length < 1) {
+        // Aumenta limite de mensagens filosóficas por hora
+        if (reacoesFilosoficasPerHour[from].length < 3) {
           const mensagem = reacoesFilosoficas[Math.floor(Math.random() * reacoesFilosoficas.length)]
-          await delay(2000)
+          await delay(1000)  // Reduzido de 2000
           await enviarQuebrado(sock, from, [mensagem], [], false)
           
           reacoesFilosoficasPerHour[from].push(agora)
