@@ -1303,11 +1303,6 @@ async function handleAM(ctx) {
     isOverride: isOverrideSender,
   } = ctx
   try {
-    // Se AM não está ativo, não faz nada
-    if (!AM_ATIVADO_EM_GRUPO[from]) {
-      console.log("am ativo = ", AM_ATIVADO_EM_GRUPO)
-      return false
-    }
 
     // Registra a mensagem
     registrarMensagem(from, sender)
