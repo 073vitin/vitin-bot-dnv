@@ -244,6 +244,7 @@ async function handleUtilityCommands(ctx) {
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 ❓ AJUDA 〕━━━╮
+│ ${prefix}guia - te envia um simples guia da economia
 │ ${prefix}ajuda <comando> - explica comando
 │ ${prefix}pergunta - enviar pergunta aos desenvolvedores.
 ╰━━━━━━━━━━━━━━━━━━━━╯

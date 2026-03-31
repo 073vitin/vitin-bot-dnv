@@ -327,9 +327,9 @@ const COMMAND_HELP = {
     name: "Cupons de Coins",
     aliases: ["cupom"],
     description: "[Admin] Cria cupons de coins para os usuários resgatarem",
-    usage: "!cupom criar <codigo> <moedas>",
+    usage: "!cupom <criar|resgatar|remove> <codigo> <moedas>",
     commonUsage: [
-      "!cupom crear PROMOCAO100 100 - Criar cupom PROMOCAO100 com 100 coins",
+      "!cupom crar PROMOCAO100 100 - Criar cupom PROMOCAO100 com 100 coins",
     ],
     details: "Cada usuário resgate cada cupom uma vez. Admin only.",
   },

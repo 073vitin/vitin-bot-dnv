@@ -2264,6 +2264,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
   │ ${prefix}economia extras
   │
   │ Atalhos úteis:
+  │ ${prefix}guia - te envia um guia da economia no PV
   │ ${prefix}loja | ${prefix}comprar <item|id> *<quantidade>
   │ ${prefix}comprarpara @user <item> *<quantidade>
   │ ${prefix}vender <item> *<quantidade>

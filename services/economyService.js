@@ -1873,16 +1873,16 @@ function consumeShield(userId) {
   const weekKey = getWeekKey()
   if (getItemQuantity(userId, "espelhoDeLuz") > 0 && user.buffs.espelhoDeLuzWeekKey !== weekKey) {
     user.buffs.espelhoDeLuzWeekKey = weekKey
-    touchUser(user)
-    saveEconomy()
+    // Count buff-based shield usage for quest/stat progression
+    incrementStat(userId, "shieldsUsed", 1)
     return true
   }
 
   const dayKey = getDayKey()
   if (getItemQuantity(userId, "coracaoOssificado") > 0 && user.buffs.coracaoOssificadoDayKey !== dayKey) {
     user.buffs.coracaoOssificadoDayKey = dayKey
-    touchUser(user)
-    saveEconomy()
+    // Count buff-based shield usage for quest/stat progression
+    incrementStat(userId, "shieldsUsed", 1)
     return true
   }
 

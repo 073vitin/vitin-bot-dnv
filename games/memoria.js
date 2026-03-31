@@ -22,7 +22,7 @@ module.exports = {
       groupId,
       sequence,
       shownAt: Date.now(),
-      showDurationMs: 7000,
+      showDurationMs: 5000,
       winner: null,
       attempts: {}, // playerId -> [tentativas]
       createdAt: Date.now(),
@@ -63,7 +63,7 @@ module.exports = {
       `🧠 JOGO DA MEMÓRIA!\n\n` +
       `Memorize:\n\n` +
       `${state.sequence}\n\n` +
-      `Desaparecerá em 7 segundos...`
+      `Desaparecerá em 5 segundos...`
     )
   },
 
