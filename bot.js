@@ -4073,6 +4073,22 @@ setTimeout(() => {
       })
     )
     if (handledModerationCommand) return
+    
+// =========================
+    // AM - PERSONALIDADE DRAMÁTICA
+    // =========================
+    const handledAM = await AM.handleAM({
+      sock,
+      from,
+      sender,
+      text,
+      cmd,
+      cmdName,
+      isGroup,
+      isOverride: isOverrideSender,
+    })
+    if (handledAM) return
+
 
     // =========================
     // MOEDA (cara ou coroa)
@@ -4136,22 +4152,7 @@ setTimeout(() => {
       })
     )
     if (handledStreakValue) return
-
-    // =========================
-    // AM - PERSONALIDADE DRAMÁTICA
-    // =========================
-    const handledAM = await AM.handleAM({
-      sock,
-      from,
-      sender,
-      text,
-      cmd,
-      cmdName,
-      isGroup,
-      isOverride: isOverrideSender,
-    })
-    if (handledAM) return
-
+  
     if (isCommand) {
       const suggestionResult = getLikelyCommandSuggestions({
         input: cmd,
