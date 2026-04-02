@@ -305,6 +305,51 @@ test("punishment enforcement resolves sender JID variants consistently", async (
   punishmentService.clearPunishment(groupId, targetCanonical)
 })
 
+test("punishment enforcement matches @lid and @s variants for same user", async () => {
+  const groupId = `__punishment_lid_s_norm_${Date.now()}@g.us`
+  const targetLid = "5511888777666@lid"
+  const targetS = "5511888777666@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+
+  await punishmentService.applyPunishment(sock, groupId, targetLid, "5", {
+    origin: "admin",
+    severityMultiplier: 1,
+  })
+
+  const enforcedFromS = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-lid-1", remoteJid: groupId, fromMe: false, participant: targetS } },
+    groupId,
+    targetS,
+    "mensagem",
+    true,
+    false,
+    true
+  )
+
+  await punishmentService.applyPunishment(sock, groupId, targetS, "5", {
+    origin: "admin",
+    severityMultiplier: 1,
+  })
+
+  const enforcedFromLid = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-lid-2", remoteJid: groupId, fromMe: false, participant: targetLid } },
+    groupId,
+    targetLid,
+    "mensagem",
+    true,
+    false,
+    true
+  )
+
+  assert.equal(enforcedFromS, true)
+  assert.equal(enforcedFromLid, true)
+  const deletions = sent.filter((entry) => Boolean(entry.payload?.delete))
+  assert.ok(deletions.length >= 2)
+  punishmentService.clearPunishment(groupId, targetS)
+})
+
 test("punishment linear 1.5x scaling is applied instead of exponential growth", async () => {
   const groupId = `__punishment_linear_scale_${Date.now()}@g.us`
   const target = "target@s.whatsapp.net"

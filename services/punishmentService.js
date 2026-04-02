@@ -338,6 +338,48 @@ function normalizeUserId(value = "") {
   return lowered
 }
 
+function buildUserIdentityAliases(value = "") {
+  const normalized = normalizeUserId(value)
+  if (!normalized) return []
+
+  const aliases = new Set([normalized])
+  const userPart = normalized.includes("@") ? normalized.split("@")[0] : normalized
+  if (userPart) {
+    aliases.add(userPart)
+    aliases.add(`${userPart}@s.whatsapp.net`)
+    aliases.add(`${userPart}@lid`)
+  }
+
+  return Array.from(aliases).filter(Boolean)
+}
+
+function identitiesMatch(left = "", right = "") {
+  const leftAliases = new Set(buildUserIdentityAliases(left))
+  if (leftAliases.size === 0) return false
+  const rightAliases = buildUserIdentityAliases(right)
+  return rightAliases.some((alias) => leftAliases.has(alias))
+}
+
+function findMatchingUserKey(map = {}, userId = "") {
+  if (!map || typeof map !== "object") return ""
+  const normalized = normalizeUserId(userId)
+  if (normalized && Object.prototype.hasOwnProperty.call(map, normalized)) {
+    return normalized
+  }
+
+  const targetAliases = new Set(buildUserIdentityAliases(userId))
+  if (targetAliases.size === 0) return ""
+
+  for (const key of Object.keys(map)) {
+    const keyAliases = buildUserIdentityAliases(key)
+    if (keyAliases.some((alias) => targetAliases.has(alias))) {
+      return key
+    }
+  }
+
+  return ""
+}
+
 function clearPendingPunishment(groupId, playerId) {
   console.log("[punishment] clearPendingPunishment called", { groupId, playerId })
   const coinPunishmentPending = storage.getCoinPunishmentPending()
@@ -356,19 +398,29 @@ function clearPunishment(groupId, userId) {
   const normalizedUser = normalizeUserId(userId) || String(userId || "")
   console.log("[punishment] clearPunishment called", { groupId, userId, normalizedUser })
   const activePunishments = storage.getActivePunishments()
-  if (!activePunishments[groupId]?.[normalizedUser]) {
+  const groupPunishments = activePunishments[groupId]
+  const matchedKey = findMatchingUserKey(groupPunishments, normalizedUser)
+  if (!matchedKey) {
     console.log("[punishment] clearPunishment - no active punishment found", { groupId, normalizedUser })
     return
   }
-  console.log("[punishment] clearPunishment - found punishment to clear", { groupId, normalizedUser, punishment: activePunishments[groupId][normalizedUser] })
-  const timerId = activePunishments[groupId][normalizedUser]?.timerId
+  console.log("[punishment] clearPunishment - found punishment to clear", {
+    groupId,
+    normalizedUser,
+    matchedKey,
+    punishment: groupPunishments[matchedKey],
+  })
+  const timerId = groupPunishments[matchedKey]?.timerId
   if (timerId) {
     console.log("[punishment] clearPunishment - clearing timeout", { timerId })
     clearTimeout(timerId)
   }
-  delete activePunishments[groupId][normalizedUser]
+  delete groupPunishments[matchedKey]
+  if (Object.keys(groupPunishments).length === 0) {
+    delete activePunishments[groupId]
+  }
   storage.setActivePunishments(activePunishments)
-  console.log("[punishment] clearPunishment - cleared successfully", { groupId, normalizedUser })
+  console.log("[punishment] clearPunishment - cleared successfully", { groupId, normalizedUser, matchedKey })
 }
 
 async function applyPunishment(sock, groupId, userId, punishmentId, options = {}) {
@@ -411,7 +463,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     })
     return { blocked: true, reason: "invalid-id" }
   }
-  if (normalizedTarget && normalizedBot && normalizedTarget === normalizedBot) {
+  if (identitiesMatch(normalizedTarget, normalizedBot)) {
     console.log("[punishment] applyPunishment BLOCKED - bot cannot be punished", { reason: "bot-target" })
     telemetry.incrementCounter("punishment.blocked", 1, {
       origin,
@@ -464,6 +516,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
   const activePunishments = storage.getActivePunishments()
   if (!activePunishments[groupId]) activePunishments[groupId] = {}
   clearPunishment(groupId, targetUserId)
+  if (!activePunishments[groupId]) activePunishments[groupId] = {}
 
   const mentionTag = `@${targetUserId.split("@")[0]}`
   const now = Date.now()
@@ -720,13 +773,27 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
 
   const activePunishments = storage.getActivePunishments()
   console.log("[punishment] handlePunishmentEnforcement - loaded active punishments", { groupId: from, punishedUserCount: Object.keys(activePunishments[from] || {}).length })
-  const punishment = activePunishments[from]?.[senderId]
+  const groupPunishments = activePunishments[from] || {}
+  const matchedKey = findMatchingUserKey(groupPunishments, senderId)
+  const punishment = matchedKey ? groupPunishments[matchedKey] : null
   if (!punishment) {
     console.log("[punishment] handlePunishmentEnforcement - no active punishment for this user")
     return false
   }
 
-  console.log("[punishment] handlePunishmentEnforcement - found active punishment", { senderId, punishmentType: punishment.type, endsAt: punishment.endsAt })
+  if (matchedKey !== senderId && !groupPunishments[senderId]) {
+    // Lazy migration keeps future lookups consistent even if old keys were stored as @lid/@s variants.
+    groupPunishments[senderId] = punishment
+    delete groupPunishments[matchedKey]
+    storage.setActivePunishments(activePunishments)
+  }
+
+  console.log("[punishment] handlePunishmentEnforcement - found active punishment", {
+    senderId,
+    matchedKey,
+    punishmentType: punishment.type,
+    endsAt: punishment.endsAt,
+  })
   const now = Date.now()
   if (punishment.endsAt && now >= punishment.endsAt) {
     console.log("[punishment] handlePunishmentEnforcement - punishment expired", { senderId, endsAt: punishment.endsAt, now })
@@ -1002,6 +1069,12 @@ async function rehydrateActivePunishments(sock) {
         delete users[userIdRaw]
         changed = true
         continue
+      }
+
+      if (userId !== userIdRaw && !users[userId]) {
+        users[userId] = punishment
+        delete users[userIdRaw]
+        changed = true
       }
 
       if (punishment.timerId) {

@@ -1066,6 +1066,54 @@ telemetry.setIdentityResolvers({
   getKnownGroupName,
 })
 
+function normalizeIdentityForMatching(value = "") {
+  const raw = String(value || "").trim().toLowerCase()
+  if (!raw) return ""
+  const jidMatch = raw.match(/^([^@\s:]+)(?::\d+)?@([^@\s]+)$/)
+  if (jidMatch) {
+    return `${jidMatch[1]}@${jidMatch[2]}`
+  }
+  return raw
+}
+
+function getIdentityAliases(value = "") {
+  const normalized = normalizeIdentityForMatching(value)
+  if (!normalized) return []
+
+  const aliases = new Set([normalized])
+  const userPart = normalized.includes("@") ? normalized.split("@")[0] : normalized
+  if (userPart) {
+    aliases.add(userPart)
+    aliases.add(`${userPart}@s.whatsapp.net`)
+    aliases.add(`${userPart}@lid`)
+  }
+
+  return Array.from(aliases).filter(Boolean)
+}
+
+function buildIdentityAliasSet(value = "") {
+  return new Set(getIdentityAliases(value))
+}
+
+function hasIdentityAliasOverlap(aliasSet, value = "") {
+  if (!aliasSet || aliasSet.size === 0) return false
+  return getIdentityAliases(value).some((alias) => aliasSet.has(alias))
+}
+
+function findMatchingIdentityKeyInMap(map = {}, value = "") {
+  if (!map || typeof map !== "object") return ""
+  const aliasSet = buildIdentityAliasSet(value)
+  if (aliasSet.size === 0) return ""
+
+  for (const key of Object.keys(map)) {
+    if (hasIdentityAliasOverlap(aliasSet, key)) {
+      return key
+    }
+  }
+
+  return ""
+}
+
 function sanitizeInlineText(value = "", maxLen = 42) {
   const raw = String(value || "").replace(/[\r\n\t]+/g, " ").trim()
   if (!raw) return "-"
@@ -1986,6 +2034,11 @@ setTimeout(() => {
     const from = msg.key.remoteJid
     const senderRaw = msg.key.participant || msg.key.remoteJid
     const sender = jidNormalizedUser(senderRaw)
+    const senderIdentityAliasSet = new Set([
+      ...getIdentityAliases(senderRaw),
+      ...getIdentityAliases(sender),
+    ])
+    const botIdentityAliasSet = buildIdentityAliasSet(sock.user?.id || "")
     const senderRegistrationCandidates = [...new Set([
       senderRaw,
       msg?.key?.participantPn,
@@ -3183,11 +3236,10 @@ setTimeout(() => {
       const metadata = await sock.groupMetadata(from)
       const admins = (metadata?.participants || [])
         .filter((p) => p.admin)
-        .map((p) => jidNormalizedUser(p.id))
-      const botJid = jidNormalizedUser(sock.user?.id || "")
-      botIsAdmin = admins.includes(botJid)
+        .map((p) => String(p?.id || "").trim())
+      botIsAdmin = admins.some((adminId) => hasIdentityAliasOverlap(botIdentityAliasSet, adminId))
       const delegatedAdmin = storage.isDelegatedAdmin(from, sender)
-      senderIsNativeAdmin = delegatedAdmin || admins.includes(sender)
+      senderIsNativeAdmin = delegatedAdmin || admins.some((adminId) => hasIdentityAliasOverlap(senderIdentityAliasSet, adminId))
     }
     senderIsAdmin = senderIsNativeAdmin || isOverrideSender
 
@@ -3276,6 +3328,36 @@ setTimeout(() => {
     if (punishedMessageDeleted) {
       console.log("[bot] message was deleted by punishment enforcement")
       return
+    }
+
+    // =========================
+    // BLOQUEIO DE MENSAGENS DE USUÁRIOS MUTADOS
+    // =========================
+    {
+      const mutedUsers = storage.getMutedUsers()
+      const mutedUsersInGroup = mutedUsers[from] && typeof mutedUsers[from] === "object"
+        ? mutedUsers[from]
+        : {}
+      const mutedKey =
+        findMatchingIdentityKeyInMap(mutedUsersInGroup, senderRaw) ||
+        findMatchingIdentityKeyInMap(mutedUsersInGroup, sender)
+
+      if (
+        mutedKey &&
+        isGroup &&
+        !hasIdentityAliasOverlap(botIdentityAliasSet, sender) &&
+        !((senderIsAdmin || isOverrideSender) && isCommand)
+      ) {
+        if (!botIsAdmin) return
+        await measureStage("mutedDelete", async () => {
+          try {
+            await sock.sendMessage(from, { delete: msg.key })
+          } catch (e) {
+            console.error("Erro ao apagar mensagem de usuário mutado", e)
+          }
+        })
+        return
+      }
     }
 
     if (cmd === prefix + "resenha"){
@@ -4592,29 +4674,6 @@ setTimeout(() => {
     )
     if (handledCoinRound) return
 
-    // =========================
-    // BLOQUEIO DE MENSAGENS DE USUÁRIOS MUTADOS
-    // =========================
-    {
-      const mutedUsers = storage.getMutedUsers()
-      if (
-        mutedUsers[from]?.[sender] &&
-        isGroup &&
-        sender !== sock.user.id &&
-        !((senderIsAdmin || isOverrideSender) && isCommand)
-      ) {
-        if (!botIsAdmin) return
-        await measureStage("mutedDelete", async () => {
-          try{
-            await sock.sendMessage(from,{ delete: msg.key })
-          }catch(e){
-            console.error("Erro ao apagar mensagem de usuário mutado", e)
-          }
-        })
-        return
-      }
-    }
-      
     // =========================
     // BLACKJACK
     // =========================
