@@ -490,9 +490,6 @@ blackjack: {
     ],
     details: "Jogo de cartas com sistema de lobby. Máximo 4 jogadores por partida. Blackjack (21 com 2 cartas) fecha o lobby automaticamente com 10% de chance. Dealer para em 17+. Taxa do dealer: 10% (4 players), 7.5% (3 players), 5% (2 players). Empates dividem a bolada.",
   },
-
-  streak: {
-    name: "Streak",
   
   streakranking: {
     name: "Ranking de Streaks",
