@@ -69,6 +69,7 @@ ffmpeg.setFfmpegPath(ffmpegPath)
 const storage = require("./storage")
 const punishmentService = require("./services/punishmentService")
 const caraOuCoroa = require("./games/caraOuCoroa")
+const { handleBlackjack } = require('./games/blackjack');
 const AM = require("./AM")
 const gameManager = require("./gameManager")
 const adivinhacao = require("./games/adivinhacao")
@@ -88,7 +89,6 @@ const { handleGameCommands, handleGameMessageFlow } = require("./routers/gamesRo
 const { handleUtilityCommands } = require("./routers/utilityRouter")
 const { handleModerationCommands } = require("./routers/moderationRouter")
 const { handleEconomyCommands, cleanupUserLinkedState, parseTradeOffer, getTradeBracketForOffer } = require("./routers/economyRouter")
-const { handleBlackjack } = require('./handlers/blackjack');
 
 const app = express()
 const logger = pino({ level: "silent" })
