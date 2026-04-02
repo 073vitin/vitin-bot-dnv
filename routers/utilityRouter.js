@@ -2,11 +2,15 @@ const telemetry = require("../services/telemetryService")
 const { getCommandHelp, getPublicCommandNames } = require("../commandHelp")
 const os = require("os")
 const child_process = require("child_process")
+const { normalizeUserId } = require("../services/registrationService")
 
 const pendingPrivateFeedbackBySender = new Map()
 const pendingQuestionBySender = new Map()
 const pendingQuestionReplyBySender = new Map()
 const questionInboxById = new Map()
+const pendingEnqueteBySender = new Map()
+const pendingEnqueteReplyBySender = new Map()
+const enqueteInboxById = new Map()
 
 function generateQuestionId() {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -23,6 +27,14 @@ function allocateQuestionId() {
     questionId = generateQuestionId()
   }
   return questionId
+}
+
+function allocateEnqueteId() {
+  let enqueteId = generateQuestionId()
+  while (enqueteInboxById.has(enqueteId)) {
+    enqueteId = generateQuestionId()
+  }
+  return enqueteId
 }
 
 async function handleUtilityCommands(ctx) {
@@ -106,21 +118,32 @@ async function handleUtilityCommands(ctx) {
         { cmd: `${prefix}perfil stats`, usage: `${prefix}perfil stats`, effect: "estatisticas economicas", badges: ["GERAL"] },
         { cmd: `${prefix}xp`, usage: `${prefix}xp`, effect: "atalho para visualizar progressao de XP", badges: ["GERAL"] },
         { cmd: `${prefix}missao`, usage: `${prefix}missao | ${prefix}missao claim <Q1|Q2|Q3>`, effect: "missoes diarias", badges: ["GERAL"] },
+        { cmd: `${prefix}missaosemanal`, usage: `${prefix}missaosemanal | ${prefix}missaosemanal claim <W1|W2|W3|W4|W5>`, effect: "missoes semanais", badges: ["GERAL"] },
         { cmd: `${prefix}extrato`, usage: `${prefix}extrato [@usuario]`, effect: "ultimas transacoes", badges: ["GERAL"] },
+        { cmd: `${prefix}mentions`, aliases: [`${prefix}mention`], usage: `${prefix}mentions [on|off]`, effect: "controle de mencoes em rankings", badges: ["GERAL"] },
+        { cmd: `${prefix}apelido`, usage: `${prefix}apelido [novo_nome]`, effect: "define apelido publico", badges: ["GERAL"] },
         { cmd: `${prefix}coinsranking`, usage: `${prefix}coinsranking`, effect: "ranking de moedas", badges: ["GRUPO"] },
         { cmd: `${prefix}xpranking`, usage: `${prefix}xpranking`, effect: "ranking de XP", badges: ["GRUPO"] },
         { cmd: `${prefix}loja`, usage: `${prefix}loja`, effect: "catalogo da loja", badges: ["GERAL"] },
         { cmd: `${prefix}comprar`, usage: `${prefix}comprar <item|id> [qtd]`, effect: "compra item", badges: ["GERAL"] },
+        { cmd: `${prefix}comprarpara`, usage: `${prefix}comprarpara @usuario <item|id> [qtd]`, effect: "compra item para outro usuario", badges: ["GRUPO"] },
         { cmd: `${prefix}vender`, usage: `${prefix}vender <item> [qtd]`, effect: "vende item", badges: ["GERAL"] },
+        { cmd: `${prefix}usaritem`, usage: `${prefix}usaritem <item>`, effect: "usa item do inventario", badges: ["GERAL"] },
         { cmd: `${prefix}doarcoins`, usage: `${prefix}doarcoins @usuario [qtd]`, effect: "transfere moedas", badges: ["GRUPO"] },
         { cmd: `${prefix}doaritem`, usage: `${prefix}doaritem @usuario <item> [qtd]`, effect: "transfere item", badges: ["GRUPO"] },
+        { cmd: `${prefix}roubar`, usage: `${prefix}roubar @usuario`, effect: "tentativa de roubo com risco", badges: ["GRUPO"] },
         { cmd: `${prefix}daily`, usage: `${prefix}daily`, effect: "recompensa diaria", badges: ["GERAL"] },
         { cmd: `${prefix}carepackage`, usage: `${prefix}carepackage`, effect: "pacote de ajuda", badges: ["GERAL"] },
+        { cmd: `${prefix}trabalho`, usage: `${prefix}trabalho <ifood|capinar|lavagem|aposta|minerar|bitcoin>`, effect: "atividade de renda com cooldown", badges: ["GERAL"] },
         { cmd: `${prefix}cassino`, usage: `${prefix}cassino`, effect: "regras do cassino", badges: ["GERAL"] },
+        { cmd: `${prefix}lootbox`, usage: `${prefix}lootbox <qtd>`, effect: "abre lootboxes", badges: ["GERAL"] },
         { cmd: `${prefix}cupom`, usage: `${prefix}cupom criar|resgatar ...`, effect: "cupons por grupo", badges: ["GRUPO"] },
+        { cmd: `${prefix}usarcupom`, usage: `${prefix}usarcupom <codigo>`, effect: "resgata cupom por codigo", badges: ["GERAL"] },
         { cmd: `${prefix}deletarconta`, aliases: [`${prefix}deleteconta`], usage: `${prefix}deletarconta confirmar -> frase exata`, effect: "exclui sua conta em 2 etapas", badges: ["GERAL"] },
         { cmd: `${prefix}loteria entrar`, usage: `${prefix}loteria entrar`, effect: "entrar em loteria opt-in ativa", badges: ["GRUPO"] },
         { cmd: `${prefix}loteria fechar`, usage: `${prefix}loteria fechar`, effect: "fechar participações (override apenas para sortear)", badges: ["GRUPO", "OVERRIDE"] },
+        { cmd: `${prefix}timeranking`, usage: `${prefix}timeranking`, effect: "ranking de times por valor total", badges: ["GRUPO"] },
+        { cmd: `${prefix}usarpasse`, usage: `${prefix}usarpasse @usuario <tipo> [severidade]`, effect: "consome passe de punicao", badges: ["GRUPO"] },
         { cmd: `${prefix}listaitens`, usage: `${prefix}listaitens [filtro]`, effect: "lista itens disponíveis na loja/inventário", badges: ["GERAL"] },
       ],
       avancado: [
@@ -140,6 +163,7 @@ async function handleUtilityCommands(ctx) {
         { cmd: `${prefix}additem`, usage: `${prefix}additem [@usuario] <item> <qtd>`, effect: "adiciona item", badges: ["GRUPO", "OVERRIDE"] },
         { cmd: `${prefix}removeitem`, usage: `${prefix}removeitem [@usuario] <item> <qtd>`, effect: "remove item", badges: ["GRUPO", "OVERRIDE"] },
         { cmd: `${prefix}mudarapelido`, usage: `${prefix}mudarapelido @usuario <novo apelido>`, effect: "altera apelido publico de usuario", badges: ["GRUPO", "OVERRIDE"] },
+        { cmd: `${prefix}cooldowns`, usage: `${prefix}cooldowns [list] | ${prefix}cooldowns reset [@usuario] <all|daily,work,cestabasica,steal,moeda>`, effect: "lista/reseta cooldowns", badges: ["GRUPO", "OVERRIDE"] },
         { cmd: `${prefix}adm`, usage: `${prefix}adm`, effect: "menu admin", badges: ["GRUPO", "ADMIN"] },
         { cmd: `${prefix}admeconomia`, usage: `${prefix}admeconomia`, effect: "menu admin economia", badges: ["GRUPO", "OVERRIDE"] },
         { cmd: `${prefix}mute/unmute/ban`, usage: `${prefix}mute|unmute|ban @usuario`, effect: "modera usuario", badges: ["GRUPO", "ADMIN"] },
@@ -152,19 +176,23 @@ async function handleUtilityCommands(ctx) {
         { cmd: `${prefix}manutencao`, aliases: [`${prefix}manutenção`], usage: `${prefix}manutencao`, effect: "toggle de manutencao global por grupo de origem", badges: ["GRUPO", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}toggleover`, usage: `${prefix}toggleover`, effect: "liga/desliga checks de override", badges: ["DM", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}vaultkey`, usage: `${prefix}vaultkey`, effect: "senha para export de .data", badges: ["DM", "OVERRIDE", "OCULTO"] },
-        { cmd: `${prefix}msg`, usage: `${prefix}msg <aviso|update> <S|N>`, effect: "broadcast guiado", badges: ["OVERRIDE", "OCULTO"] },
+        { cmd: `${prefix}msg`, usage: `${prefix}msg <aviso|update> <N|T|A>`, effect: "broadcast guiado", badges: ["OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}toggleoverride`, usage: `${prefix}toggleoverride [indice]`, effect: "liga/desliga perfil override", badges: ["DM", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}overrideadd`, usage: `${prefix}overrideadd <perfil>`, effect: "fluxo de JIDs para perfil", badges: ["DM", "HARDCODED", "OCULTO"] },
         { cmd: `${prefix}addoverride`, usage: `${prefix}addoverride @usuario`, effect: "adicao rapida ao perfil manual", badges: ["DM", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}removeoverride`, usage: `${prefix}removeoverride @usuario`, effect: "remove de perfis override", badges: ["DM", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}overridelist`, usage: `${prefix}overridelist`, effect: "status dos perfis/grupos", badges: ["DM", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}overridegroup`, usage: `${prefix}overridegroup <perfil> <add|rm|list> [groupJid]`, effect: "mapeia grupos por perfil", badges: ["DM", "OVERRIDE", "OCULTO"] },
-        { cmd: `${prefix}whois`, usage: `${prefix}whois <apelido>`, effect: "resolve numero pelo apelido", badges: ["DM", "OVERRIDE", "OCULTO"] },
+        { cmd: `${prefix}overridegrupos`, usage: `${prefix}overridegrupos`, effect: "lista grupos conhecidos para override", badges: ["GRUPO", "OVERRIDE", "OCULTO"] },
+        { cmd: `${prefix}whois`, usage: `${prefix}whois <apelido>`, effect: "retorna numero e grupos em comum com o bot", badges: ["DM", "OVERRIDE", "OCULTO"] },
+        { cmd: `${prefix}find`, usage: `${prefix}find <numero>`, effect: "verifica se um numero esta no grupo atual", badges: ["GRUPO", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}jidsgrupo`, usage: `${prefix}jidsgrupo @user1 @user2`, effect: "envia JIDs normalizados no DM", badges: ["GRUPO", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}wipeeconomia`, aliases: [`${prefix}wipeeconomy`], usage: `${prefix}wipeeconomia`, effect: "wipe interativo total/perfis", badges: ["DM", "HARDCODED", "OCULTO"] },
         { cmd: `${prefix}nuke`, usage: `${prefix}nuke`, effect: "limpa punicoes do proprio override", badges: ["GRUPO", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}overridetest`, usage: `${prefix}overridetest`, effect: "teste de punicoes no proprio remetente", badges: ["GRUPO", "OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}criarcupom`, usage: `${prefix}criarcupom @usuario <1-100>`, effect: "gera cupom de desconto para usuario", badges: ["OVERRIDE", "OCULTO"] },
+        { cmd: `${prefix}enquete`, usage: `${prefix}enquete <titulo> <S|N>`, effect: "enquete guiada (S=DM registrados | N=grupos registrados)", badges: ["OVERRIDE", "OCULTO"] },
+        { cmd: `${prefix}enquete <ID> responder`, usage: `${prefix}enquete <ID> responder`, effect: "responde a uma enquete", badges: ["GRUPO", "DM"] },
       ],
     }
 
@@ -227,12 +255,28 @@ async function handleUtilityCommands(ctx) {
     quoted?.imageMessage ||
     quoted?.videoMessage
 
+  if (isCommand) {
+    console.log("[router:utility] incoming", {
+      command: cmd,
+      groupId: from,
+      sender,
+      isGroup,
+    })
+  }
+
   function trackUtility(command, status, meta = {}) {
     telemetry.incrementCounter("router.utility.command", 1, {
       command,
       status,
     })
     telemetry.appendEvent("router.utility.command", {
+      command,
+      status,
+      groupId: from,
+      sender,
+      ...meta,
+    })
+    console.log("[router:utility]", {
       command,
       status,
       groupId: from,
@@ -504,7 +548,7 @@ De: @${senderLabel}
 
 ${questionText}
 
-Responder fluxo:
+Fluxo de Resposta:
 1) ${prefix}pergunta ${questionId}
 2) Enviar a resposta na mensagem seguinte`,
       mentions: [sender],
@@ -520,6 +564,234 @@ Quando houver resposta, eu envio para voce no privado.`,
       mode: "question",
       questionId,
       questionLength: questionText.length,
+    })
+    return true
+  }
+
+  if (cmd === prefix + "enquete" || cmd.startsWith(prefix + "enquete ")) {
+    if (!isOverrideSender && !isKnownOverrideSender) {
+      trackUtility("enquete", "rejected", { reason: "not-override" })
+      return false
+    }
+
+    const tokens = String(cmd || "").trim().split(/\s+/).filter(Boolean)
+    const enqueteTitle = String(tokens.slice(1, -1).join(" ") || "").trim()
+    const mode = String(tokens[tokens.length - 1] || "").trim().toUpperCase()
+
+    if (!enqueteTitle || !["S", "N"].includes(mode)) {
+      trackUtility("enquete", "rejected", { reason: "invalid-syntax" })
+      await sock.sendMessage(from, {
+        text: `Use: ${prefix}enquete <titulo> <S|N>\nS = DM apenas para registrados | N = Grupo apenas registrados`,
+      })
+      return true
+    }
+
+    pendingEnqueteBySender.set(sender, {
+      createdAt: Date.now(),
+      phase: "await-content",
+      title: enqueteTitle,
+      mode: mode,
+    })
+    trackUtility("enquete", "armed", { phase: "await-content", title: enqueteTitle, mode })
+    await sock.sendMessage(from, {
+      text:
+`✅ Modo enquete ativado.
+
+Título: *${enqueteTitle}*
+Modo: ${mode === "S" ? "DM para registrados" : "Grupo para registrados"}
+
+Envie a mensagem da enquete na próxima mensagem.`,
+    })
+    return true
+  }
+
+  const pendingEnquete = pendingEnqueteBySender.get(sender)
+  if (pendingEnquete && (cmd === prefix + "enquete" || cmd.startsWith(prefix + "enquete ")) === false && (isOverrideSender || isKnownOverrideSender)) {
+    if (pendingEnquete.phase === "await-content") {
+      pendingEnquete.phase = "confirm-message"
+      pendingEnquete.message = rawText
+      pendingEnqueteBySender.set(sender, pendingEnquete)
+
+      await sock.sendMessage(from, {
+        text:
+`Confirma o envio? (Y/N)
+
+*${pendingEnquete.title}*
+
+${pendingEnquete.message}`,
+      })
+      trackUtility("enquete", "armed", { phase: "confirm-message" })
+      return true
+    }
+
+    if (pendingEnquete.phase === "confirm-message") {
+      if (!["y", "yes", "s", "sim"].includes(cmd.toLowerCase())) {
+        if (["n", "no", "nao", "não"].includes(cmd.toLowerCase())) {
+          pendingEnquete.phase = "await-content"
+          pendingEnqueteBySender.set(sender, pendingEnquete)
+          await sock.sendMessage(from, { text: "Reenvie a mensagem da enquete." })
+          return true
+        }
+        await sock.sendMessage(from, { text: "Responda com Y/N." })
+        return true
+      }
+
+      pendingEnqueteBySender.delete(sender)
+      const enqueteId = allocateEnqueteId()
+      const registeredUsers = registrationService.getRegisteredUsersForNotifications()
+
+      enqueteInboxById.set(enqueteId, {
+        id: enqueteId,
+        title: pendingEnquete.title,
+        message: pendingEnquete.message,
+        mode: pendingEnquete.mode,
+        createdBy: sender,
+        createdAt: Date.now(),
+        responses: [],
+      })
+
+      let sentCount = 0
+      let failCount = 0
+
+      if (pendingEnquete.mode === "S") {
+        for (const userId of registeredUsers) {
+          try {
+            await sock.sendMessage(userId, {
+              text:
+`📋 ENQUETE (${enqueteId})
+
+*${pendingEnquete.title}*
+
+${pendingEnquete.message}
+
+Para responder: ${prefix}enquete ${enqueteId} responder`,
+            })
+            sentCount++
+          } catch (err) {
+            failCount++
+            console.error("Erro ao enviar enquete para DM", userId, err)
+          }
+        }
+      } else {
+        const groups = Array.from(knownGroupIds || [])
+        for (const groupId of groups) {
+          try {
+            await sock.sendMessage(groupId, {
+              text:
+`📋 ENQUETE (${enqueteId})
+
+*${pendingEnquete.title}*
+
+${pendingEnquete.message}
+
+Para responder: ${prefix}enquete ${enqueteId} responder`,
+            })
+            sentCount++
+          } catch (err) {
+            failCount++
+            console.error("Erro ao enviar enquete para grupo", groupId, err)
+          }
+        }
+      }
+
+      await sock.sendMessage(from, {
+        text:
+`✅ Enquete enviada com sucesso!
+
+ID: *${enqueteId}*
+Envios: ${sentCount} sucesso | ${failCount} falhas`,
+      })
+      trackUtility("enquete", "success", { enqueteId, sentCount, failCount, mode: pendingEnquete.mode })
+      return true
+    }
+  }
+
+  if (cmd === prefix + "enquete" || cmd.startsWith(prefix + "enquete ")) {
+    const tokens = String(cmd || "").trim().split(/\s+/).filter(Boolean)
+    const enqueteIdRaw = String(tokens[1] || "").trim().toUpperCase()
+    const subcommand = String(tokens[2] || "").trim().toLowerCase()
+
+    if (!enqueteIdRaw) return false
+    if (subcommand !== "responder") return false
+
+    const enqueteRecord = enqueteInboxById.get(enqueteIdRaw)
+    if (!enqueteRecord) {
+      trackUtility("enquete", "rejected", { reason: "unknown-enquete-id", enqueteId: enqueteIdRaw })
+      await sock.sendMessage(from, {
+        text: `Não encontrei enquete com ID *${enqueteIdRaw}*.`,
+      })
+      return true
+    }
+
+    const userAlreadyResponded = enqueteRecord.responses.some((r) => r.respondent === sender)
+    if (userAlreadyResponded) {
+      trackUtility("enquete", "rejected", { reason: "already-responded", enqueteId: enqueteIdRaw })
+      await sock.sendMessage(from, {
+        text: `Você já respondeu a essa enquete.`,
+      })
+      return true
+    }
+
+    pendingEnqueteReplyBySender.set(sender, {
+      enqueteId: enqueteIdRaw,
+      createdAt: Date.now(),
+    })
+    trackUtility("enquete", "armed", { mode: "respond", enqueteId: enqueteIdRaw })
+    await sock.sendMessage(from, {
+      text:
+`✍️ Resposta ativada para enquete *${enqueteIdRaw}*.
+
+Envie sua resposta na próxima mensagem.`,
+    })
+    return true
+  }
+
+  const pendingEnqueteReply = pendingEnqueteReplyBySender.get(sender)
+  if (pendingEnqueteReply && !((cmd === prefix + "enquete" || cmd.startsWith(prefix + "enquete ")))) {
+    pendingEnqueteReplyBySender.delete(sender)
+
+    const responseText = String(rawText || "").trim()
+    if (!responseText) {
+      trackUtility("enquete", "rejected", { reason: "empty-response", enqueteId: pendingEnqueteReply.enqueteId })
+      await sock.sendMessage(from, { text: "Não recebi texto para resposta." })
+      return true
+    }
+
+    const enqueteRecord = enqueteInboxById.get(pendingEnqueteReply.enqueteId)
+    if (!enqueteRecord) {
+      trackUtility("enquete", "error", { reason: "missing-enquete-record", enqueteId: pendingEnqueteReply.enqueteId })
+      await sock.sendMessage(from, { text: "Enquete não encontrada. Talvez tenha expirado." })
+      return true
+    }
+
+    enqueteRecord.responses.push({
+      respondent: sender,
+      respondentName: userNameCache[sender] || sender.split("@")[0],
+      response: responseText,
+      respondedAt: Date.now(),
+    })
+
+    const overrideTarget = String(overrideJid || "").trim()
+    if (overrideTarget) {
+      await sock.sendMessage(overrideTarget, {
+        text:
+`📋 RESPOSTA DE ENQUETE (${pendingEnqueteReply.enqueteId})
+
+*${enqueteRecord.title}*
+
+De: @${sender.split("@")[0]}
+Resposta: ${responseText}`,
+        mentions: [sender],
+      })
+    }
+
+    await sock.sendMessage(from, {
+      text: `✅ Sua resposta foi registrada para a enquete *${pendingEnqueteReply.enqueteId}*.`,
+    })
+    trackUtility("enquete", "success", {
+      mode: "respond",
+      enqueteId: pendingEnqueteReply.enqueteId,
+      responseLength: responseText.length,
     })
     return true
   }

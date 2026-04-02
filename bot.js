@@ -45,11 +45,11 @@ async function _gracefulShutdown(signal) {
 process.on("SIGTERM", () => { _gracefulShutdown("SIGTERM") })
 process.on("SIGINT", () => { _gracefulShutdown("SIGINT") })
 
-const { 
-  default: makeWASocket, 
-  useMultiFileAuthState, 
-  fetchLatestBaileysVersion, 
-  DisconnectReason, 
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  DisconnectReason,
   downloadMediaMessage,
   jidNormalizedUser
 } = require("@whiskeysockets/baileys")
@@ -2687,34 +2687,100 @@ setTimeout(() => {
 
       const nicknameQuery = String(cmdParts.slice(1).join(" ") || "").trim()
       if (!nicknameQuery) {
-        await sock.sendMessage(from, { text: `Use: ${prefix}whois <apelido>` })
+        await sock.sendMessage(from, { text: `Use: ${prefix}whois <apelido>.` })
         return
       }
 
-      const matches = typeof economyService.findUsersByPublicLabel === "function"
+      const labelMatches = typeof economyService?.findUsersByPublicLabel === "function"
         ? economyService.findUsersByPublicLabel(nicknameQuery)
         : []
 
-      if (!matches.length) {
+      if (labelMatches.length === 0) {
         await sock.sendMessage(from, {
-          text: `Nenhum usuário com apelido exato *${nicknameQuery}* foi encontrado.`,
+          text: `Nenhum perfil encontrado para o apelido *${nicknameQuery}*.`,
         })
         return
       }
 
-      const lines = matches.map((entry, index) => {
-        // Extract phone number from userId (format: phone@s.whatsapp.net or phone:something@s.whatsapp.net)
-        const userId = String(entry?.userId || "").trim().toLowerCase()
-        const phoneOrJid = userId.split(":")[0].split("@")[0] || userId
-        const phoneDigitsOnly = phoneOrJid.replace(/\D+/g, "")
-        const displayPhone = phoneDigitsOnly || phoneOrJid
-        return `${index + 1}. ${entry.publicLabel} -> *${displayPhone}*`
-      })
+      const normalizeIdentityHandle = (value = "") => {
+        const normalized = String(value || "").trim().toLowerCase().split(":")[0]
+        if (!normalized) return ""
+        const userPart = normalized.includes("@") ? normalized.split("@")[0] : normalized
+        const digits = String(userPart || "").replace(/\D+/g, "")
+        return digits || String(userPart || "").trim().toLowerCase()
+      }
+
+      const extractPhoneNumber = (value = "") => {
+        const normalized = registrationService.normalizeUserId(value)
+        const userPart = String(normalized || "").split("@")[0]
+        const digits = String(userPart || "").replace(/\D+/g, "")
+        return digits || String(userPart || "").trim()
+      }
+
+      const knownGroupEntries = []
+      const knownGroups = collectKnownGroupsFromStorage()
+        .filter((groupId) => String(groupId || "").endsWith("@g.us"))
+        .sort((a, b) => a.localeCompare(b))
+
+      for (const groupId of knownGroups) {
+        try {
+          const metadata = await sock.groupMetadata(groupId)
+          const participants = Array.isArray(metadata?.participants) ? metadata.participants : []
+          const participantHandles = new Set(
+            participants
+              .map((participant) => normalizeIdentityHandle(participant?.id || ""))
+              .filter(Boolean)
+          )
+          const groupName = String(metadata?.subject || groupNameCache[groupId] || getKnownGroupName(groupId) || groupId).trim()
+          if (groupName) {
+            groupNameCache[groupId] = groupName
+          }
+          knownGroupEntries.push({
+            groupName: groupName || groupId,
+            participantHandles,
+          })
+        } catch (_) {
+          // Ignora grupos sem acesso/metadata indisponível para o lookup de whois.
+        }
+      }
+
+      const lines = []
+      if (labelMatches.length > 1) {
+        lines.push(`Apelido *${nicknameQuery}* encontrado em *${labelMatches.length}* perfis.`, "")
+      }
+
+      for (let index = 0; index < labelMatches.length; index++) {
+        const entry = labelMatches[index]
+        const targetUserId = registrationService.normalizeUserId(entry?.userId || "")
+        const targetHandle = normalizeIdentityHandle(targetUserId)
+        const targetPhone = extractPhoneNumber(targetUserId) || "(desconhecido)"
+
+        if (labelMatches.length > 1) {
+          lines.push(`Perfil ${index + 1}:`)
+        }
+
+        lines.push(`Número: *${targetPhone}*`)
+
+        const sharedGroups = knownGroupEntries
+          .filter((groupEntry) => groupEntry.participantHandles.has(targetHandle))
+          .map((groupEntry) => groupEntry.groupName)
+
+        if (sharedGroups.length === 0) {
+          lines.push("Grupos em comum com o bot: nenhum.")
+        } else {
+          lines.push(`Grupos em comum com o bot (${sharedGroups.length}):`)
+          sharedGroups.forEach((groupName, groupIndex) => {
+            lines.push(`${groupIndex + 1}. ${groupName}`)
+          })
+        }
+
+        if (index < labelMatches.length - 1) {
+          lines.push("")
+        }
+      }
 
       await sock.sendMessage(from, {
-        text:
-          `Resultado do whois para *${nicknameQuery}* (${matches.length}):\n` +
-          lines.join("\n"),
+        text: lines.join("\n"),
       })
       return
     }
@@ -2726,31 +2792,32 @@ setTimeout(() => {
       }
       if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) return
 
-      const jidQuery = String(cmdParts.slice(1).join(" ") || "").trim()
-      if (!jidQuery) {
-        await sock.sendMessage(from, { text: `Use: ${prefix}find <jid ou numero>` })
+      const phoneQueryRaw = String(cmdParts.slice(1).join(" ") || "").trim()
+      if (!phoneQueryRaw || phoneQueryRaw.includes("@")) {
+        await sock.sendMessage(from, { text: `Use: ${prefix}find <numero> (somente dígitos, com DDI/DDD).` })
         return
       }
 
-      // Normalize the query to a proper JID format
-      let searchJid = jidQuery.toLowerCase().trim()
-      if (!searchJid.includes("@")) {
-        // If it's just a phone number, add the WhatsApp format
-        const digitsOnly = searchJid.replace(/\D+/g, "")
-        if (digitsOnly) {
-          searchJid = digitsOnly + "@s.whatsapp.net"
-        }
+      const searchPhone = phoneQueryRaw.replace(/\D+/g, "")
+      if (!searchPhone) {
+        await sock.sendMessage(from, { text: `Use: ${prefix}find <numero> (somente dígitos, com DDI/DDD).` })
+        return
+      }
+
+      const normalizePhoneFromIdentity = (value = "") => {
+        const normalized = String(value || "").trim().toLowerCase().split(":")[0]
+        if (!normalized) return ""
+        const userPart = normalized.includes("@") ? normalized.split("@")[0] : normalized
+        return String(userPart || "").replace(/\D+/g, "")
       }
 
       try {
         const groupMetadata = await sock.groupMetadata(from)
         const participants = Array.isArray(groupMetadata?.participants) ? groupMetadata.participants : []
-        
-        // Find if the user is in the group
+
         const userInGroup = participants.find(p => {
-          const normalizedParticipant = jidNormalizedUser(p?.id || "")
-          const normalizedSearch = jidNormalizedUser(searchJid)
-          return normalizedParticipant === normalizedSearch
+          const participantPhone = normalizePhoneFromIdentity(p?.id || "")
+          return participantPhone === searchPhone
         })
 
         if (userInGroup) {
@@ -2761,9 +2828,8 @@ setTimeout(() => {
             mentions: [userJid],
           })
         } else {
-          const phoneDisplay = searchJid.split("@")[0]
           await sock.sendMessage(from, {
-            text: `❌ Nenhum usuário com JID ou número *${phoneDisplay}* foi encontrado neste grupo.`,
+            text: `❌ Nenhum usuário com número *${searchPhone}* foi encontrado neste grupo.`,
           })
         }
       } catch (err) {
@@ -3171,6 +3237,7 @@ setTimeout(() => {
     // =========================
     // ESCOLHA PENDENTE DE PUNIÇÃO
     // =========================
+    console.log("[bot] attempting handlePendingPunishmentChoice", { from, sender, textLength: text?.length })
     const handledPendingPunishment = await measureStage("pendingPunishment", async () =>
       handlePendingPunishmentChoice({
         sock,
@@ -3183,11 +3250,16 @@ setTimeout(() => {
         isCommand,
       })
     )
-    if (handledPendingPunishment) return
+    console.log("[bot] handlePendingPunishmentChoice returned", { handledPendingPunishment })
+    if (handledPendingPunishment) {
+      console.log("[bot] pending punishment choice was handled")
+      return
+    }
 
     // =========================
     // APLICAÇÃO DE PUNIÇÃO ATIVA
     // =========================
+    console.log("[bot] attempting handlePunishmentEnforcement", { from, sender, textLength: text?.length })
     const punishedMessageDeleted = await measureStage("punishmentEnforcement", async () =>
       handlePunishmentEnforcement(
         sock,
@@ -3200,7 +3272,11 @@ setTimeout(() => {
         botIsAdmin
       )
     )
-    if (punishedMessageDeleted) return
+    console.log("[bot] handlePunishmentEnforcement returned", { punishedMessageDeleted })
+    if (punishedMessageDeleted) {
+      console.log("[bot] message was deleted by punishment enforcement")
+      return
+    }
 
     if (cmd === prefix + "resenha"){
       if (!isGroup) {

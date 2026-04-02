@@ -35,6 +35,19 @@ test("command suggestions include fixed-choice args for multiple-choice commands
   assert.ok(suggestions.includes("!trabalho bitcoin"))
 })
 
+test("command suggestions include newly documented override commands", () => {
+  const result = getLikelyCommandSuggestions({
+    input: "!enqute",
+    commandHelp: COMMAND_HELP,
+    prefix: "!",
+    maxSuggestions: 3,
+    minScore: 0.4,
+  })
+
+  const suggestions = result.suggestions.map((entry) => entry.text)
+  assert.ok(suggestions.includes("!enquete"))
+})
+
 test("Damerau-Levenshtein performs at least as well as Jaro-Winkler on typo corpus", () => {
   const candidates = buildAliasCandidates(COMMAND_HELP, "!")
   const typoPairs = [

@@ -640,6 +640,26 @@ async function handleEconomyCommands(ctx) {
   ].map((entry) => String(entry || "").toLowerCase()))
   const isEconomyCommandInvocation = economyCommandNames.has(normalizedCmdName)
 
+  function logEconomyFlow(stage, meta = {}) {
+    console.log("[router:economy]", {
+      stage,
+      command: cmd,
+      commandName: cmdName,
+      groupId: from,
+      sender,
+      isGroup,
+      ...meta,
+    })
+  }
+
+  if (String(cmdName || "").startsWith(commandPrefix)) {
+    logEconomyFlow("incoming", {
+      cmdArg1,
+      cmdArg2,
+      isEconomyCommandInvocation,
+    })
+  }
+
   const limits = typeof economyService.getOperationLimits === "function"
     ? economyService.getOperationLimits()
     : {
@@ -2063,6 +2083,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
   const senderCustomLabel = String(senderProfile?.preferences?.publicLabel || "").trim()
   const mustRegisterBeforeEconomy = isEconomyCommandInvocation && !senderIsRegistered
   if (mustRegisterBeforeEconomy) {
+    logEconomyFlow("gate.register-block", { senderIsRegistered })
     await sock.sendMessage(from, {
       text:
         "⚠️ Este comando de economia exige cadastro.\n" +
@@ -2077,6 +2098,10 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     senderIsRegistered &&
     !senderCustomLabel
   if (mustSetNicknameBeforeEconomy) {
+    logEconomyFlow("gate.nickname-block", {
+      senderIsRegistered,
+      hasRegistrationGate,
+    })
     await sock.sendMessage(from, {
       text:
         "⚠️ Você ainda não definiu apelido público.\n" +
@@ -2181,6 +2206,10 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       usarpasse: "extras",
     }
     const submenu = submenuAliases[submenuRaw] || submenuRaw
+    logEconomyFlow("menu.economia", {
+      submenuRaw,
+      submenu,
+    })
 
     if (submenu === "geral") {
       await sock.sendMessage(from, {
@@ -2243,6 +2272,8 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 `╭━━━〔 🎁 SUBMENU: EXTRAS/ESPECIAIS 〕━━━╮
 │ Comandos especiais, eventos e utilidades avançadas:
 │ ${prefix}cupom resgatar <codigo>
+│ ${prefix}usarcupom <codigo>
+│ ${prefix}cupom criar <codigo> <moedas> <dias> (override)
 │ ${prefix}falsificar <tipo 1-13> *<severidade> *<quantidade> *<S|N>
 │ ${prefix}falsificar tipo <1-13>
 │ ${prefix}loteria entrar (para entrar em sorteios abertos)
@@ -3968,7 +3999,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
     await sock.sendMessage(from, {
       text:
-        `🎉 ${sender.split("@")[0]} abriu *${quantity}x* Lootbox!\n` +
+        `🎉 @${sender.split("@")[0]} abriu *${quantity}x* Lootbox!\n` +
         `${redirectedPrefix ? `${redirectedPrefix}\n` : ""}` +
         `${resultLines}`,
       mentions: filteredMentions,
@@ -4468,6 +4499,18 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         })
         return true
       }
+      // Only registered users can participate in the lottery
+      if (typeof registrationService?.isRegistered === "function") {
+        const normalizedForReg = typeof registrationService.normalizeUserId === "function"
+          ? registrationService.normalizeUserId(sender)
+          : sender
+        if (!registrationService.isRegistered(normalizedForReg)) {
+          await sock.sendMessage(from, {
+            text: "Apenas usuários registrados podem participar da loteria.",
+          })
+          return true
+        }
+      }
       activeSession.participants.add(sender)
       await sock.sendMessage(from, {
         text: `🎟️ Entrada confirmada na loteria *${activeSession.title}*.` +
@@ -4478,6 +4521,10 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
     if (raffleAction === "fechar") {
       const activeSession = activeRafflesByGroup.get(from)
+      if (!isOverrideSender) {
+        await sock.sendMessage(from, { text: "Apenas overrides podem fechar loterias." })
+        return true
+      }
       if (!activeSession || !activeSession.optIn) {
         await sock.sendMessage(from, {
           text: "Não há loteria com opt-in ativa neste grupo.",
@@ -4698,7 +4745,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     const mentionedTarget = mentioned[0] || null
     const target = mentionedTarget || sender
     const argOffset = mentionedTarget ? 2 : 1
-    const targetMentions = mentionedTarget ? [target] : []
+    const targetMentions = [target]
 
     if (cmdName === prefix + "setcoins") {
       const amount = Number.parseInt(cmdParts[argOffset], 10)
@@ -4930,6 +4977,12 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     }
 
     return sock.sendMessage(from, { text: `Uso: !cooldowns [list] | !cooldowns reset <all|daily,work,cestabasica,steal,moeda>` })
+  }
+
+  if (String(cmdName || "").startsWith(commandPrefix)) {
+    logEconomyFlow("unhandled", {
+      isEconomyCommandInvocation,
+    })
   }
 
   return false

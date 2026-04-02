@@ -43,7 +43,7 @@ async function handleBlackjack({ sock, from, sender, text, prefix, cmd, cmdName,
     // Se não é comando de blackjack, retorna false
     if (cmdName !== 'blackjack' && cmdName !== '21') return false;
 
-    const numero = sender.split("@");
+    const numero = sender.split("@")[0];
 
     // Menu inicial
     if (!cmd) {
@@ -54,7 +54,7 @@ async function handleBlackjack({ sock, from, sender, text, prefix, cmd, cmdName,
 ${prefix}21 ou ${prefix}blackjack → Mostra este menu
 ${prefix}21 criar ou ${prefix}blackjack criar → Cria um novo jogo
 ${prefix}21 entrar ou ${prefix}blackjack entrar → Entra no jogo atual
-${prefix}21 começar ou ${prefix}blackjack começar → Inicia o jogo (2+ jogadores)
+${prefix}21 começar ou ${prefix}blackjack começar → Inicia o jogo (1+ jogadores)
 ${prefix}21 pedir ou ${prefix}blackjack pedir → Pede mais uma carta
 ${prefix}21 manter ou ${prefix}blackjack manter → Para de pedir cartas
 ${prefix}21 status ou ${prefix}blackjack status → Mostra o status do jogo
@@ -115,8 +115,8 @@ ${prefix}21 status ou ${prefix}blackjack status → Mostra o status do jogo
             await sock.sendMessage(from, { text: '❌ Nenhum jogo ativo para iniciar.' });
             return true;
         }
-        if (lobby.players.length < 2) {
-            await sock.sendMessage(from, { text: '❌ Precisa de pelo menos 2 jogadores para começar.' });
+        if (lobby.players.length < 1) {
+            await sock.sendMessage(from, { text: '❌ Precisa de pelo menos 1 jogador para começar.' });
             return true;
         }
         if (lobby.gameStarted) {

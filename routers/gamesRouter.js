@@ -85,6 +85,28 @@ async function handleGameCommands(ctx) {
   )
   const normalizedStartTarget = normalizeUnifiedGameType(cmdArg1)
   const isQuickGameStartTarget = ["embaralhado", "memoria", "memória", "reacao", "reação", "comando"].includes(normalizedStartTarget)
+  const isPrefixedCommand = String(cmdName || "").startsWith(String(prefix || ""))
+
+  function logGameFlow(stage, meta = {}) {
+    console.log("[router:games]", {
+      stage,
+      command: cmd,
+      commandName: cmdName,
+      groupId: from,
+      sender,
+      ...meta,
+    })
+  }
+
+  if (isPrefixedCommand) {
+    logGameFlow("incoming", {
+      cmdArg1,
+      cmdArg2,
+      isGroup,
+      isJoinCommand,
+      isStartCommand,
+    })
+  }
 
   async function getCommandParticipants() {
     const metadata = await sock.groupMetadata(from)
@@ -473,6 +495,7 @@ async function handleGameCommands(ctx) {
 
   if (isJoinCommand && isGroup) {
     const lobbyId = normalizeLobbyId(cmdArg1)
+    logGameFlow("join.attempt", { lobbyId: lobbyId || null })
     if (!lobbyId) {
       await sock.sendMessage(from, { text: "Use: !entrar <LobbyID> ou !join <LobbyID>" })
       return true
@@ -1633,6 +1656,13 @@ async function handleGameCommands(ctx) {
         `Mínimo de 3 jogadores.`,
     })
     return true
+  }
+
+  if (isPrefixedCommand) {
+    logGameFlow("unhandled", {
+      isGroup,
+      quickStartTarget: isQuickGameStartTarget,
+    })
   }
 
   return false

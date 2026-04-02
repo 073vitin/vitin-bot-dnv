@@ -31,12 +31,28 @@ async function handleModerationCommands(ctx) {
 
   if (!isGroup) return false
 
+  if (String(cmdName || "").startsWith(String(prefix || ""))) {
+    console.log("[router:moderation] incoming", {
+      command: cmd,
+      groupId: from,
+      sender,
+      isGroup,
+    })
+  }
+
   function trackModeration(command, status, meta = {}) {
     telemetry.incrementCounter("router.moderation.command", 1, {
       command,
       status,
     })
     telemetry.appendEvent("router.moderation.command", {
+      command,
+      status,
+      groupId: from,
+      sender,
+      ...meta,
+    })
+    console.log("[router:moderation]", {
       command,
       status,
       groupId: from,
@@ -88,11 +104,21 @@ async function handleModerationCommands(ctx) {
     return shifted.toISOString().replace("T", " ").slice(0, 19) + " (UTC-3)"
   }
 
+  const extractPhoneNumber = (identity = "") => {
+    const normalized = String(identity || "").trim().toLowerCase().split(":")[0]
+    if (!normalized) return ""
+    const userPart = normalized.includes("@") ? normalized.split("@")[0] : normalized
+    return String(userPart || "").replace(/\D+/g, "")
+  }
+
   // =========================
   // COMANDOS DE MODERAÇÃO
   // =========================
   if (cmdName === prefix + "overridegrupos") {
-    if (!isOverrideSender) return false
+    if (!isOverrideSender) {
+      trackModeration("overridegrupos", "rejected", { reason: "not-override" })
+      return false
+    }
 
     const knownGroups = Array.isArray(ctx.overrideKnownGroups) ? ctx.overrideKnownGroups : []
     if (knownGroups.length === 0) {
@@ -103,6 +129,7 @@ async function handleModerationCommands(ctx) {
           mentions: [sender],
         })
       }
+      trackModeration("overridegrupos", "success", { count: 0 })
       return true
     }
 
@@ -119,6 +146,7 @@ async function handleModerationCommands(ctx) {
         mentions: [sender],
       })
     }
+    trackModeration("overridegrupos", "success", { count: knownGroups.length })
     return true
   }
 
@@ -155,9 +183,9 @@ async function handleModerationCommands(ctx) {
   }
 
   if (cmdName === prefix + "block") {
-    if (!senderIsAdmin) {
-      trackModeration("block", "rejected", { reason: "not-admin" })
-      await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
+    if (!isOverrideSender) {
+      trackModeration("block", "rejected", { reason: "not-override" })
+      await sock.sendMessage(from, { text: "Apenas overrides podem usar esse comando." })
       return true
     }
 
@@ -217,10 +245,10 @@ async function handleModerationCommands(ctx) {
     return true
   }
 
-  if (cmdName === prefix + "bloqueados") {
-    if (!senderIsAdmin) {
-      trackModeration("bloqueados", "rejected", { reason: "not-admin" })
-      await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
+  if (cmdName === prefix + "bloqueados" || cmdName === prefix + "bloqueadosfones") {
+    if (!senderIsAdmin && !isOverrideSender) {
+      trackModeration("bloqueados", "rejected", { reason: "not-allowed" })
+      await sock.sendMessage(from, { text: "Apenas admins ou overrides podem usar esse comando." })
       return true
     }
 
@@ -232,12 +260,30 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
-    const lines = entries.slice(0, 30).map((identity, index) => `${index + 1}. ${identity}`)
-    const extra = entries.length > 30 ? `\n... e mais ${entries.length - 30} registro(s).` : ""
+    const phoneNumbers = [...new Set(entries
+      .map((identity) => extractPhoneNumber(identity))
+      .filter(Boolean))]
+
+    if (phoneNumbers.length === 0) {
+      await sock.sendMessage(from, {
+        text: "Há entradas de bloqueio, mas nenhuma com número de telefone extraível.",
+      })
+      trackModeration("bloqueados", "success", {
+        count: entries.length,
+        phones: 0,
+      })
+      return true
+    }
+
+    const lines = phoneNumbers.slice(0, 50).map((phone, index) => `${index + 1}. ${phone}`)
+    const extra = phoneNumbers.length > 50 ? `\n... e mais ${phoneNumbers.length - 50} número(s).` : ""
     await sock.sendMessage(from, {
-      text: `Usuários bloqueados globalmente:\n${lines.join("\n")}${extra}`,
+      text: `Números bloqueados globalmente:\n${lines.join("\n")}${extra}`,
     })
-    trackModeration("bloqueados", "success", { count: entries.length })
+    trackModeration("bloqueados", "success", {
+      count: entries.length,
+      phones: phoneNumbers.length,
+    })
     return true
   }
 
@@ -795,6 +841,7 @@ async function handleModerationCommands(ctx) {
     }
 
     if (!punishmentChoice) {
+      console.log("[router:moderation] punicoesadd - no punishment choice extracted", { alvo, text })
       trackModeration("punicoesadd", "rejected", { reason: "invalid-choice" })
       await sock.sendMessage(from, {
         text: "Use: !puniçõesadd [@user] <1-13> [severidade]\nEx.: !punicoesadd @user 7 3 | !punicoesadd @user 7x3\n" + getPunishmentMenuText(),
@@ -804,6 +851,7 @@ async function handleModerationCommands(ctx) {
     }
 
     if (hasExplicitSeverity && (!Number.isFinite(severityMultiplier) || severityMultiplier <= 0)) {
+      console.log("[router:moderation] punicoesadd - invalid severity", { alvo, severityMultiplier })
       trackModeration("punicoesadd", "rejected", { reason: "invalid-severity" })
       await sock.sendMessage(from, {
         text: "Severidade inválida. Use um número positivo.\nEx.: !puniçõesadd @user 7 3",
@@ -812,10 +860,12 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
+    console.log("[router:moderation] punicoesadd - applying punishment", { alvo, punishmentChoice, severityMultiplier, origin: "admin" })
     await applyPunishment(sock, from, alvo, punishmentChoice, {
       origin: "admin",
       severityMultiplier,
     })
+    console.log("[router:moderation] punicoesadd - punishment applied successfully", { alvo, punishmentChoice })
     trackModeration("punicoesadd", "success", { target: alvo, punishmentChoice })
     return true
   }
@@ -942,6 +992,7 @@ async function handleModerationCommands(ctx) {
 │ !block @user
 │ !unblock @user
 │ !bloqueados
+│ !bloqueadosfones
 │ !vote @user (Inicia uma votação para mutar/banir o usuário mencionado. Punição escolhida aleatoriamente.)
 │ !voteset <1-50>
 │ !votos
@@ -965,6 +1016,8 @@ async function handleModerationCommands(ctx) {
   │ !additem [@user] <item> <quantidade>
   │ !additem [@user] passe <tipo 1-13> <severidade> <qtd>
   │ !removeitem [@user] <item> <quantidade>
+  │ !mudarapelido @user <novo_apelido>
+  │ !cooldowns [list] | !cooldowns reset [@user] <all|daily,work,cestabasica,steal,moeda>
 ╚════════════════════
 `
     await sock.sendMessage(from, { text: admeconomiaMenu })

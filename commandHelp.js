@@ -312,7 +312,7 @@ const COMMAND_HELP = {
 
   mentions: {
     name: "Preferência de Menção",
-    aliases: ["mentions"],
+    aliases: ["mentions", "mention"],
     description: "Controla se você aparece mencionado em rankings/listas",
     usage: "!mentions [on|off]",
     commonUsage: [
@@ -596,12 +596,12 @@ blackjack: {
   block: {
     name: "Bloquear",
     aliases: ["block"],
-    description: "[Admin] Bloqueia um usuário globalmente (impede uso de comandos)",
+    description: "[Override] Bloqueia um usuário globalmente (impede uso de comandos)",
     usage: "!block @user",
     commonUsage: [
       "!block @usuario - Bloquear globalmente",
     ],
-    details: "Admin only. Usuário não pode usar nenhum comando do bot.",
+    details: "Override only. Usuário não pode usar nenhum comando do bot.",
   },
 
   unblock: {
@@ -795,6 +795,18 @@ blackjack: {
     details: "Sua proxima mensagem vira uma pergunta com protocolo de 5 caracteres e é enviada para os desenvolvedores. Assim que um deles responder, a resposta será enviada na sua DM.",
   },
 
+  enquete: {
+    name: "Enquete (Override)",
+    aliases: ["enquete"],
+    description: "[Override] Cria enquetes guiadas e recebe respostas por ID",
+    usage: "!enquete <titulo> <S|N> | !enquete <ID> responder",
+    commonUsage: [
+      "!enquete Pesquisa de update S - Iniciar enquete para DM de registrados",
+      "!enquete ABC12 responder - Ativar resposta da enquete",
+    ],
+    details: "No modo S, envia para DMs registradas. No modo N, envia para grupos registrados. Respostas são encaminhadas para override.",
+  },
+
   sticker: {
     name: "Criar Sticker",
     aliases: ["sticker", "s", "fig", "f"],
@@ -976,7 +988,7 @@ blackjack: {
 
   cestabásica: {
     name: "Cesta Básica",
-    aliases: ["cestabásica", "cestabásika"],
+    aliases: ["cestabásica", "cestabasica"],
     description: "Reclama cesta básica de coins quando balance está baixo",
     usage: "!cestabásica",
     commonUsage: [
@@ -1088,6 +1100,184 @@ blackjack: {
       "Aplica reset/ajustes necessários (ex.: cooldowns de daily/trade) e confirma com 'Comando forçado executado como @user'. Use com extremo cuidado, pois pode alterar saldos e estados de usuários.",
   },
 
+  toggleover: {
+    name: "Toggle Over (Override Global)",
+    aliases: ["toggleover"],
+    description: "[Override] Liga/desliga checks globais de override",
+    usage: "!toggleover",
+    commonUsage: [
+      "!toggleover - Alternar override global ON/OFF",
+    ],
+    details: "Comando restrito em DM para override. Controla o estado global da checagem de override.",
+  },
+
+  toggleoverride: {
+    name: "Toggle Override (Perfil)",
+    aliases: ["toggleoverride"],
+    description: "[Override] Liga/desliga um perfil de override por índice",
+    usage: "!toggleoverride <indice>",
+    commonUsage: [
+      "!toggleoverride 2 - Alternar perfil da lista",
+    ],
+    details: "Exibe status quando sem índice. Não permite desligar o perfil hardcoded fixo.",
+  },
+
+  overrideadd: {
+    name: "Override Add (Fluxo Hardcoded)",
+    aliases: ["overrideadd"],
+    description: "[Hardcoded Override] Abre fluxo para adicionar JIDs em um perfil",
+    usage: "!overrideadd <perfil>",
+    commonUsage: [
+      "!overrideadd manual - Inicia sessão para enviar JIDs",
+    ],
+    details: "Comando restrito em DM ao override hardcoded. Após executar, envie os JIDs (um por linha).",
+  },
+
+  addoverride: {
+    name: "Add Override",
+    aliases: ["addoverride"],
+    description: "[Override] Adiciona usuário ao perfil manual de override",
+    usage: "!addoverride @user",
+    commonUsage: [
+      "!addoverride @usuario - Vincular identidades ao perfil manual",
+    ],
+    details: "Aceita menção ou JID/número. Atualiza perfil manual e garante status ativo.",
+  },
+
+  removeoverride: {
+    name: "Remove Override",
+    aliases: ["removeoverride"],
+    description: "[Override] Remove usuário de perfis de override",
+    usage: "!removeoverride @user",
+    commonUsage: [
+      "!removeoverride @usuario - Remover identidades de override",
+    ],
+    details: "Remove variantes de identidade em todos os perfis (exceto perfil hardcoded).",
+  },
+
+  overridelist: {
+    name: "Override List",
+    aliases: ["overridelist"],
+    description: "[Override] Exibe status de perfis e grupos mapeados",
+    usage: "!overridelist",
+    commonUsage: [
+      "!overridelist - Ver status atual de perfis/ON-OFF/grupos",
+    ],
+    details: "Disponível em DM para usuários com permissão de gerenciamento override.",
+  },
+
+  overridegroup: {
+    name: "Override Group Mapping",
+    aliases: ["overridegroup"],
+    description: "[Override] Gerencia mapeamento de grupos por perfil",
+    usage: "!overridegroup <perfil> <add|rm|list> [groupJid]",
+    commonUsage: [
+      "!overridegroup manual list - Listar grupos de um perfil",
+      "!overridegroup manual add 123456@g.us - Vincular grupo",
+    ],
+    details: "Comando em DM. Permite escopo explícito de grupos por perfil override.",
+  },
+
+  overridegrupos: {
+    name: "Override Grupos",
+    aliases: ["overridegrupos"],
+    description: "[Override] Lista grupos conhecidos para operações de override",
+    usage: "!overridegrupos",
+    commonUsage: [
+      "!overridegrupos - Receber no privado os grupos conhecidos",
+    ],
+    details: "Executado em grupo para retorno em DM. Útil para inspeção operacional.",
+  },
+
+  whois: {
+    name: "Whois",
+    aliases: ["whois"],
+    description: "[Override] Consulta por apelido e retorna número + grupos em comum com o bot",
+    usage: "!whois <apelido>",
+    commonUsage: [
+      "!whois joao - Retorna número e grupos em comum com o bot",
+    ],
+    details: "Comando de DM para override. Busca apelido público da economia (case-insensitive).",
+  },
+
+  find: {
+    name: "Find (Grupo)",
+    aliases: ["find"],
+    description: "[Override] Verifica se um número está no grupo atual",
+    usage: "!find <numero>",
+    commonUsage: [
+      "!find 5511999999999 - Procurar participante no grupo",
+    ],
+    details: "Executado em grupo. Aceita apenas número (sem @s.whatsapp.net/@lid).",
+  },
+
+  manutencao: {
+    name: "Manutenção",
+    aliases: ["manutencao", "manutenção"],
+    description: "[Override] Liga/desliga modo manutenção global por grupo de origem",
+    usage: "!manutencao",
+    commonUsage: [
+      "!manutencao - Alternar manutenção ON/OFF",
+    ],
+    details: "Quando ativo, apenas o grupo autorizado continua recebendo comandos.",
+  },
+
+  vaultkey: {
+    name: "Vault Key",
+    aliases: ["vaultkey"],
+    description: "[Override Hardcoded] Mostra senha de exportação da base .data",
+    usage: "!vaultkey",
+    commonUsage: [
+      "!vaultkey - Exibir chave de export em DM",
+    ],
+    details: "Comando sensível e restrito ao override hardcoded.",
+  },
+
+  msg: {
+    name: "Broadcast Guiado",
+    aliases: ["msg"],
+    description: "[Override] Inicia fluxo de broadcast de aviso/update",
+    usage: "!msg <aviso|update> <N|T|A>",
+    commonUsage: [
+      "!msg aviso N - Broadcast em grupos sem ping",
+      "!msg update T - Broadcast em DM para registrados",
+    ],
+    details: "N=grupo sem ping, T=DM registrados, A=DM admins registrados.",
+  },
+
+  wipeeconomia: {
+    name: "Wipe Economia",
+    aliases: ["wipeeconomia", "wipeeconomy"],
+    description: "[Override Hardcoded] Fluxo interativo de wipe total/seletivo",
+    usage: "!wipeeconomia",
+    commonUsage: [
+      "!wipeeconomia - Abrir assistente de wipe",
+    ],
+    details: "Disponível em DM. Permite wipe total ou por perfis, com opção de manter perfil/registro.",
+  },
+
+  nuke: {
+    name: "Nuke",
+    aliases: ["nuke"],
+    description: "[Override] Limpa punições ativas do próprio remetente",
+    usage: "!nuke",
+    commonUsage: [
+      "!nuke - Limpar punição ativa e mute manual próprio",
+    ],
+    details: "Ferramenta de autocorreção para override em grupo.",
+  },
+
+  overridetest: {
+    name: "Override Test",
+    aliases: ["overridetest"],
+    description: "[Override] Executa bateria de testes de punição no próprio remetente",
+    usage: "!overridetest",
+    commonUsage: [
+      "!overridetest - Rodar validação de punições",
+    ],
+    details: "Aplica um conjunto de ações/punições de teste e limpa o estado ao finalizar.",
+  },
+
   timeranking: {
     name: "Time Ranking",
     aliases: ["timeranking"],
@@ -1168,13 +1358,14 @@ blackjack: {
 
   bloqueados: {
     name: "Bloqueados",
-    aliases: ["bloqueados"],
-    description: "[Admin] Lista usuários bloqueados globalmente",
-    usage: "!bloqueados",
+    aliases: ["bloqueados", "bloqueadosfones"],
+    description: "[Admin/Override] Lista números de usuários bloqueados globalmente",
+    usage: "!bloqueados | !bloqueadosfones",
     commonUsage: [
-      "!bloqueados - Ver bloqueados do bot",
+      "!bloqueados - Ver números bloqueados do bot",
+      "!bloqueadosfones - Mesmo output focado em números",
     ],
-    details: "[Admin] Usuários nesta lista não podem usar comandos.",
+    details: "Mostra apenas números de telefone deduplicados (sem JID/LID).",
   },
 
   jidsgrupo: {

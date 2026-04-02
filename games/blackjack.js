@@ -98,7 +98,7 @@ ${prefix}21 ou ${prefix}blackjack ou ${prefix}bj → Mostra este menu
 ${prefix}21 criar ou ${prefix}blackjack criar → Cria um novo jogo
 ${prefix}21 aposta [multiplicador] ou ${prefix}blackjack aposta [multiplicador] → Define multiplicador (só criador)
 ${prefix}21 entrar ou ${prefix}blackjack entrar → Entra no jogo com aposta
-${prefix}21 começar ou ${prefix}blackjack começar → Inicia o jogo (2+ jogadores)
+${prefix}21 começar ou ${prefix}blackjack começar → Inicia o jogo (1+ jogadores)
 ${prefix}21 pedir ou ${prefix}blackjack pedir → Pede mais uma carta
 ${prefix}21 manter ou ${prefix}blackjack manter → Para de pedir cartas
 ${prefix}21 status ou ${prefix}blackjack status → Mostra o status do jogo
@@ -267,8 +267,8 @@ ${prefix}21 pobreza ou ${prefix}blackjack pobreza → Modo pobreza (só override
       await sock.sendMessage(from, { text: '❌ Nenhum jogo ativo para iniciar.' });
       return true;
     }
-    if (lobby.players.length < 2) {
-      await sock.sendMessage(from, { text: '❌ Precisa de pelo menos 2 jogadores para começar.' });
+    if (lobby.players.length < 1) {
+      await sock.sendMessage(from, { text: '❌ Precisa de pelo menos 1 jogador para começar.' });
       return true;
     }
     if (lobby.gameStarted) {

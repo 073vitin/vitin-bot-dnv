@@ -2084,7 +2084,7 @@ test("games router blocks !começar reação with fewer than 3 participants", as
   assert.match(sent[0].payload.text, /Mínimo de 3 jogadores/i)
 })
 
-test("games router starts 15s lobby bet grace on !começar <LobbyID>", async () => {
+test("games router starts 10s lobby bet grace on !começar <LobbyID>", async () => {
   const { sock, sent } = createSockCapture()
   let clearCalled = false
   const setGameStateCalls = []
@@ -2187,7 +2187,7 @@ test("games router starts 15s lobby bet grace on !começar <LobbyID>", async () 
   assert.equal(handled, true)
   assert.equal(clearCalled, false)
   assert.equal(setGameStateCalls.length >= 1, true)
-  assert.match(String(sent[0]?.payload?.text || ""), /período de aposta por 15s/i)
+  assert.match(String(sent[0]?.payload?.text || ""), /período de aposta por 10s/i)
 })
 
 test("games router updates player lobby bet with !aposta during grace", async () => {
@@ -3649,14 +3649,14 @@ test("moderation router blocks user globally with !block", async () => {
     sock,
     msg: { message: {} },
     from: "group@g.us",
-    sender: "admin@s.whatsapp.net",
+    sender: "override@s.whatsapp.net",
     text: "!block @alvo",
     cmd: "!block @alvo",
     cmdName: "!block",
     cmdArg1: "",
     prefix: "!",
     isGroup: true,
-    senderIsAdmin: true,
+    senderIsAdmin: false,
     mentioned: [target],
     jidNormalizedUser: (id) => String(id || "").split(":")[0],
     storage: {
@@ -3670,9 +3670,9 @@ test("moderation router blocks user globally with !block", async () => {
     getPunishmentMenuText: () => "MENU",
     getPunishmentChoiceFromText: () => null,
     applyPunishment: async () => {},
-    overrideChecksEnabled: false,
-    overrideJid: "",
-    overrideIdentifiers: [],
+    overrideChecksEnabled: true,
+    overrideJid: "override@s.whatsapp.net",
+    overrideIdentifiers: ["override@s.whatsapp.net"],
   })
 
   assert.equal(handled, true)
@@ -3681,6 +3681,88 @@ test("moderation router blocks user globally with !block", async () => {
   assert.ok(added.includes("alvo@s.whatsapp.net"))
   assert.ok(added.includes("alvo@lid"))
   assert.ok(sent.some((entry) => /bloqueado para uso de comandos/i.test(String(entry.payload?.text || ""))))
+})
+
+test("moderation router rejects !block for non-override sender", async () => {
+  const { sock, sent } = createSockCapture()
+  const added = []
+
+  const handled = await handleModerationCommands({
+    sock,
+    msg: { message: {} },
+    from: "group@g.us",
+    sender: "admin@s.whatsapp.net",
+    text: "!block @alvo",
+    cmd: "!block @alvo",
+    cmdName: "!block",
+    cmdArg1: "",
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: true,
+    mentioned: ["alvo@s.whatsapp.net"],
+    jidNormalizedUser: (id) => String(id || "").split(":")[0],
+    storage: {
+      addGlobalBlockedUsers: (identities) => {
+        added.push(...identities)
+        return identities
+      },
+    },
+    clearPunishment: () => {},
+    clearPendingPunishment: () => {},
+    getPunishmentMenuText: () => "MENU",
+    getPunishmentChoiceFromText: () => null,
+    applyPunishment: async () => {},
+    overrideChecksEnabled: true,
+    overrideJid: "override@s.whatsapp.net",
+    overrideIdentifiers: ["override@s.whatsapp.net"],
+  })
+
+  assert.equal(handled, true)
+  assert.equal(added.length, 0)
+  assert.ok(sent.some((entry) => /Apenas overrides podem usar esse comando/i.test(String(entry.payload?.text || ""))))
+})
+
+test("moderation router lists blocked phone numbers with !bloqueadosfones", async () => {
+  const { sock, sent } = createSockCapture()
+
+  const handled = await handleModerationCommands({
+    sock,
+    msg: { message: {} },
+    from: "group@g.us",
+    sender: "override@s.whatsapp.net",
+    text: "!bloqueadosfones",
+    cmd: "!bloqueadosfones",
+    cmdName: "!bloqueadosfones",
+    cmdArg1: "",
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    mentioned: [],
+    jidNormalizedUser: (id) => String(id || "").split(":")[0],
+    storage: {
+      getGlobalBlockedUsers: () => ({
+        "5511999999999@s.whatsapp.net": { blockedAt: Date.now() },
+        "5511999999999@lid": { blockedAt: Date.now() },
+        "5511888888888@s.whatsapp.net": { blockedAt: Date.now() },
+        "entry-sem-numero": { blockedAt: Date.now() },
+      }),
+    },
+    clearPunishment: () => {},
+    clearPendingPunishment: () => {},
+    getPunishmentMenuText: () => "MENU",
+    getPunishmentChoiceFromText: () => null,
+    applyPunishment: async () => {},
+    overrideChecksEnabled: true,
+    overrideJid: "override@s.whatsapp.net",
+    overrideIdentifiers: ["override@s.whatsapp.net"],
+  })
+
+  assert.equal(handled, true)
+  const payload = sent.find((entry) => entry.to === "group@g.us")?.payload?.text || ""
+  assert.ok(/Números bloqueados globalmente/i.test(String(payload)))
+  assert.ok(String(payload).includes("5511999999999"))
+  assert.ok(String(payload).includes("5511888888888"))
+  assert.equal(String(payload).includes("@s.whatsapp.net"), false)
 })
 
 test("moderation router resolves !vote at threshold", async () => {
