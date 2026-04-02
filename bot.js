@@ -4475,24 +4475,6 @@ setTimeout(() => {
     )
     if (handledModerationCommand) return
       
-// =========================
-// BLACKJACK
-// =========================
-console.log('cmdName:', cmdName); 
-const handledBlackjack = await measureStage("BlackjackHandler", async () =>
-  handleBlackjack({
-    sock,
-    from,
-    sender,
-    text,
-    prefix,
-    cmd,
-    cmdName,
-    isGroup,
-    isOverrideSender,
-  })
-)
-if (handledBlackjack) return
     // =========================
     // AM 
     // =========================
@@ -4547,6 +4529,25 @@ if (handledBlackjack) return
         return
       }
     }
+      
+    // =========================
+    // BLACKJACK
+    // =========================
+    const handledBlackjack = await measureStage("BlackjackHandler", async () =>
+      handleBlackjack({
+        sock,
+        from,
+        sender,
+        text,
+        prefix,
+        cmd,
+        cmdName,
+        isGroup,
+        isOverrideSender,
+      })
+    )
+    if (handledBlackjack) return
+      
     // =========================
     // COMANDOS DE STREAKS
     // =========================
