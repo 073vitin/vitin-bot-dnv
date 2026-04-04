@@ -946,15 +946,24 @@ ${feedbackText}`,
 
     const mentionSet = new Set()
     const seenFirstIndexByValue = new Map()
+    const formatVariantHandle = (value = "") => {
+      const normalized = String(value || "").trim().toLowerCase()
+      if (!normalized) return "@desconhecido"
+
+      const beforeAt = normalized.includes("@") ? normalized.split("@")[0] : normalized
+      const withoutDevice = beforeAt.split(":")[0]
+      const digits = withoutDevice.replace(/\D+/g, "")
+      const handle = digits || withoutDevice || normalized
+      return `@${handle}`
+    }
+
     const lines = [
       "Teste de remenção (variantes da identidade mencionada):",
       "",
     ]
 
     variants.forEach((variant, index) => {
-      const mentionTag = variant.mentionable
-        ? `@${String(variant.value).split("@")[0].split(":")[0]}`
-        : variant.value
+      const mentionTag = formatVariantHandle(variant.value)
 
       const duplicateOf = seenFirstIndexByValue.has(variant.value)
         ? seenFirstIndexByValue.get(variant.value) + 1
@@ -968,7 +977,6 @@ ${feedbackText}`,
         `${index + 1}. [${variant.label}] ${mentionTag}` +
         (duplicateOf ? ` (duplica ${duplicateOf})` : "")
       )
-      lines.push(`   id: ${variant.value}`)
 
       if (variant.mentionable) {
         mentionSet.add(variant.value)
