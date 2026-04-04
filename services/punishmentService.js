@@ -552,20 +552,12 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
 
   if (normalizedPunishmentId === "3") {
     const letters = getRandomDifferentLetters(severityMultiplier + 1)
-    const uppercaseLetters = letters.map((letter) => letter.toUpperCase())
-    const invalidChar = LETTER_ALPHABET
-      .split("")
-      .find((ch) => !letters.includes(ch))
-      ?.toUpperCase() || "B"
-    const invalidExample = uppercaseLetters.length > 1
-      ? `${uppercaseLetters[0]} ${invalidChar}${uppercaseLetters.slice(1).join("")}`
-      : `${uppercaseLetters[0]}${invalidChar}`
 
     punishmentState = {
       type: "lettersBlock",
       letters
     }
-    warningText = `${mentionTag}, punição ativada: letras bloqueadas (indefinido).\nPara sair, envie *UMA* mensagem que contenha *todas* as letras bloqueadas, pelo menos 1x cada, usando apenas essas letras + espaços/quebras de linha.\nSe faltar 1 letra ou tiver qualquer caractere extra, a mensagem é apagada.\nExemplos válidos (supondo que as letras bloqueadas são A, B, C, D, E):\n"A B C D E", "ABCDE". Exemplo inválido: "ABCDEF".`
+    warningText = `${mentionTag}, punição ativada: ${letters.length} letras bloqueadas (indefinido).\nPara sair, envie *UMA* mensagem que contenha *todas* as ${letters.length} letras bloqueadas, pelo menos 1x cada, usando apenas essas letras + espaços/quebras de linha.\nSe faltar 1 letra ou tiver qualquer caractere extra, a mensagem é apagada.\nExemplos válidos (supondo que as letras bloqueadas são A, B, C, D, E):\n"A B C D E", "ABCDE". Exemplo inválido: "ABCDEF".`
   }
 
   if (normalizedPunishmentId === "4") {
