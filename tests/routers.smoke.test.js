@@ -3137,6 +3137,64 @@ test("games message flow triggers periodic game and records trigger", async () =
   assert.equal(recorded, true)
 })
 
+test("games message flow handles dobro guess before command gating", async () => {
+  const { sock } = createSockCapture()
+  let dobroCalls = 0
+
+  const handled = await handleGameMessageFlow({
+    sock,
+    from: "group@g.us",
+    sender: "user@s.whatsapp.net",
+    text: "!cara",
+    msg: { message: {} },
+    mentioned: [],
+    isGroup: true,
+    isCommand: true,
+    storage: {},
+    gameManager: {
+      incrementMessageCounter: () => {},
+    },
+    caraOuCoroa: {
+      handleDobroGuess: async () => {
+        dobroCalls += 1
+        return true
+      },
+    },
+    reação: {
+      recordReaction: () => ({ valid: false }),
+      getResults: () => ({}),
+      formatResults: () => "",
+    },
+    embaralhado: {
+      checkAnswer: () => ({ correct: false }),
+      formatResults: () => "",
+    },
+    memória: {
+      recordAttempt: () => ({ correct: false }),
+      formatResults: () => "",
+    },
+    comando: {
+      recordParticipant: () => {},
+      recordSilenceBreaker: () => {},
+      isValidCompliance: () => false,
+      recordCompliance: () => {},
+    },
+    startPeriodicGame: async () => ({ ok: false }),
+    GAME_REWARDS: {
+      REACAO: 30,
+      EMBARALHADO: 30,
+      MEMORIA: 30,
+    },
+    isResenhaModeEnabled: () => false,
+    rewardPlayer: async () => {},
+    incrementUserStat: () => {},
+    createPendingTargetForWinner: async () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(dobroCalls, 1)
+})
+
 test("utility router handles !menu command", async () => {
   const { sock, sent } = createSockCapture()
 

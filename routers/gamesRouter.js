@@ -1699,11 +1699,13 @@ async function handleGameMessageFlow(ctx) {
   const reactionGame = reacao || reação
   const memoryGame = memoria || memória
 
-  if (!isGroup || isCommand) return false
+  if (!isGroup) return false
 
   if (typeof caraOuCoroa?.handleDobroGuess === "function" && await caraOuCoroa.handleDobroGuess(ctx)) {
     return true
   }
+
+  if (isCommand) return false
 
   gameManager.incrementMessageCounter(from, sender)
 

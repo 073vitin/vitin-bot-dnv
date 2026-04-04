@@ -180,8 +180,29 @@ function extendTimedPunishment(groupId, userId, durationMultiplier = 2) {
   return true
 }
 
+function normalizeCoinGuessText(input) {
+  return String(input || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .toLowerCase()
+    .trim()
+}
+
+function parseCoinGuess(input) {
+  let normalized = normalizeCoinGuessText(input)
+  if (!normalized) return null
+
+  normalized = normalized
+    .replace(/^[!/.]\s*/, "")
+    .replace(/^[^a-z0-9]+/, "")
+    .replace(/[^a-z0-9]+$/, "")
+
+  return normalized === "cara" || normalized === "coroa" ? normalized : null
+}
+
 function isCoinGuessCommand(cmd) {
-  return cmd === "cara" || cmd === "coroa"
+  return parseCoinGuess(cmd) !== null
 }
 
 async function handleCoinGuess({
@@ -211,7 +232,8 @@ async function handleCoinGuess({
   const resenhaAveriguada = storage.getResenhaAveriguada()
 
   const playerGame = isGroup ? coinGames[from]?.[sender] : null
-  if (!playerGame || !isCoinGuessCommand(cmd)) return false
+  const guess = parseCoinGuess(cmd)
+  if (!playerGame || !guess) return false
 
   const game = playerGame
   delete coinGames[from][sender]
@@ -227,8 +249,8 @@ async function handleCoinGuess({
   const senderUserPart = normalizedSender.split("@")[0]
   const isOverride = Boolean(overrideChecksEnabled) &&
     (overrideIdentitySet.has(normalizedSender) || overrideIdentitySet.has(senderUserPart))
-  const resolvedResult = isOverride ? cmd : game.resultado
-  const acertou = (cmd === resolvedResult)
+  const resolvedResult = isOverride ? guess : game.resultado
+  const acertou = (guess === resolvedResult)
   const wagerMultiplier = Math.max(1, Math.floor(Number(game?.betMultiplier) || 1))
   const canTriggerPunishment = Boolean(resenhaAveriguada[from]) && wagerMultiplier >= minPunishmentBet
   const canChooseTargetPunishment = Boolean(resenhaAveriguada[from]) && wagerMultiplier >= minWinnerTargetBet
@@ -543,9 +565,9 @@ async function handleDobroGuess(ctx) {
 
   const stateKey = getDobroStateKey(from, sender)
   const state = storage.getGameState(from, stateKey)
-  const guess = text.trim().toLowerCase()
+  const guess = parseCoinGuess(text)
 
-  if (state && state.status === "waiting_for_guess" && ["cara", "coroa"].includes(guess)) {
+  if (state && state.status === "waiting_for_guess" && guess) {
     const overrideIdentitySet = new Set(
       [overrideJid, overridePhoneNumber, ...(overrideIdentifiers || [])]
         .map((value) => String(value || "").trim().toLowerCase().split(":")[0])

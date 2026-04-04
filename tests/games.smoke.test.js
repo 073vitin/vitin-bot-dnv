@@ -531,6 +531,44 @@ test("roletaRussa chamber selection hits on expected shot index", () => {
   }
 })
 
+test("coin guess accepts formatted cara/coroa messages", async () => {
+  const groupId = `__coin_guess_format_${Date.now()}@g.us`
+  const sender = "formatted@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+  let rewardCalls = 0
+  let lossCalls = 0
+
+  setCoinRound(groupId, sender, "coroa")
+
+  const handled = await caraOuCoroa.handleCoinGuess({
+    sock,
+    from: groupId,
+    sender,
+    cmd: "  !CÓROA!!!  ",
+    isGroup: true,
+    overrideChecksEnabled: false,
+    overrideJid: "",
+    overridePhoneNumber: "",
+    overrideIdentifiers: [],
+    getPunishmentMenuText: () => "",
+    getRandomPunishmentChoice: () => "1",
+    getPunishmentNameById: () => "teste",
+    applyPunishment: async () => {},
+    clearPendingPunishment: () => {},
+    rewardWinner: async () => {
+      rewardCalls += 1
+    },
+    chargeLoser: async () => {
+      lossCalls += 1
+    },
+  })
+
+  assert.equal(handled, true)
+  assert.equal(rewardCalls, 1)
+  assert.equal(lossCalls, 0)
+  assert.ok(sent.some((m) => String(m.payload?.text || "").includes("A moeda caiu em *coroa*")))
+})
+
 test("dobro ou nada charges buy-in 50 and doubles payout by streak", async () => {
   const economyService = require("../services/economyService")
   const groupId = `__dobro_curve_${Date.now()}@g.us`
@@ -610,6 +648,44 @@ test("dobro ou nada charges buy-in 50 and doubles payout by streak", async () =>
   const finalCoins = Number(economyService.getProfile(sender)?.coins || 0)
   assert.equal(finalCoins, beforeCoins + 50)
   assert.equal(caraOuCoroa.getDobroState(groupId, sender), null)
+})
+
+test("dobro ou nada accepts formatted guess text", async () => {
+  const economyService = require("../services/economyService")
+  const groupId = `__dobro_guess_format_${Date.now()}@g.us`
+  const sender = `formatted_dobro_${Date.now()}@s.whatsapp.net`
+  const { sock } = createSockCapture()
+
+  economyService.creditCoins(sender, 1000, { type: "test-credit" })
+
+  const started = await caraOuCoroa.startDobroGame({
+    sock,
+    from: groupId,
+    sender,
+    storage,
+    economyService,
+    incrementUserStat: () => {},
+  })
+  assert.equal(started, true)
+
+  const handledGuess = await caraOuCoroa.handleDobroGuess({
+    sock,
+    from: groupId,
+    sender,
+    text: "*!CÁRA?!*",
+    storage,
+    economyService,
+    incrementUserStat: () => {},
+    overrideChecksEnabled: true,
+    overrideJid: "",
+    overridePhoneNumber: "",
+    overrideIdentifiers: [sender],
+  })
+
+  assert.equal(handledGuess, true)
+  const state = caraOuCoroa.getDobroState(groupId, sender)
+  assert.equal(state?.streak, 1)
+  assert.equal(state?.status, "waiting_for_choice")
 })
 
 test("override coin guess uses player guess as resolved result", async () => {
