@@ -12,6 +12,7 @@ const TRADE_HISTORY_LIMIT = 100
 const TRADE_ITEM_STACK_LIMIT = 100_000
 const TEAM_WITHDRAW_COOLDOWN_MS = 15 * 60 * 1000
 const COUPON_STATE_KEY = "couponState"
+const GLOBAL_COUPON_GROUP_ID = "__coupons_global__"
 const ACCOUNT_DELETE_CONFIRMATION_PHRASE = "Estou ciente do uso e efeitos deste comando. Delete a minha conta"
 const ACCOUNT_DELETE_CONFIRMATION_TTL_MS = 2 * 60 * 1000
 const pendingAccountDeletionByUser = new Map()
@@ -2310,6 +2311,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
   if (cmdName === prefix + "cupom") {
     const action = String(cmdArg1 || "").trim().toLowerCase()
     const couponState = getCouponState(storage, from)
+    const globalCouponState = getCouponState(storage, GLOBAL_COUPON_GROUP_ID)
 
     if (action === "criar") {
       if (!isOverrideSender) {
@@ -2325,8 +2327,8 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         return true
       }
       const expiresAt = Date.now() + (expiresInDays * 24 * 60 * 60 * 1000)
-      if (!couponState.codes[codeRaw]) {
-        couponState.codes[codeRaw] = {
+      if (!globalCouponState.codes[codeRaw]) {
+        globalCouponState.codes[codeRaw] = {
           amount,
           expiresAt,
           createdBy: sender,
@@ -2334,12 +2336,12 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
           redeemedBy: {},
         }
       } else {
-        couponState.codes[codeRaw].amount = amount
-        couponState.codes[codeRaw].expiresAt = expiresAt
-        couponState.codes[codeRaw].updatedBy = sender
-        couponState.codes[codeRaw].updatedAt = Date.now()
+        globalCouponState.codes[codeRaw].amount = amount
+        globalCouponState.codes[codeRaw].expiresAt = expiresAt
+        globalCouponState.codes[codeRaw].updatedBy = sender
+        globalCouponState.codes[codeRaw].updatedAt = Date.now()
       }
-      setCouponState(storage, from, couponState)
+      setCouponState(storage, GLOBAL_COUPON_GROUP_ID, globalCouponState)
 
       telemetry.incrementCounter("economy.coupon.create", 1)
       telemetry.appendEvent("economy.coupon.create", {
@@ -2365,12 +2367,12 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         await sock.sendMessage(from, { text: "Use: !cupom remove <codigo>" })
         return true
       }
-      if (!couponState.codes[codeRaw]) {
+      if (!globalCouponState.codes[codeRaw]) {
         await sock.sendMessage(from, { text: "Cupom não encontrado." })
         return true
       }
-      delete couponState.codes[codeRaw]
-      setCouponState(storage, from, couponState)
+      delete globalCouponState.codes[codeRaw]
+      setCouponState(storage, GLOBAL_COUPON_GROUP_ID, globalCouponState)
       await sock.sendMessage(from, { text: `🗑️ Cupom *${codeRaw}* removido.` })
       return true
     }
@@ -2381,18 +2383,9 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         await sock.sendMessage(from, { text: "Use: !cupom resgatar <codigo>" })
         return true
       }
-      let scopedGroupId = from
-      let scopedState = couponState
-      let coupon = couponState.codes[codeRaw]
-
-      if (!coupon && !isGroup) {
-        const resolved = resolveCouponScopeByCode(storage, codeRaw)
-        if (resolved) {
-          scopedGroupId = resolved.groupId
-          scopedState = resolved.state
-          coupon = resolved.coupon
-        }
-      }
+      let scopedGroupId = GLOBAL_COUPON_GROUP_ID
+      let scopedState = globalCouponState
+      let coupon = globalCouponState.codes[codeRaw]
 
       if (!coupon) {
         await sock.sendMessage(from, { text: "Cupom inválido ou inexistente." })
@@ -2422,7 +2415,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
       telemetry.incrementCounter("economy.coupon.redeem", 1)
       telemetry.appendEvent("economy.coupon.redeem", {
-        groupId: scopedGroupId,
+        groupId: from,
         code: codeRaw,
         amount: received,
         userId: sender,

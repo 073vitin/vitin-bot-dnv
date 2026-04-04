@@ -143,10 +143,10 @@ function getKnownUserNameForTelemetry(jid) {
     try {
       return safeString(userNameResolver(normalized)).trim()
     } catch {
-      return normalized.split("@")[0] || normalized
+      return getMentionHandleFromJid(normalized) || normalized
     }
   }
-  return normalized.split("@")[0] || normalized
+  return getMentionHandleFromJid(normalized) || normalized
 }
 
 function getKnownGroupNameForTelemetry(groupJid) {

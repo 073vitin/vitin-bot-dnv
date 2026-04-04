@@ -391,7 +391,7 @@ Se algo não estiver funcionando direito, envie feedback para:
       text:
 `✅ Modo feedback privado ativado.
 
-Envie seu feedback e eu vou encaminhar para um dos donos no privado.
+Envie seu feedback em uma singular mensagem e eu vou encaminhar para um dos donos no privado.
 Somente a próxima mensagem é capturada nesse fluxo.`,
     })
     return true
@@ -416,8 +416,8 @@ Somente a próxima mensagem é capturada nesse fluxo.`,
         text:
 `✅ Modo pergunta ativado.
 
-Envie sua pergunta na proxima mensagem e ela sera encaminhada para a equipe com um protocolo de 5 caracteres.
-Somente a proxima mensagem e capturada nesse fluxo.`,
+Envie sua pergunta na proxima mensagem e ela será encaminhada para os desenvolvedores.
+Somente a proxima mensagem é capturada nesse fluxo.`,
       })
       return true
     }
@@ -425,7 +425,7 @@ Somente a proxima mensagem e capturada nesse fluxo.`,
     if (!(isKnownOverrideSender || isOverrideSender)) {
       trackUtility("pergunta", "rejected", { reason: "non-override-reply-attempt" })
       await sock.sendMessage(from, {
-        text: `Somente overrides podem responder protocolos. Para enviar pergunta, use apenas: ${prefix}pergunta`,
+        text: `Somente overrides podem responder protocolos. Para enviar uma pergunta, use apenas: ${prefix}pergunta`,
       })
       return true
     }
@@ -442,7 +442,7 @@ Somente a proxima mensagem e capturada nesse fluxo.`,
     if (!questionRecord) {
       trackUtility("pergunta", "rejected", { reason: "unknown-question-id", questionId: questionIdRaw })
       await sock.sendMessage(from, {
-        text: `Nao encontrei pergunta com protocolo *${questionIdRaw}*.`,
+        text: `Não encontrei pergunta com protocolo *${questionIdRaw}*.`,
       })
       return true
     }
@@ -450,7 +450,7 @@ Somente a proxima mensagem e capturada nesse fluxo.`,
     if (questionRecord.answeredAt) {
       trackUtility("pergunta", "rejected", { reason: "already-answered", questionId: questionIdRaw })
       await sock.sendMessage(from, {
-        text: `A pergunta *${questionIdRaw}* ja foi respondida.`,
+        text: `A pergunta *${questionIdRaw}* já foi respondida.`,
       })
       return true
     }

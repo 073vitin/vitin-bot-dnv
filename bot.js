@@ -3502,7 +3502,7 @@ setTimeout(() => {
     const getGroupGameStates = () => storage.getGameStates(from)
 
     const PERIODIC_CONTROL_STATE_KEY = "periodicControl"
-    const PERIODIC_AUTO_COOLDOWN_MS = 20 * 60_000
+    const PERIODIC_AUTO_COOLDOWN_MS = 30 * 60_000
     const PERIODIC_GAMES = [
       { type: "embaralhado", key: "embaralhadoActive", label: "Embaralhado" },
       { type: "reação", key: "reaçãoActive", label: "Reação" },
@@ -4789,6 +4789,8 @@ setTimeout(() => {
         metric: suggestionResult.metric,
         suggestions: suggestionResult.suggestions.map((entry) => entry.text),
       })
+        const psa = "💡 *Dica:* Use *!ajuda* ou *!duvida* (!ajuda <comando>), *!pergunta* (questões), *!feedback* ou *!feedbackpriv* (feedback)."
+        await sock.sendMessage(from, { text: psa })
       return
     }
     
