@@ -3596,6 +3596,55 @@ test("utility router handles hidden !jid only in DM", async () => {
   assert.match(sent[0].payload.text, /5511999999999@s\.whatsapp\.net/)
 })
 
+test("utility router handles !teste and expands mention identity variants", async () => {
+  const { sock, sent } = createSockCapture()
+  const rawMention = "5511999999999:5@s.whatsapp.net"
+  const normalizedMention = "5511999999999@s.whatsapp.net"
+
+  const handled = await handleUtilityCommands({
+    sock,
+    from: "group@g.us",
+    sender: "autor@s.whatsapp.net",
+    text: "!teste @alvo",
+    rawText: "!teste @alvo",
+    isCommand: true,
+    cmd: "!teste @alvo",
+    prefix: "!",
+    isGroup: true,
+    msg: {
+      message: {
+        extendedTextMessage: {
+          contextInfo: {
+            mentionedJid: [rawMention],
+          },
+        },
+      },
+    },
+    quoted: null,
+    mentioned: [normalizedMention],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+    jidNormalizedUser: (id) => String(id || "").split(":")[0],
+    registrationService: {
+      getUserIdAliases: (value) => [
+        String(value || "").split(":")[0],
+        "5511999999999@lid",
+      ],
+    },
+  })
+
+  assert.equal(handled, true)
+  assert.equal(sent.length, 1)
+  assert.match(String(sent[0].payload?.text || ""), /RAW_MENTIONED_JID/)
+  assert.match(String(sent[0].payload?.text || ""), /REGISTRATION_CANONICAL/)
+  assert.ok(Array.isArray(sent[0].payload?.mentions))
+  assert.ok(sent[0].payload.mentions.includes("5511999999999@s.whatsapp.net"))
+  assert.ok(sent[0].payload.mentions.includes("5511999999999@lid"))
+})
+
 test("utility router handles !perf command", async () => {
   const { sock, sent } = createSockCapture()
 

@@ -894,6 +894,100 @@ ${feedbackText}`,
     return true
   }
 
+  if (cmd === prefix + "teste" || cmd.startsWith(prefix + "teste ")) {
+    const rawMentioned = String(msg?.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || "").trim()
+    const targetMentioned = String(mentioned[0] || "").trim()
+    const baseIdentity = rawMentioned || targetMentioned
+
+    if (!baseIdentity) {
+      trackUtility("teste", "rejected", { reason: "missing-mention" })
+      await sock.sendMessage(from, {
+        text: `Use: ${prefix}teste @usuario (com uma menção).`,
+      })
+      return true
+    }
+
+    const variants = []
+    const addVariant = (label, value, options = {}) => {
+      const normalized = String(value || "").trim().toLowerCase()
+      if (!normalized) return
+      variants.push({
+        label,
+        value: normalized,
+        mentionable: options.mentionable !== false && normalized.includes("@"),
+      })
+    }
+
+    const baileysNormalized = String(jidNormalizedUser(baseIdentity) || "").trim().toLowerCase()
+    const registrationCanonical = String(normalizeUserId(baseIdentity) || "").trim().toLowerCase()
+    const aliasList = typeof registrationService?.getUserIdAliases === "function"
+      ? registrationService.getUserIdAliases(baseIdentity)
+      : []
+
+    addVariant("RAW_MENTIONED_JID", rawMentioned)
+    addVariant("CTX_MENTIONED_NORMALIZED", targetMentioned)
+    addVariant("BAILEYS_NORMALIZED", baileysNormalized)
+    addVariant("REGISTRATION_CANONICAL", registrationCanonical)
+
+    const baseForParts = registrationCanonical || baileysNormalized || String(baseIdentity || "").trim().toLowerCase()
+    const userPart = baseForParts.includes("@") ? baseForParts.split("@")[0] : baseForParts
+    const userPartWithoutDevice = String(userPart || "").split(":")[0]
+    const digitsOnly = userPartWithoutDevice.replace(/\D+/g, "")
+
+    addVariant("NO_DEVICE_SWHATSAPP", userPartWithoutDevice ? `${userPartWithoutDevice}@s.whatsapp.net` : "")
+    addVariant("NO_DEVICE_LID", userPartWithoutDevice ? `${userPartWithoutDevice}@lid` : "")
+    addVariant("DIGITS_SWHATSAPP", digitsOnly ? `${digitsOnly}@s.whatsapp.net` : "")
+    addVariant("DIGITS_LID", digitsOnly ? `${digitsOnly}@lid` : "")
+    addVariant("PHONE_ONLY", digitsOnly, { mentionable: false })
+
+    aliasList.forEach((alias, index) => {
+      addVariant(`REG_ALIAS_${index + 1}`, alias)
+    })
+
+    const mentionSet = new Set()
+    const seenFirstIndexByValue = new Map()
+    const lines = [
+      "Teste de remenção (variantes da identidade mencionada):",
+      "",
+    ]
+
+    variants.forEach((variant, index) => {
+      const mentionTag = variant.mentionable
+        ? `@${String(variant.value).split("@")[0].split(":")[0]}`
+        : variant.value
+
+      const duplicateOf = seenFirstIndexByValue.has(variant.value)
+        ? seenFirstIndexByValue.get(variant.value) + 1
+        : 0
+
+      if (!seenFirstIndexByValue.has(variant.value)) {
+        seenFirstIndexByValue.set(variant.value, index)
+      }
+
+      lines.push(
+        `${index + 1}. [${variant.label}] ${mentionTag}` +
+        (duplicateOf ? ` (duplica ${duplicateOf})` : "")
+      )
+      lines.push(`   id: ${variant.value}`)
+
+      if (variant.mentionable) {
+        mentionSet.add(variant.value)
+      }
+    })
+
+    await sock.sendMessage(from, {
+      text: lines.join("\n"),
+      mentions: Array.from(mentionSet),
+    })
+
+    trackUtility("teste", "success", {
+      target: baseIdentity,
+      variants: variants.length,
+      mentionTargets: mentionSet.size,
+    })
+    return true
+  }
+
   if (cmd === prefix + "perf") {
     function parseMessageTimestampMs(ts) {
       if (typeof ts === "number") return ts * 1000

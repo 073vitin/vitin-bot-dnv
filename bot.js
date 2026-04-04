@@ -881,58 +881,6 @@ function shouldAppendMassMentionHint(messageContent = {}) {
   return true
 }
 
-function normalizeOutgoingMentionId(value = "") {
-  const raw = String(value || "").trim()
-  if (!raw) return ""
-
-  const normalizedByRegistration = typeof registrationService?.normalizeUserId === "function"
-    ? registrationService.normalizeUserId(raw)
-    : ""
-  const normalizedByBaileys = jidNormalizedUser(raw)
-  return String(normalizedByRegistration || normalizedByBaileys || raw).trim().toLowerCase()
-}
-
-function buildMentionTextTag(userId = "") {
-  const normalized = normalizeOutgoingMentionId(userId)
-  if (!normalized) return ""
-  const userPart = normalized.includes("@") ? normalized.split("@")[0] : normalized
-  const withoutDevice = userPart.split(":")[0]
-  const digits = withoutDevice.replace(/\D+/g, "")
-  return digits || withoutDevice
-}
-
-function normalizeOutgoingMentions(messageContent = {}) {
-  if (!messageContent || typeof messageContent !== "object") return
-  if (!Array.isArray(messageContent.mentions) || messageContent.mentions.length === 0) return
-
-  const normalizedMentions = Array.from(new Set(
-    messageContent.mentions
-      .map((value) => normalizeOutgoingMentionId(value))
-      .filter(Boolean)
-  ))
-  if (normalizedMentions.length === 0) return
-  messageContent.mentions = normalizedMentions
-
-  if (typeof messageContent.text !== "string" || !messageContent.text.includes("@")) return
-
-  let text = messageContent.text
-  for (const mentionId of normalizedMentions) {
-    const fullUserPart = String(mentionId).split("@")[0] || ""
-    const withoutDevice = fullUserPart.split(":")[0]
-    const tag = buildMentionTextTag(mentionId)
-    if (!tag) continue
-
-    if (fullUserPart && fullUserPart !== tag) {
-      text = text.replaceAll(`@${fullUserPart}`, `@${tag}`)
-    }
-    if (withoutDevice && withoutDevice !== fullUserPart && withoutDevice !== tag) {
-      text = text.replaceAll(`@${withoutDevice}`, `@${tag}`)
-    }
-  }
-
-  messageContent.text = text
-}
-
 function isEconomyCommandName(cmdName = "", cmd = "") {
   const economyCommands = new Set([
     prefix + "economia",
@@ -1961,12 +1909,9 @@ async function startBot(){
   const originalSendMessage = sock.sendMessage.bind(sock)
   sock.sendMessage = async (...args) => {
     const messageContent = args[1]
-    if (messageContent && typeof messageContent === "object") {
-      normalizeOutgoingMentions(messageContent)
-      if (shouldAppendMassMentionHint(messageContent)) {
-        const baseText = String(messageContent.text || "").trimEnd()
-        messageContent.text = `${baseText}\n\n${MASS_MENTION_OPT_OUT_HINT}`
-      }
+    if (messageContent && typeof messageContent === "object" && shouldAppendMassMentionHint(messageContent)) {
+      const baseText = String(messageContent.text || "").trimEnd()
+      messageContent.text = `${baseText}\n\n${MASS_MENTION_OPT_OUT_HINT}`
     }
 
     const startedAt = Date.now()
