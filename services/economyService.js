@@ -58,7 +58,7 @@ const { DAILY_QUEST_POOL, WEEKLY_QUEST_POOL } = require("./questPools")
 const PUNISHMENT_TYPE_NAMES = {
   1: "max. 5 caracteres",
   2: "1 msg/20s",
-  3: "bloqueio 2 letras",
+  3: "bloqueio por letras",
   4: "somente emojis/figurinhas",
   5: "mute total",
   6: "sem vogais",

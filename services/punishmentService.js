@@ -59,7 +59,7 @@ function getPunishmentNameById(punishmentId) {
   const normalizedId = normalizePunishmentId(punishmentId)
   if (normalizedId === "1") return "máx. 5 caracteres"
   if (normalizedId === "2") return "1 mensagem/20s"
-  if (normalizedId === "3") return "bloqueio por 2 letras (indefinido)"
+  if (normalizedId === "3") return "bloqueio por letras (indefinido)"
   if (normalizedId === "4") return "somente emojis e figurinhas"
   if (normalizedId === "5") return "mute total"
   if (normalizedId === "6") return "sem vogais"
@@ -553,12 +553,6 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
   if (normalizedPunishmentId === "3") {
     const letters = getRandomDifferentLetters(severityMultiplier + 1)
     const uppercaseLetters = letters.map((letter) => letter.toUpperCase())
-    const lettersLabel = uppercaseLetters.join(" / ")
-    const compactExample = uppercaseLetters.join("")
-    const spacedExample = uppercaseLetters.join(" ")
-    const lineBreakExample = uppercaseLetters.length > 1
-      ? `${uppercaseLetters[0]}\n${uppercaseLetters.slice(1).join("")}`
-      : uppercaseLetters[0]
     const invalidChar = LETTER_ALPHABET
       .split("")
       .find((ch) => !letters.includes(ch))
@@ -571,7 +565,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
       type: "lettersBlock",
       letters
     }
-    warningText = `${mentionTag}, punição ativada: letras bloqueadas *${lettersLabel}* (indefinido). Para sair, envie *UMA* mensagem que contenha *todas* essas letras (pelo menos 1x cada), usando apenas essas letras + espaços/quebras de linha. Se faltar 1 letra ou tiver qualquer caractere extra, a mensagem é apagada. Exemplos válidos: "${spacedExample}", "${compactExample}", "${lineBreakExample}". Exemplo inválido: "${invalidExample}".`
+    warningText = `${mentionTag}, punição ativada: letras bloqueadas (indefinido).\nPara sair, envie *UMA* mensagem que contenha *todas* as letras bloqueadas, pelo menos 1x cada, usando apenas essas letras + espaços/quebras de linha.\nSe faltar 1 letra ou tiver qualquer caractere extra, a mensagem é apagada.\nExemplos válidos (supondo que as letras bloqueadas são A, B, C, D, E):\n"A B C D E", "ABCDE". Exemplo inválido: "ABCDEF".`
   }
 
   if (normalizedPunishmentId === "4") {
