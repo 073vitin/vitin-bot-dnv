@@ -77,7 +77,7 @@ function getPunishmentMenuText() {
     "Escolha a punição digitando um número de *1* a *13*:",
     "1. Mensagens com no máximo 5 caracteres por 5 minutos.",
     "2. Máximo de 1 mensagem a cada 20 segundos por 10 minutos.",
-    "3. Bloqueio por duas letras aleatórias (indefinido até cumprir condição de saída).",
+    "3. Bloqueio por letras aleatórias (indefinido até enviar UMA mensagem contendo TODAS as letras bloqueadas; só letras bloqueadas + espaços/quebras de linha são aceitos).",
     "4. Só pode enviar emojis e figurinhas por 5 minutos.",
     "5. Mute total por 5 minutos (tudo que enviar será apagado).",
     "6. Sem vogais por 5 minutos (severidade escala tempo em 1.5x).",
@@ -104,7 +104,8 @@ function getPunishmentDetailsText() {
     "- Duração: 10 minutos x severidade.",
     "",
     "3. Bloqueio de letras",
-    "- Regra: mensagem com letras bloqueadas é apagada.",
+    "- Regra: só passa UMA mensagem contendo todas as letras bloqueadas (ao menos 1x cada), aceitando apenas essas letras + espaços/quebras de linha.",
+    "- Se faltar letra ou tiver qualquer caractere extra, a mensagem é apagada.",
     "- Escala: +1 letra proibida por severidade.",
     "- Término: indefinido, encerra ao cumprir condição de saída.",
     "",
@@ -193,17 +194,23 @@ function isStickerMessage(msg = null) {
 }
 
 function isUnlockLettersMessage(text = "", letters = []) {
-  const normalized = text.toLowerCase().replace(/\s+/g, "")
-  if (!normalized) return false
-  for (const ch of normalized) {
-    if (!letters.includes(ch)) return false
-  }
-  return true
-}
+  const requiredLetters = [...new Set((letters || [])
+    .map((letter) => String(letter || "").trim().toLowerCase())
+    .filter((letter) => /^[a-z]$/.test(letter))
+  )]
+  if (!requiredLetters.length) return false
 
-function containsPunishmentLetters(text = "", letters = []) {
-  const normalized = text.toLowerCase()
-  return letters.some((letter) => normalized.includes(letter))
+  const raw = String(text || "").toLowerCase()
+  if (!raw.trim()) return false
+
+  const seen = new Set()
+  for (const ch of raw) {
+    if (/\s/.test(ch)) continue
+    if (!requiredLetters.includes(ch)) return false
+    seen.add(ch)
+  }
+
+  return requiredLetters.every((letter) => seen.has(letter))
 }
 
 function countWordTokensStrict(text = "") {
@@ -544,11 +551,26 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
 
   if (normalizedPunishmentId === "3") {
     const letters = getRandomDifferentLetters(severityMultiplier + 1)
+    const uppercaseLetters = letters.map((letter) => letter.toUpperCase())
+    const lettersLabel = uppercaseLetters.join(" / ")
+    const compactExample = uppercaseLetters.join("")
+    const spacedExample = uppercaseLetters.join(" ")
+    const lineBreakExample = uppercaseLetters.length > 1
+      ? `${uppercaseLetters[0]}\n${uppercaseLetters.slice(1).join("")}`
+      : uppercaseLetters[0]
+    const invalidChar = LETTER_ALPHABET
+      .split("")
+      .find((ch) => !letters.includes(ch))
+      ?.toUpperCase() || "B"
+    const invalidExample = uppercaseLetters.length > 1
+      ? `${uppercaseLetters[0]} ${invalidChar}${uppercaseLetters.slice(1).join("")}`
+      : `${uppercaseLetters[0]}${invalidChar}`
+
     punishmentState = {
       type: "lettersBlock",
       letters
     }
-    warningText = `${mentionTag}, punição ativada: qualquer mensagem sua contendo ao menos 1 de *${letters.length}* letras selecionadas aleatoriamente será apagada. Isso é *indefinido* e só acaba quando você enviar uma mensagem contendo apenas letras permitidas da própria punição.`
+    warningText = `${mentionTag}, punição ativada: letras bloqueadas *${lettersLabel}* (indefinido). Para sair, envie *UMA* mensagem que contenha *todas* essas letras (pelo menos 1x cada), usando apenas essas letras + espaços/quebras de linha. Se faltar 1 letra ou tiver qualquer caractere extra, a mensagem é apagada. Exemplos válidos: "${spacedExample}", "${compactExample}", "${lineBreakExample}". Exemplo inválido: "${invalidExample}".`
   }
 
   if (normalizedPunishmentId === "4") {
@@ -838,8 +860,8 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
       })
       return false
     }
-    shouldDelete = containsPunishmentLetters(text, letters)
-    console.log("[punishment] handlePunishmentEnforcement - lettersBlock - contains blocked letters?", { shouldDelete })
+    shouldDelete = true
+    console.log("[punishment] handlePunishmentEnforcement - lettersBlock - invalid unlock message, deleting")
   }
 
   if (punishment.type === "emojiOnly") {

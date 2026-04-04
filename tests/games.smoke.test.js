@@ -350,6 +350,61 @@ test("punishment enforcement matches @lid and @s variants for same user", async 
   punishmentService.clearPunishment(groupId, targetS)
 })
 
+test("lettersBlock requires all blocked letters and only blocked letters plus whitespace", async () => {
+  const groupId = `__punishment_letters_unlock_${Date.now()}@g.us`
+  const target = "letters@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+
+  const active = storage.getActivePunishments()
+  if (!active[groupId]) active[groupId] = {}
+  active[groupId][target] = {
+    type: "lettersBlock",
+    letters: ["a", "d", "f"],
+  }
+  storage.setActivePunishments(active)
+
+  const enforcedMissingLetter = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-missing", remoteJid: groupId, fromMe: false, participant: target } },
+    groupId,
+    target,
+    "A D",
+    true,
+    false,
+    true
+  )
+
+  const enforcedWrongLetter = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-wrong", remoteJid: groupId, fromMe: false, participant: target } },
+    groupId,
+    target,
+    "A BDF",
+    true,
+    false,
+    true
+  )
+
+  const unlocked = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-unlock", remoteJid: groupId, fromMe: false, participant: target } },
+    groupId,
+    target,
+    "A\nDF",
+    true,
+    false,
+    true
+  )
+
+  assert.equal(enforcedMissingLetter, true)
+  assert.equal(enforcedWrongLetter, true)
+  assert.equal(unlocked, false)
+  assert.ok(sent.some((entry) => entry.payload?.delete?.id === "msg-missing"))
+  assert.ok(sent.some((entry) => entry.payload?.delete?.id === "msg-wrong"))
+  assert.ok(sent.some((entry) => /foi liberado da punição das letras/i.test(String(entry.payload?.text || ""))))
+  assert.equal(Boolean(storage.getActivePunishments()[groupId]?.[target]), false)
+})
+
 test("punishment linear 1.5x scaling is applied instead of exponential growth", async () => {
   const groupId = `__punishment_linear_scale_${Date.now()}@g.us`
   const target = "target@s.whatsapp.net"

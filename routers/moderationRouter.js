@@ -910,22 +910,39 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
-    const filters = storage.getGroupFilters(from)
-    filters.push({
+    const filterEntry = {
       text: filterText,
       addedAt: Date.now(),
       addedBy: sender,
       addedByName: String(senderName || "").trim() || sender.split("@")[0],
-    })
-    storage.setGroupFilters(from, filters)
+    }
+
+    let createdIndex = 0
+    let createdAt = filterEntry.addedAt
+
+    if (typeof storage.addGroupFilter === "function") {
+      const addResult = storage.addGroupFilter(from, filterEntry)
+      if (!addResult?.ok) {
+        trackModeration("filtroadd", "rejected", { reason: "storage-add-failed" })
+        await sock.sendMessage(from, { text: "Não foi possível salvar o filtro no storage." })
+        return true
+      }
+      createdIndex = Number(addResult.index) || 0
+      createdAt = Number(addResult.entry?.addedAt) || createdAt
+    } else {
+      const filters = storage.getGroupFilters(from)
+      filters.push(filterEntry)
+      storage.setGroupFilters(from, filters)
+      createdIndex = filters.length
+    }
 
     await sock.sendMessage(from, { text: "Filtro adicionado. Confira sua DM para confirmação." })
     await sock.sendMessage(sender, {
       text:
         `✅ Filtro adicionado com sucesso.\n` +
-        `Índice: ${filters.length}\n` +
+        `Índice: ${createdIndex}\n` +
         `Texto: "${filterText}"\n` +
-        `Adicionado em: ${formatUtcMinus3(Date.now())}`,
+        `Adicionado em: ${formatUtcMinus3(createdAt)}`,
     })
 
     setTimeout(async () => {
@@ -936,7 +953,7 @@ async function handleModerationCommands(ctx) {
       }
     }, 5000)
 
-    trackModeration("filtroadd", "success", { index: filters.length })
+    trackModeration("filtroadd", "success", { index: createdIndex })
     return true
   }
 
@@ -958,8 +975,21 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
-    const [removed] = filters.splice(index - 1, 1)
-    storage.setGroupFilters(from, filters)
+    let removed = null
+    if (typeof storage.removeGroupFilter === "function") {
+      const removeResult = storage.removeGroupFilter(from, index)
+      if (!removeResult?.ok) {
+        trackModeration("filtroremove", "rejected", { reason: "storage-remove-failed" })
+        await sock.sendMessage(from, { text: "Não foi possível remover o filtro do storage." })
+        return true
+      }
+      removed = removeResult.removed
+    } else {
+      const [fallbackRemoved] = filters.splice(index - 1, 1)
+      storage.setGroupFilters(from, filters)
+      removed = fallbackRemoved
+    }
+
     await sock.sendMessage(from, { text: `Filtro removido (#${index}): "${removed?.text || "-"}"` })
     trackModeration("filtroremove", "success", { index })
     return true

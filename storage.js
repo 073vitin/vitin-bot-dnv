@@ -57,7 +57,13 @@ function loadState() {
     if (fs.existsSync(STORAGE_FILE)) {
       const data = JSON.parse(fs.readFileSync(STORAGE_FILE, "utf8"))
       stateCache = { ...stateCache, ...data }
+      const normalizedFilters = sanitizeGroupFiltersMap(stateCache.groupFilters)
+      const filtersChanged = JSON.stringify(stateCache.groupFilters || {}) !== JSON.stringify(normalizedFilters)
+      stateCache.groupFilters = normalizedFilters
       console.log("Estado carregado do disco")
+      if (filtersChanged) {
+        saveState(true)
+      }
     }
   } catch (err) {
     console.error("Erro ao carregar estado:", err)
@@ -88,6 +94,45 @@ function saveState(immediate = false) {
     clearTimeout(saveTimeout)
     saveTimeout = setTimeout(doSave, 5000) // salva após 5 segundos de inatividade
   }
+}
+
+function sanitizeGroupFilterEntry(entry = {}) {
+  const rawEntry = typeof entry === "string"
+    ? { text: entry }
+    : (entry && typeof entry === "object" ? entry : null)
+  if (!rawEntry) return null
+
+  const text = String(rawEntry.text || "").trim()
+  if (!text) return null
+
+  const addedAtRaw = Number(rawEntry.addedAt)
+  return {
+    text,
+    addedAt: Number.isFinite(addedAtRaw) && addedAtRaw > 0 ? Math.floor(addedAtRaw) : 0,
+    addedBy: String(rawEntry.addedBy || "").trim(),
+    addedByName: String(rawEntry.addedByName || "").trim(),
+  }
+}
+
+function sanitizeGroupFilterList(list = []) {
+  const source = Array.isArray(list) ? list : []
+  const sanitized = []
+  for (const entry of source) {
+    const normalized = sanitizeGroupFilterEntry(entry)
+    if (normalized) sanitized.push(normalized)
+  }
+  return sanitized
+}
+
+function sanitizeGroupFiltersMap(map = {}) {
+  const source = map && typeof map === "object" ? map : {}
+  const sanitized = {}
+  for (const [groupIdRaw, listRaw] of Object.entries(source)) {
+    const groupId = String(groupIdRaw || "").trim()
+    if (!groupId) continue
+    sanitized[groupId] = sanitizeGroupFilterList(listRaw)
+  }
+  return sanitized
 }
 
 // Funções de leitura e escrita para cada tipo de estado
@@ -331,18 +376,68 @@ const storage = {
 
   // Filtros de moderação por grupo
   getGroupFilters: (groupId) => {
-    if (groupId === undefined) return stateCache.groupFilters
-    const list = stateCache.groupFilters[groupId]
-    return Array.isArray(list) ? [...list] : []
+    if (groupId === undefined) return sanitizeGroupFiltersMap(stateCache.groupFilters)
+    const key = String(groupId || "").trim()
+    if (!key) return []
+    const list = stateCache.groupFilters[key]
+    return sanitizeGroupFilterList(list)
   },
   setGroupFilters: (groupIdOrData, maybeData) => {
     if (maybeData === undefined) {
-      stateCache.groupFilters = groupIdOrData || {}
+      stateCache.groupFilters = sanitizeGroupFiltersMap(groupIdOrData)
       saveState()
       return
     }
-    stateCache.groupFilters[groupIdOrData] = Array.isArray(maybeData) ? maybeData : []
+    const key = String(groupIdOrData || "").trim()
+    if (!key) return
+    stateCache.groupFilters[key] = sanitizeGroupFilterList(maybeData)
+    if (stateCache.groupFilters[key].length === 0) {
+      delete stateCache.groupFilters[key]
+    }
     saveState()
+  },
+  addGroupFilter: (groupId, filterEntry = {}) => {
+    const key = String(groupId || "").trim()
+    if (!key) return { ok: false, reason: "invalid-group" }
+    const normalizedEntry = sanitizeGroupFilterEntry(filterEntry)
+    if (!normalizedEntry) return { ok: false, reason: "invalid-filter" }
+
+    const current = sanitizeGroupFilterList(stateCache.groupFilters[key])
+    current.push(normalizedEntry)
+    stateCache.groupFilters[key] = current
+    saveState()
+
+    return {
+      ok: true,
+      index: current.length,
+      count: current.length,
+      entry: { ...normalizedEntry },
+    }
+  },
+  removeGroupFilter: (groupId, index) => {
+    const key = String(groupId || "").trim()
+    if (!key) return { ok: false, reason: "invalid-group", count: 0 }
+
+    const current = sanitizeGroupFilterList(stateCache.groupFilters[key])
+    const parsedIndex = Number.parseInt(String(index || ""), 10)
+    if (!Number.isFinite(parsedIndex) || parsedIndex <= 0 || parsedIndex > current.length) {
+      return { ok: false, reason: "invalid-index", count: current.length }
+    }
+
+    const [removed] = current.splice(parsedIndex - 1, 1)
+    if (current.length === 0) {
+      delete stateCache.groupFilters[key]
+    } else {
+      stateCache.groupFilters[key] = current
+    }
+    saveState()
+
+    return {
+      ok: true,
+      index: parsedIndex,
+      count: current.length,
+      removed,
+    }
   },
 
   // Progressão por jogador (base para temporadas/equipes/trades)
