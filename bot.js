@@ -3393,20 +3393,24 @@ setTimeout(() => {
         !hasIdentityAliasOverlap(botIdentityAliasSet, sender) &&
         !((senderIsAdmin || isOverrideSender) && isCommand)
       ) {
-        if (!botIsAdmin) {
-          console.log("[bot] mutedDelete - botIsAdmin flag is false; attempting delete anyway")
-        }
-        let deleteSucceeded = false
-        await measureStage("mutedDelete", async () => {
-          try {
-            await sock.sendMessage(from, { delete: msg.key })
-            deleteSucceeded = true
-          } catch (e) {
-            console.error("Erro ao apagar mensagem de usuário mutado", e)
+        if (hasIdentityAliasOverlap(botIdentityAliasSet, sender)) {
+          console.log("[bot] mutedDelete - skipping: sender is the bot itself")
+        } else {
+          if (!botIsAdmin) {
+            console.log("[bot] mutedDelete - botIsAdmin flag is false; attempting delete anyway")
           }
-        })
-        if (!deleteSucceeded) {
-          console.log("[bot] mutedDelete - delete attempt failed; keeping message blocked")
+          let deleteSucceeded = false
+          await measureStage("mutedDelete", async () => {
+            try {
+              await sock.sendMessage(from, { delete: msg.key })
+              deleteSucceeded = true
+            } catch (e) {
+              console.error("Erro ao apagar mensagem de usuário mutado", e)
+            }
+          })
+          if (!deleteSucceeded) {
+            console.log("[bot] mutedDelete - delete attempt failed; keeping message blocked")
+          }
         }
         return
       }

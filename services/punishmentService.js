@@ -716,9 +716,14 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
     return false
   }
 
-  // Phase 8 kickoff: anti letter-dump detection (4-5 sequential single-letter attempts)
-  const singleLetter = isSingleLetterMessage(text)
+  const botUserId = normalizeUserId(sock?.user?.id || "")
   const senderId = normalizeUserId(sender) || String(sender || "")
+  if (botUserId && senderId && identitiesMatch(normalizeUserId(sender), botUserId)) {
+    console.log("[punishment] handlePunishmentEnforcement - skipping: sender is the bot itself")
+    return false
+  }
+
+  const singleLetter = isSingleLetterMessage(text)
 
   if (singleLetter && !LETTER_DUMP_WHITELIST.has(singleLetter)) {
     const dumpState = storage.getGameState(from, LETTER_DUMP_STATE_KEY) || {}
