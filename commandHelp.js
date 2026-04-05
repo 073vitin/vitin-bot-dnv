@@ -685,12 +685,14 @@ blackjack: {
   vote: {
     name: "Votar",
     aliases: ["vote"],
-    description: "Inicia votação para mutar/banir um usuário",
-    usage: "!vote @user",
+    description: "Inicia votação para mutar ou banir um usuário",
+    usage: "!vote @user [M|B]",
     commonUsage: [
-      "!vote @usuario - Votar para punir",
+      "!vote @usuario M - Votar para mutar",
+      "!vote @usuario B - Votar para banir",
+      "!vote @usuario - Votar para mutar (padrão)",
     ],
-    details: "Quando atinge o limiar, usuário é mutado (90%) ou banido (10%).",
+    details: "Quando atinge o limiar, usuário é mutado ou banido conforme especificado. Vote dura 24 horas.",
   },
 
   voteset: {

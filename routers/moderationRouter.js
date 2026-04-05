@@ -28,7 +28,7 @@ async function handleModerationCommands(ctx) {
     senderName,
   } = ctx
 
-  const VOTE_SESSION_TTL_MS = 15 * 60_000
+  const VOTE_SESSION_TTL_MS = 24 * 60 * 60 * 1000
 
   if (!isGroup) return false
 
@@ -340,7 +340,7 @@ async function handleModerationCommands(ctx) {
   if (cmdName === prefix + "vote") {
     const target = mentioned[0]
     if (!target) {
-      await sock.sendMessage(from, { text: "Use: !vote @user" })
+      await sock.sendMessage(from, { text: "Use: !vote @user [M|B]" })
       trackModeration("vote", "rejected", { reason: "missing-target" })
       return true
     }
@@ -356,6 +356,10 @@ async function handleModerationCommands(ctx) {
       trackModeration("vote", "rejected", { reason: "target-override" })
       return true
     }
+
+    // Extract punishment type from arguments (M for mute, B for ban), default to M
+    const punishmentArg = String(cmdArg1 || "").toUpperCase()
+    const punishmentType = punishmentArg === "B" ? "ban" : "mute"
 
     const now = Date.now()
     const threshold = storage.getGroupVoteThreshold(from)
@@ -376,6 +380,7 @@ async function handleModerationCommands(ctx) {
         createdAt: now,
         expiresAt: now + VOTE_SESSION_TTL_MS,
         createdBy: sender,
+        punishmentType,
         votesBy: {},
       }
       sessions[target] = session
@@ -401,16 +406,15 @@ async function handleModerationCommands(ctx) {
         text: `🗳️ Voto registrado para ${formatMentionTag(target)}: *${totalVotes}/${threshold}*`,
         mentions: normalizeMentionArray([target]),
       })
-      trackModeration("vote", "success", { target, totalVotes, threshold, resolved: false })
+      trackModeration("vote", "success", { target, totalVotes, threshold, resolved: false, punishmentType })
       return true
     }
 
-    // Threshold atingido: 90% mute, 10% ban.
+    // Threshold atingido: aplicar punição conforme tipo definido
     delete sessions[target]
     storage.setGroupVoteSessions(from, sessions)
 
-    const action = Math.random() < 0.9 ? "mute" : "ban"
-    if (action === "mute") {
+    if (punishmentType === "mute") {
       const mutedUsers = storage.getMutedUsers()
       if (!mutedUsers[from]) mutedUsers[from] = {}
       mutedUsers[from][target] = true
@@ -423,6 +427,7 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
+    // punishmentType === "ban"
     try {
       await sock.groupParticipantsUpdate(from, [target], "remove")
       await sock.sendMessage(from, {
