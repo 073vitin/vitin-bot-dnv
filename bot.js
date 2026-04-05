@@ -141,6 +141,160 @@ const groupNameCache = {}
 const userNameCache = {}
 const botAdminFlagWarningByGroup = new Map()
 const terminalMirrorLines = []
+const messageQueueByChat = new Map()
+const processedMessageCacheByChat = new Map()
+const MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000
+const MESSAGE_DEDUPE_MAX_KEYS = 600
+
+function unwrapMessageContent(message = null) {
+  let current = message
+  let safety = 0
+
+  while (current && typeof current === "object" && safety < 12) {
+    safety += 1
+
+    if (current.ephemeralMessage?.message) {
+      current = current.ephemeralMessage.message
+      continue
+    }
+    if (current.viewOnceMessage?.message) {
+      current = current.viewOnceMessage.message
+      continue
+    }
+    if (current.viewOnceMessageV2?.message) {
+      current = current.viewOnceMessageV2.message
+      continue
+    }
+    if (current.viewOnceMessageV2Extension?.message) {
+      current = current.viewOnceMessageV2Extension.message
+      continue
+    }
+    if (current.documentWithCaptionMessage?.message) {
+      current = current.documentWithCaptionMessage.message
+      continue
+    }
+    if (current.editedMessage?.message) {
+      current = current.editedMessage.message
+      continue
+    }
+
+    break
+  }
+
+  return current || null
+}
+
+function getMessageContextInfo(message = {}) {
+  const carriers = [
+    message?.extendedTextMessage,
+    message?.imageMessage,
+    message?.videoMessage,
+    message?.documentMessage,
+    message?.buttonsResponseMessage,
+    message?.listResponseMessage,
+    message?.templateButtonReplyMessage,
+    message?.interactiveResponseMessage,
+  ]
+
+  for (const carrier of carriers) {
+    if (carrier?.contextInfo) return carrier.contextInfo
+  }
+
+  return {}
+}
+
+function extractMessageText(message = {}) {
+  return String(
+    message?.conversation ||
+    message?.extendedTextMessage?.text ||
+    message?.imageMessage?.caption ||
+    message?.videoMessage?.caption ||
+    message?.documentMessage?.caption ||
+    message?.buttonsResponseMessage?.selectedButtonId ||
+    message?.listResponseMessage?.singleSelectReply?.selectedRowId ||
+    message?.templateButtonReplyMessage?.selectedId ||
+    ""
+  )
+}
+
+function getMessageQueueKey(msg = {}) {
+  const remoteJid = String(msg?.key?.remoteJid || "").trim()
+  return remoteJid || "global"
+}
+
+function getMessageDedupeKey(msg = {}) {
+  const remoteJid = String(msg?.key?.remoteJid || "").trim()
+  const participant = String(msg?.key?.participant || "").trim()
+  const messageId = String(msg?.key?.id || "").trim()
+  if (remoteJid && messageId) {
+    return `${remoteJid}:${participant}:${messageId}`
+  }
+
+  const timestampMs = parseMessageTimestampMs(msg)
+  if (remoteJid && timestampMs > 0) {
+    return `${remoteJid}:${participant}:ts:${timestampMs}`
+  }
+
+  return ""
+}
+
+function pruneProcessedMessageCache(queueKey = "") {
+  if (!queueKey) return
+  const cache = processedMessageCacheByChat.get(queueKey)
+  if (!cache) return
+
+  const now = Date.now()
+  for (const [dedupeKey, storedAt] of cache.entries()) {
+    if (!Number.isFinite(storedAt) || (now - storedAt) > MESSAGE_DEDUPE_TTL_MS) {
+      cache.delete(dedupeKey)
+    }
+  }
+
+  while (cache.size > MESSAGE_DEDUPE_MAX_KEYS) {
+    const firstKey = cache.keys().next().value
+    if (!firstKey) break
+    cache.delete(firstKey)
+  }
+
+  if (cache.size === 0) {
+    processedMessageCacheByChat.delete(queueKey)
+  }
+}
+
+function hasProcessedMessage(queueKey = "", dedupeKey = "") {
+  if (!queueKey || !dedupeKey) return false
+  pruneProcessedMessageCache(queueKey)
+  const cache = processedMessageCacheByChat.get(queueKey)
+  if (!cache) return false
+  return cache.has(dedupeKey)
+}
+
+function rememberProcessedMessage(queueKey = "", dedupeKey = "") {
+  if (!queueKey || !dedupeKey) return
+  let cache = processedMessageCacheByChat.get(queueKey)
+  if (!cache) {
+    cache = new Map()
+    processedMessageCacheByChat.set(queueKey, cache)
+  }
+  cache.set(dedupeKey, Date.now())
+  pruneProcessedMessageCache(queueKey)
+}
+
+function enqueueMessageByKey(queueKey = "global", task = async () => {}) {
+  const key = String(queueKey || "").trim() || "global"
+  const previous = messageQueueByChat.get(key) || Promise.resolve()
+  const next = previous
+    .catch(() => {})
+    .then(async () => task())
+    .finally(() => {
+      if (messageQueueByChat.get(key) === next) {
+        messageQueueByChat.delete(key)
+      }
+    })
+  messageQueueByChat.set(key, next)
+  return next
+}
+
 function execFileAsync(file, args = [], options = {}) {
   return new Promise((resolve, reject) => {
     execFile(file, args, options, (error, stdout, stderr) => {
@@ -1607,7 +1761,7 @@ app.get("/", (req,res)=>{
               .replace(/&/g, "&amp;")
               .replace(/</g, "&lt;")
               .replace(/>/g, "&gt;")
-              .replace(/\\"/g, "&quot;")
+              .replace(/"/g, "&quot;")
               .replace(/'/g, "&#39;")
           }
 
@@ -1640,24 +1794,24 @@ app.get("/", (req,res)=>{
 
           function renderMetricRow(label, bucket) {
             return "<tr>" +
-              "<td style=\\"text-align:left;border-bottom:1px solid #eee;padding:4px\\">" + escapeHtml(label) + "</td>" +
-              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + Number(readPath(bucket, ["count"], 0)) + "</td>" +
-              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + formatMs(readPath(bucket, ["lastMs"], 0)) + "</td>" +
-              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + formatMs(readPath(bucket, ["avgMs"], 0)) + "</td>" +
-              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + formatMs(readPath(bucket, ["p95Ms"], 0)) + "</td>" +
-              "<td style=\\"text-align:right;border-bottom:1px solid #eee;padding:4px\\">" + formatMs(readPath(bucket, ["maxMs"], 0)) + "</td>" +
+              "<td style=\"text-align:left;border-bottom:1px solid #eee;padding:4px\">" + escapeHtml(label) + "</td>" +
+              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + Number(readPath(bucket, ["count"], 0)) + "</td>" +
+              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(readPath(bucket, ["lastMs"], 0)) + "</td>" +
+              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(readPath(bucket, ["avgMs"], 0)) + "</td>" +
+              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(readPath(bucket, ["p95Ms"], 0)) + "</td>" +
+              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(readPath(bucket, ["maxMs"], 0)) + "</td>" +
             "</tr>"
           }
 
           function renderQr(authReady, qrImage) {
             if (!authReady && qrImage) {
               qrSectionEl.style.display = "block"
-              qrSectionEl.innerHTML = "<h3 style=\\"margin:0 0 10px 0\\">Escaneie o QR Code</h3>" +
-                "<img src=\\"" + qrImage + "\\" style=\\"max-width:320px;width:100%;height:auto\\">"
+              qrSectionEl.innerHTML = "<h3 style=\"margin:0 0 10px 0\">Escaneie o QR Code</h3>" +
+                "<img src=\"" + qrImage + "\" style=\"max-width:320px;width:100%;height:auto\">"
               return
             }
             qrSectionEl.style.display = "block"
-            qrSectionEl.innerHTML = "<h3 style=\\"margin:0\\">" + (authReady ? "Bot conectado" : "Aguardando autenticação") + "</h3>"
+            qrSectionEl.innerHTML = "<h3 style=\"margin:0\">" + (authReady ? "Bot conectado" : "Aguardando autenticação") + "</h3>"
           }
 
           function renderPerf(snapshot) {
@@ -1672,24 +1826,24 @@ app.get("/", (req,res)=>{
 
             perfSectionEl.style.display = "block"
             perfSectionEl.innerHTML =
-              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
-                "<h3 style=\\"margin:0 0 10px 0\\">Performance</h3>" +
-                "<p style=\\"margin:4px 0\\">Estado da conexão: <b>" + escapeHtml(snapshot.connectionState) + "</b></p>" +
+              "<section style=\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\">" +
+                "<h3 style=\"margin:0 0 10px 0\">Performance</h3>" +
+                "<p style=\"margin:4px 0\">Estado da conexão: <b>" + escapeHtml(snapshot.connectionState) + "</b></p>" +
                 "<p style=\"margin:4px 0\">Uptime do bot (sessão atual): <b>" + formatElapsed(snapshot.uptimeMs) + "</b> | Desde autenticação atual: <b>" + formatElapsed(snapshot.authUptimeMs) + "</b></p>" +
-                "<p style=\\"margin:4px 0\\">Autenticado em: <b>" + formatDateTime(snapshot.authenticatedAt) + "</b> | Conectado em: <b>" + formatDateTime(snapshot.connectedAt) + "</b></p>" +
-                "<p style=\\"margin:4px 0\\">Mensagens recebidas: <b>" + Number(snapshot.messagesReceived || 0) + "</b> | Erros: <b>" + Number(snapshot.messagesErrored || 0) + "</b> | Ignoradas (sem conteúdo): <b>" + Number(snapshot.ignoredNoMessage || 0) + "</b> | Ignoradas (fromMe): <b>" + Number(snapshot.ignoredFromMe || 0) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Lifetime desde <b>" + formatDateTime(readPath(snapshot, [\"lifetime\", \"sinceAt\"], 0)) + "</b>: mensagens <b>" + Number(readPath(snapshot, [\"lifetime\", \"messagesReceived\"], 0)) + "</b>, erros <b>" + Number(readPath(snapshot, [\"lifetime\", \"messagesErrored\"], 0)) + "</b>, ignoradas sem conteúdo <b>" + Number(readPath(snapshot, [\"lifetime\", \"ignoredNoMessage\"], 0)) + "</b>, ignoradas fromMe <b>" + Number(readPath(snapshot, [\"lifetime\", \"ignoredFromMe\"], 0)) + "</b>, comandos <b>" + Number(readPath(snapshot, [\"lifetime\", \"commandsExecuted\"], 0)) + "</b>, reconexões <b>" + Number(readPath(snapshot, [\"lifetime\", \"reconnects\"], 0)) + "</b>, uptime autenticado <b>" + formatElapsed(readPath(snapshot, [\"lifetime\", \"authUptimeMs\"], 0)) + "</b>, boots <b>" + Number(readPath(snapshot, [\"lifetime\", \"bootCount\"], 0)) + "</b></p>" +
-                "<p style=\\"margin:4px 0\\">Último comando: <b>" + escapeHtml(snapshot.lastCommand || "-") + "</b> | Último processamento: <b>" + formatDateTime(snapshot.lastProcessedAt) + "</b> | Reconexões: <b>" + Number(snapshot.reconnects || 0) + "</b></p>" +
-                "<p style=\\"margin:4px 0\\">Memória: heap <b>" + Number(readPath(snapshot, ["memory", "heapUsed"], 0)) + " MB</b> | rss <b>" + Number(readPath(snapshot, ["memory", "rss"], 0)) + " MB</b> | Registrados <b>" + Number(snapshot.registeredUsers || 0) + "</b></p>" +
-                "<table style=\\"width:100%;margin-top:12px;border-collapse:collapse;font-family:monospace;font-size:12px\\">" +
+                "<p style=\"margin:4px 0\">Autenticado em: <b>" + formatDateTime(snapshot.authenticatedAt) + "</b> | Conectado em: <b>" + formatDateTime(snapshot.connectedAt) + "</b></p>" +
+                "<p style=\"margin:4px 0\">Mensagens recebidas: <b>" + Number(snapshot.messagesReceived || 0) + "</b> | Erros: <b>" + Number(snapshot.messagesErrored || 0) + "</b> | Ignoradas (sem conteúdo): <b>" + Number(snapshot.ignoredNoMessage || 0) + "</b> | Ignoradas (fromMe): <b>" + Number(snapshot.ignoredFromMe || 0) + "</b></p>" +
+                "<p style=\"margin:4px 0\">Lifetime desde <b>" + formatDateTime(readPath(snapshot, ["lifetime", "sinceAt"], 0)) + "</b>: mensagens <b>" + Number(readPath(snapshot, ["lifetime", "messagesReceived"], 0)) + "</b>, erros <b>" + Number(readPath(snapshot, ["lifetime", "messagesErrored"], 0)) + "</b>, ignoradas sem conteúdo <b>" + Number(readPath(snapshot, ["lifetime", "ignoredNoMessage"], 0)) + "</b>, ignoradas fromMe <b>" + Number(readPath(snapshot, ["lifetime", "ignoredFromMe"], 0)) + "</b>, comandos <b>" + Number(readPath(snapshot, ["lifetime", "commandsExecuted"], 0)) + "</b>, reconexões <b>" + Number(readPath(snapshot, ["lifetime", "reconnects"], 0)) + "</b>, uptime autenticado <b>" + formatElapsed(readPath(snapshot, ["lifetime", "authUptimeMs"], 0)) + "</b>, boots <b>" + Number(readPath(snapshot, ["lifetime", "bootCount"], 0)) + "</b></p>" +
+                "<p style=\"margin:4px 0\">Último comando: <b>" + escapeHtml(snapshot.lastCommand || "-") + "</b> | Último processamento: <b>" + formatDateTime(snapshot.lastProcessedAt) + "</b> | Reconexões: <b>" + Number(snapshot.reconnects || 0) + "</b></p>" +
+                "<p style=\"margin:4px 0\">Memória: heap <b>" + Number(readPath(snapshot, ["memory", "heapUsed"], 0)) + " MB</b> | rss <b>" + Number(readPath(snapshot, ["memory", "rss"], 0)) + " MB</b> | Registrados <b>" + Number(snapshot.registeredUsers || 0) + "</b></p>" +
+                "<table style=\"width:100%;margin-top:12px;border-collapse:collapse;font-family:monospace;font-size:12px\">" +
                   "<thead>" +
                     "<tr>" +
-                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Métrica</th>" +
-                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Count</th>" +
-                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Last</th>" +
-                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Avg</th>" +
-                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">P95</th>" +
-                      "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Max</th>" +
+                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Métrica</th>" +
+                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Count</th>" +
+                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Last</th>" +
+                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Avg</th>" +
+                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">P95</th>" +
+                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Max</th>" +
                     "</tr>" +
                   "</thead>" +
                   "<tbody>" +
@@ -1715,33 +1869,33 @@ app.get("/", (req,res)=>{
               const command = readPath(entry, ["lastCommand", "command"], "-")
               const commandAt = formatDateTime(readPath(entry, ["lastCommand", "at"], 0))
               return "<tr>" +
-                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["waNumber"], "-")) + "</td>" +
-                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["waName"], "-")) + "</td>" +
-                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["nickname"], "-")) + "</td>" +
-                "<td style=\\"padding:4px;border-bottom:1px solid #ccc;text-align:right\\">" + Number(readPath(entry, ["coins"], 0)).toLocaleString("pt-BR") + "</td>" +
-                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(command) + "</td>" +
-                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(commandAt) + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["waNumber"], "-")) + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["waName"], "-")) + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["nickname"], "-")) + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc;text-align:right\">" + Number(readPath(entry, ["coins"], 0)).toLocaleString("pt-BR") + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(command) + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(commandAt) + "</td>" +
               "</tr>"
             }).join("")
 
             usersSectionEl.style.display = "block"
             usersSectionEl.innerHTML =
-              "<section style=\\"margin-top:20px;max-width:980px\\">" +
-                "<details open style=\\"padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa\\">" +
-                  "<summary style=\\"cursor:pointer;font-weight:700\\">Usuários registrados (" + users.length + ")</summary>" +
-                  "<div style=\\"margin-top:10px;overflow:auto\\">" +
-                    "<table style=\\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\\">" +
+              "<section style=\"margin-top:20px;max-width:980px\">" +
+                "<details open style=\"padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa\">" +
+                  "<summary style=\"cursor:pointer;font-weight:700\">Usuários registrados (" + users.length + ")</summary>" +
+                  "<div style=\"margin-top:10px;overflow:auto\">" +
+                    "<table style=\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\">" +
                       "<thead>" +
                         "<tr>" +
-                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">WhatsApp nº</th>" +
-                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Nome WhatsApp</th>" +
-                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Apelido escolhido</th>" +
-                          "<th style=\\"text-align:right;border-bottom:1px solid #ccc;padding:4px\\">Coins</th>" +
-                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Último comando</th>" +
-                          "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Quando</th>" +
+                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">WhatsApp nº</th>" +
+                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Nome WhatsApp</th>" +
+                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Apelido escolhido</th>" +
+                          "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Coins</th>" +
+                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Último comando</th>" +
+                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Quando</th>" +
                         "</tr>" +
                       "</thead>" +
-                      "<tbody>" + (rows || "<tr><td colspan=\\"6\\" style=\\"padding:6px\\">Sem usuários registrados.</td></tr>") + "</tbody>" +
+                      "<tbody>" + (rows || "<tr><td colspan=\"6\" style=\"padding:6px\">Sem usuários registrados.</td></tr>") + "</tbody>" +
                     "</table>" +
                   "</div>" +
                 "</details>" +
@@ -1756,27 +1910,27 @@ app.get("/", (req,res)=>{
 
             const rows = (snapshot.commandHistory || []).slice(-10).map((entry) =>
               "<tr>" +
-                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + formatDateTime(readPath(entry, ["at"], 0)) + "</td>" +
-                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["command"], "-")) + "</td>" +
-                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["senderName"], "-")) + "</td>" +
-                "<td style=\\"padding:4px;border-bottom:1px solid #ccc\\">" + escapeHtml(readPath(entry, ["groupName"], "-")) + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + formatDateTime(readPath(entry, ["at"], 0)) + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["command"], "-")) + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["senderName"], "-")) + "</td>" +
+                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["groupName"], "-")) + "</td>" +
               "</tr>"
             ).join("")
 
             commandsSectionEl.style.display = "block"
             commandsSectionEl.innerHTML =
-              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
-                "<h3 style=\\"margin:0 0 10px 0\\">Últimos 10 comandos</h3>" +
-                "<table style=\\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\\">" +
+              "<section style=\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\">" +
+                "<h3 style=\"margin:0 0 10px 0\">Últimos 10 comandos</h3>" +
+                "<table style=\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\">" +
                   "<thead>" +
                     "<tr>" +
-                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Quando</th>" +
-                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Comando</th>" +
-                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Usuário</th>" +
-                      "<th style=\\"text-align:left;border-bottom:1px solid #ccc;padding:4px\\">Grupo</th>" +
+                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Quando</th>" +
+                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Comando</th>" +
+                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Usuário</th>" +
+                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Grupo</th>" +
                     "</tr>" +
                   "</thead>" +
-                  "<tbody>" + (rows || "<tr><td colspan=\\"4\\" style=\\"padding:6px\\">Sem comandos registrados.</td></tr>") + "</tbody>" +
+                  "<tbody>" + (rows || "<tr><td colspan=\"4\" style=\"padding:6px\">Sem comandos registrados.</td></tr>") + "</tbody>" +
                 "</table>" +
               "</section>"
           }
@@ -1789,13 +1943,13 @@ app.get("/", (req,res)=>{
 
             const terminalText = (snapshot.terminalLines || []).map((line) => {
               return "[" + formatDateTime(readPath(line, ["at"], 0)) + "] " + readPath(line, ["source"], "log") + ": " + readPath(line, ["line"], "")
-            }).join("\\n") || "Sem saída capturada ainda."
+            }).join("\n") || "Sem saída capturada ainda."
 
             terminalSectionEl.style.display = "block"
             terminalSectionEl.innerHTML =
-              "<section style=\\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\\">" +
-                "<h3 style=\\"margin:0 0 10px 0\\">Terminal (somente leitura)</h3>" +
-                "<pre style=\\"max-height:260px;overflow:auto;background:#0d1117;color:#c9d1d9;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap\\">" + escapeHtml(terminalText) + "</pre>" +
+              "<section style=\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\">" +
+                "<h3 style=\"margin:0 0 10px 0\">Terminal (somente leitura)</h3>" +
+                "<pre style=\"max-height:260px;overflow:auto;background:#0d1117;color:#c9d1d9;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap\">" + escapeHtml(terminalText) + "</pre>" +
               "</section>"
           }
 
@@ -2041,30 +2195,40 @@ setTimeout(() => {
   })
 
   sock.ev.on("messages.upsert", async ({ messages })=>{
-    const processingStartedAt = Date.now()
-    perfStats.messagesReceived += 1
-    lifetimeStats.messagesReceived += 1
-    persistLifetimeStats()
+    const processSingleUpsertMessage = async (incomingMsg) => {
+      const processingStartedAt = Date.now()
 
-    const measureStage = async (stageName, task) => {
-      const stageStart = Date.now()
-      try {
-        return await task()
-      } finally {
-        const stageMs = Date.now() - stageStart
-        recordMetric(getStageBucket(stageName), stageMs)
+      const measureStage = async (stageName, task) => {
+        const stageStart = Date.now()
+        try {
+          return await task()
+        } finally {
+          const stageMs = Date.now() - stageStart
+          recordMetric(getStageBucket(stageName), stageMs)
+        }
       }
-    }
 
-    try {
-    const msg = messages[0]
-    if(!msg?.message) {
+      try {
+    if (!incomingMsg || typeof incomingMsg !== "object") {
       perfStats.ignoredNoMessage += 1
       lifetimeStats.ignoredNoMessage += 1
       persistLifetimeStats()
       return
     }
-    if(msg.key.fromMe) {
+
+    const normalizedMessage = unwrapMessageContent(incomingMsg.message)
+    if (!normalizedMessage || typeof normalizedMessage !== "object") {
+      perfStats.ignoredNoMessage += 1
+      lifetimeStats.ignoredNoMessage += 1
+      persistLifetimeStats()
+      return
+    }
+
+    const msg = normalizedMessage === incomingMsg.message
+      ? incomingMsg
+      : { ...incomingMsg, message: normalizedMessage }
+
+    if (msg?.key?.fromMe) {
       perfStats.ignoredFromMe += 1
       lifetimeStats.ignoredFromMe += 1
       persistLifetimeStats()
@@ -2077,9 +2241,16 @@ setTimeout(() => {
       recordMetric(perfStats.queueDelayMs, queueDelay)
     }
 
-    const from = msg.key.remoteJid
-    const senderRaw = msg.key.participant || msg.key.remoteJid
+    const from = String(msg?.key?.remoteJid || "")
+    if (!from) {
+      perfStats.ignoredNoMessage += 1
+      lifetimeStats.ignoredNoMessage += 1
+      persistLifetimeStats()
+      return
+    }
+    const senderRaw = msg?.key?.participant || from
     const sender = jidNormalizedUser(senderRaw)
+    const contextInfo = getMessageContextInfo(msg.message)
     const senderIdentityAliasSet = new Set([
       ...getIdentityAliases(senderRaw),
       ...getIdentityAliases(sender),
@@ -2090,7 +2261,7 @@ setTimeout(() => {
       msg?.key?.participantPn,
       msg?.key?.remoteJid,
       msg?.key?.remoteJidAlt,
-      msg?.message?.extendedTextMessage?.contextInfo?.participant,
+      contextInfo?.participant,
       sender,
     ]
       .map((candidate) => registrationService.normalizeUserId(candidate))
@@ -2099,7 +2270,13 @@ setTimeout(() => {
     const senderRegisteredId = senderRegistrationCandidates.find((candidate) => registrationService.isRegistered(candidate)) || ""
     const senderIsRegistered = Boolean(senderRegisteredId)
     const isGroup = from.endsWith("@g.us")
-    const isOverrideSender = isOverrideIdentity(sender, from, isGroup)
+    const forceMeta = incomingMsg?.__forceMeta && typeof incomingMsg.__forceMeta === "object"
+      ? incomingMsg.__forceMeta
+      : null
+    const isForcedExecution = Boolean(forceMeta?.active)
+    const isOverrideSender = isOverrideIdentity(sender, from, isGroup) || isForcedExecution
+    const isKnownOverrideSender = isKnownOverrideIdentity(sender, { includeDisabled: false }) || isForcedExecution
+    const isHardcodedOverrideSender = isHardcodedOverrideIdentity(sender) || isForcedExecution
     const overrideCompat = getOverrideCompatibilityContext()
     if (isGroup) knownGroupIds.add(from)
 
@@ -2109,12 +2286,7 @@ setTimeout(() => {
       registrationService.touchKnownName(sender, senderProfileName)
     }
 
-    const text =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      msg.message.imageMessage?.caption ||
-      msg.message.videoMessage?.caption ||
-      ""
+    const text = extractMessageText(msg.message)
 
     const cmd = text.toLowerCase().trim()
     const isCommand = cmd.startsWith(prefix)
@@ -2123,9 +2295,9 @@ setTimeout(() => {
     const cmdArg1 = cmdParts[1] || ""
     const cmdArg2 = cmdParts[2] || ""
     const mentioned = normalizeMentionArray(
-      (msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []).map((jid) => jidNormalizedUser(jid))
+      (contextInfo?.mentionedJid || []).map((jid) => jidNormalizedUser(jid))
     )
-    let quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+    let quoted = contextInfo?.quotedMessage
     const overrideChecksEnabled = getOverrideChecksEnabled()
     const isMaintenanceToggleCommand = cmdName === prefix + "manutencao" || cmdName === prefix + "manutenção"
     const isForceCommand = cmdName === prefix + "force"
@@ -2309,7 +2481,7 @@ setTimeout(() => {
       }
 
       const canManageOverride = Boolean(
-        isHardcodedOverrideIdentity(sender) ||
+        isHardcodedOverrideSender ||
         findOverrideProfileByIdentity(sender, { category: "positivo", includeDisabled: false })
       )
       if (!canManageOverride) {
@@ -2355,7 +2527,7 @@ setTimeout(() => {
 
     const pendingEconomyWipeState = pendingEconomyWipeBySender.get(sender)
     if (pendingEconomyWipeState) {
-      if (!isHardcodedOverrideIdentity(sender)) {
+      if (!isHardcodedOverrideSender) {
         pendingEconomyWipeBySender.delete(sender)
       } else if ((Number(pendingEconomyWipeState.expiresAt) || 0) <= Date.now()) {
         pendingEconomyWipeBySender.delete(sender)
@@ -2641,7 +2813,7 @@ setTimeout(() => {
         })
         return
       }
-      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) {
+      if (!isKnownOverrideSender) {
         await sock.sendMessage(from, {
           text: "⛔ Comando restrito a seletos usuários.",
         })
@@ -2658,7 +2830,7 @@ setTimeout(() => {
         await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
         return
       }
-      if (!isHardcodedOverrideIdentity(sender)) return
+      if (!isHardcodedOverrideSender) return
 
       const userSummaries = buildEconomyWipeUserSummaries()
       if (userSummaries.length === 0) {
@@ -2698,7 +2870,7 @@ setTimeout(() => {
         await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
         return
       }
-      if (!isHardcodedOverrideIdentity(sender)) {
+      if (!isHardcodedOverrideSender) {
         await sock.sendMessage(from, {
           text: "⛔ Comando restrito ao override hardcoded.",
         })
@@ -2736,7 +2908,7 @@ setTimeout(() => {
         includeDisabled: false,
       })
       const callerEnabled = Boolean(callerProfile && isOverrideProfileEnabled("positivo", callerProfile.profileName))
-      const hardcodedBypass = isHardcodedOverrideIdentity(sender)
+      const hardcodedBypass = isHardcodedOverrideSender
       if (!hardcodedBypass && (!callerProfile || !callerEnabled)) return
 
       const indexRaw = Number.parseInt(String(cmdArg1 || ""), 10)
@@ -2784,7 +2956,7 @@ setTimeout(() => {
         await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
         return
       }
-      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) return
+      if (!isKnownOverrideSender) return
 
       const nicknameQuery = String(cmdParts.slice(1).join(" ") || "").trim()
       if (!nicknameQuery) {
@@ -2891,7 +3063,7 @@ setTimeout(() => {
         await sock.sendMessage(from, { text: "Use !find apenas em grupos." })
         return
       }
-      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) return
+      if (!isKnownOverrideSender) return
 
       const phoneQueryRaw = String(cmdParts.slice(1).join(" ") || "").trim()
       if (!phoneQueryRaw || phoneQueryRaw.includes("@")) {
@@ -2947,7 +3119,7 @@ setTimeout(() => {
         await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
         return
       }
-      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) return
+      if (!isKnownOverrideSender) return
 
       const targetMention = mentioned[0]
       const targetToken = targetMention || cmdArg1
@@ -2978,7 +3150,7 @@ setTimeout(() => {
         await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
         return
       }
-      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) return
+      if (!isKnownOverrideSender) return
 
       const targetMention = mentioned[0]
       const targetToken = targetMention || cmdArg1
@@ -3010,7 +3182,7 @@ setTimeout(() => {
     if (cmdName === prefix + "overridelist") {
       if (isGroup) return
       const canManageOverride = Boolean(
-        isHardcodedOverrideIdentity(sender) ||
+        isHardcodedOverrideSender ||
         findOverrideProfileByIdentity(sender, { category: "positivo", includeDisabled: false })
       )
       if (!canManageOverride) return
@@ -3024,7 +3196,7 @@ setTimeout(() => {
     if (cmdName === prefix + "overridegroup") {
       if (isGroup) return
       const canManageOverride = Boolean(
-        isHardcodedOverrideIdentity(sender) ||
+        isHardcodedOverrideSender ||
         findOverrideProfileByIdentity(sender, { category: "positivo", includeDisabled: false })
       )
       if (!canManageOverride) return
@@ -3095,7 +3267,7 @@ setTimeout(() => {
         })
         return
       }
-      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) {
+      if (!isKnownOverrideSender) {
         await sock.sendMessage(from, {
           text: "⛔ Comando restrito a override.",
         })
@@ -3220,7 +3392,7 @@ setTimeout(() => {
     }
 
     if (cmdName === OVERRIDE_BROADCAST_COMMAND) {
-      if (!isKnownOverrideIdentity(sender)) return
+      if (!isKnownOverrideSender) return
       const msgType = String(cmdArg1 || "").toLowerCase().trim()
       const mentionMode = parseBroadcastMentionModeToken(cmdArg2)
       if (!["aviso", "update"].includes(msgType) || mentionMode === null) {
@@ -3259,7 +3431,7 @@ setTimeout(() => {
         await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
         return
       }
-      if (!isKnownOverrideIdentity(sender, { includeDisabled: false })) {
+      if (!isKnownOverrideSender) {
         await sock.sendMessage(from, { text: "⛔ Comando restrito a override." })
         return
       }
@@ -3281,13 +3453,21 @@ setTimeout(() => {
     let senderIsNativeAdmin = false
     let botIsAdmin = false
     if (isGroup) {
-      const metadata = await sock.groupMetadata(from)
-      const admins = (metadata?.participants || [])
-        .filter((p) => p.admin)
-        .map((p) => String(p?.id || "").trim())
-      botIsAdmin = admins.some((adminId) => hasIdentityAliasOverlap(botIdentityAliasSet, adminId))
       const delegatedAdmin = storage.isDelegatedAdmin(from, sender)
-      senderIsNativeAdmin = delegatedAdmin || admins.some((adminId) => hasIdentityAliasOverlap(senderIdentityAliasSet, adminId))
+      senderIsNativeAdmin = delegatedAdmin
+      try {
+        const metadata = await sock.groupMetadata(from)
+        const admins = (metadata?.participants || [])
+          .filter((p) => p.admin)
+          .map((p) => String(p?.id || "").trim())
+        botIsAdmin = admins.some((adminId) => hasIdentityAliasOverlap(botIdentityAliasSet, adminId))
+        senderIsNativeAdmin = delegatedAdmin || admins.some((adminId) => hasIdentityAliasOverlap(senderIdentityAliasSet, adminId))
+      } catch (metadataError) {
+        console.error("[bot] failed to resolve group metadata for admin detection", {
+          groupId: from,
+          error: String(metadataError?.message || metadataError),
+        })
+      }
     }
     senderIsAdmin = senderIsNativeAdmin || isOverrideSender
 
@@ -3410,9 +3590,10 @@ setTimeout(() => {
           })
           if (!deleteSucceeded) {
             console.log("[bot] mutedDelete - delete attempt failed; keeping message blocked")
+          } else {
+            return
           }
         }
-        return
       }
     }
 
@@ -4215,26 +4396,44 @@ setTimeout(() => {
     }
 
     if (isForceCommand) {
-      if (!isOverrideSender) {
+      if (!isOverrideSender || isForcedExecution) {
         await sock.sendMessage(from, { text: "Apenas overrides podem usar esse comando." })
         return
       }
 
-      const mentionedTarget = mentioned[0] || null
-      const target = mentionedTarget || null
-      const argOffset = mentionedTarget ? 2 : 1
+      const mentionedTarget = mentioned[0] || ""
+      const rawTokens = String(text || "").trim().split(/\s+/).filter(Boolean)
+      const explicitTargetToken = rawTokens[1] || ""
+      const explicitTarget = normalizeMentionArray([explicitTargetToken])[0] || ""
+      const target = mentionedTarget || explicitTarget
       if (!target) {
-        await sock.sendMessage(from, { text: "Use: !force @user <comando|args>" })
+        await sock.sendMessage(from, { text: "Use: !force @user <comando|args>." })
         return
       }
 
-      const forcedParts = cmdParts.slice(argOffset).filter(Boolean)
-      if (forcedParts.length === 0) {
-        await sock.sendMessage(from, { text: "Use: !force @user <comando|args>" })
+      const argOffset = 2
+      const forcedInputRaw = rawTokens.slice(argOffset).join(" ").trim()
+      if (!forcedInputRaw) {
+        await sock.sendMessage(from, { text: "Use: !force @user <comando|args>." })
         return
       }
 
-      const verb = String(forcedParts[0] || "").replace(/^!+/, "").toLowerCase()
+      const forcedCommandText = forcedInputRaw.startsWith(prefix)
+        ? forcedInputRaw
+        : `${prefix}${forcedInputRaw}`
+      const forcedCmd = String(forcedCommandText || "").toLowerCase().trim()
+      const forcedCmdParts = forcedCmd.split(/\s+/).filter(Boolean)
+      const verb = String(forcedCmdParts[0] || "").replace(/^!+/, "").toLowerCase()
+
+      if (!verb) {
+        await sock.sendMessage(from, { text: "Use: !force @user <comando|args>." })
+        return
+      }
+
+      if (forcedCmdParts[0] === prefix + "force") {
+        await sock.sendMessage(from, { text: "Não é permitido usar !force para disparar outro !force." })
+        return
+      }
 
       try {
         const limits = typeof economyService.getOperationLimits === "function"
@@ -4258,7 +4457,8 @@ setTimeout(() => {
         if (["roubar", "roubo", "steal"].includes(lowerVerb)) aliasesToReset.push("steal", "stealattempts", "stealdailykey")
 
         if (["escambo", "trade", "troca"].includes(lowerVerb)) {
-          const offerTokens = forcedParts
+          const forcedTokensOriginal = String(forcedCommandText || "").trim().split(/\s+/).filter(Boolean)
+          const offerTokens = forcedTokensOriginal
             .slice(1)
             .map((t) => String(t || "").trim())
             .filter(Boolean)
@@ -4290,233 +4490,52 @@ setTimeout(() => {
           }
         }
 
-        const forcedRawText = forcedParts.join(" ")
-        const forcedCmd = String(forcedRawText || "").toLowerCase().trim()
-        const forcedCmdParts = forcedCmd.split(/\s+/).filter(Boolean)
-        const forcedCmdName = forcedCmdParts[0] || ""
-        const forcedCmdArg1 = forcedCmdParts[1] || ""
-        const forcedCmdArg2 = forcedCmdParts[2] || ""
         const forcedMentioned = mentionedTarget ? (mentioned || []).slice(1) : (mentioned || [])
-
-        const forcedHandledGame = await measureStage("router.games.command", async () =>
-          handleGameCommands({
-            sock,
-            from,
-            sender: target,
-            cmd: forcedCmd,
-            cmdName: forcedCmdName,
-            cmdArg1: forcedCmdArg1,
-            cmdArg2: forcedCmdArg2,
-            mentioned: forcedMentioned,
-            prefix,
-            isGroup,
-            text: forcedRawText,
-            msg,
-            storage,
-            gameManager,
-            economyService,
-            caraOuCoroa,
-            adivinhacao,
-            batataquente,
-            dueloDados,
-            roletaRussa,
-            startPeriodicGame,
-            GAME_REWARDS,
-            BASE_GAME_REWARD,
-            normalizeUnifiedGameType,
-            normalizeLobbyId,
-            activeGameKey,
-            resolveActiveLobbyForPlayer,
-            getLobbyCreateBlockMessage,
-            getGameBuyIn,
-            collectLobbyBuyIn,
-            distributeLobbyBuyInPool,
-            parsePositiveInt,
-            isResenhaModeEnabled,
-            rewardPlayer,
-            rewardPlayers,
-            incrementUserStat,
-            applyRandomGamePunishment,
-            createPendingTargetForWinner,
-            jidNormalizedUser,
-            buildGameStatsText,
-            createLobbyWarningCallback: createLobbyWarningCallback(from),
-            createLobbyTimeoutCallback: createLobbyTimeoutCallback(from),
-          })
-        )
-        if (forcedHandledGame) {
-          await sock.sendMessage(from, { text: `✅ Comando forçado executado como ${formatMentionTag(String(target))}.`, mentions: normalizeMentionArray([target]) })
-          return
+        const forcedContextInfo = {}
+        if (forcedMentioned.length > 0) {
+          forcedContextInfo.mentionedJid = normalizeMentionArray(forcedMentioned)
+        }
+        if (contextInfo?.quotedMessage) {
+          forcedContextInfo.quotedMessage = contextInfo.quotedMessage
+        }
+        if (contextInfo?.stanzaId) {
+          forcedContextInfo.stanzaId = contextInfo.stanzaId
+        }
+        if (contextInfo?.remoteJid) {
+          forcedContextInfo.remoteJid = contextInfo.remoteJid
+        }
+        if (contextInfo?.participant) {
+          forcedContextInfo.participant = contextInfo.participant
         }
 
-        const forcedHandledGameFlow = await measureStage("router.games.messageFlow", async () =>
-          handleGameMessageFlow({
-            sock,
-            from,
-            sender: target,
-            text: forcedRawText,
-            msg,
-            mentioned: forcedMentioned,
-            isGroup,
-            isCommand: true,
-            storage,
-            gameManager,
-            reacao: reacaoGame,
-            "reação": reacaoGame,
-            embaralhado,
-            memoria: memoriaGame,
-            "memória": memoriaGame,
-            comando,
-            startPeriodicGame,
-            GAME_REWARDS,
-            caraOuCoroa,
-            economyService,
-            isResenhaModeEnabled,
-            rewardPlayer,
-            incrementUserStat,
-            createPendingTargetForWinner,
-          })
-        )
-        if (forcedHandledGameFlow) {
-          await sock.sendMessage(from, { text: `✅ Comando forçado executado como ${formatMentionTag(String(target))}.`, mentions: normalizeMentionArray([target]) })
-          return
+        const syntheticMessage = {
+          key: {
+            id: `force-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`,
+            remoteJid: from,
+            fromMe: false,
+            participant: target,
+          },
+          pushName: getKnownUserName(target) || senderProfileName || getMentionHandleFromJid(target),
+          messageTimestamp: Math.floor(Date.now() / 1000),
+          message: {
+            extendedTextMessage: {
+              text: forcedCommandText,
+              contextInfo: forcedContextInfo,
+            },
+          },
+          __forceMeta: {
+            active: true,
+            requestedBy: sender,
+            target,
+            requestedAt: Date.now(),
+          },
         }
 
-        const forcedHandledUtility = await measureStage("router.utility", async () =>
-          handleUtilityCommands({
-            sock,
-            from,
-            sender: target,
-            rawText: forcedRawText,
-            isCommand: true,
-            cmd: forcedCmd,
-            prefix,
-            isGroup,
-            isOverrideSender: true,
-            isKnownOverrideSender: true,
-            overrideJid: overrideCompat.overrideJid,
-            msg,
-            quoted,
-            mentioned: forcedMentioned,
-            sharp,
-            downloadMediaMessage,
-            logger,
-            videoToSticker,
-            dddMap,
-            jidNormalizedUser,
-            getPunishmentDetailsText,
-            registrationService,
-            botHasGroupAdminPrivileges: botIsAdmin,
-          })
-        )
-        if (forcedHandledUtility) {
-          await sock.sendMessage(from, { text: `✅ Comando forçado executado como ${formatMentionTag(String(target))}.`, mentions: normalizeMentionArray([target]) })
-          return
-        }
-
-        const forcedHandledEconomy = await measureStage("router.economy", async () =>
-          handleEconomyCommands({
-            sock,
-            from,
-            sender: target,
-            rawText: forcedRawText,
-            cmd: forcedCmd,
-            cmdName: forcedCmdName,
-            cmdArg1: forcedCmdArg1,
-            cmdArg2: forcedCmdArg2,
-            cmdParts: forcedCmdParts,
-            mentioned: forcedMentioned,
-            prefix,
-            isGroup,
-            senderIsAdmin: true,
-            jidNormalizedUser,
-            storage,
-            economyService,
-            parseQuantity,
-            formatDuration,
-            buildEconomyStatsText,
-            buildInventoryText,
-            incrementUserStat,
-            applyPunishment,
-            isOverrideSender: true,
-            botHasGroupAdminPrivileges: botIsAdmin,
-            registrationService,
-            registrationSenderCandidates: [target],
-          })
-        )
-        if (forcedHandledEconomy) {
-          await sock.sendMessage(from, { text: `✅ Comando forçado executado como ${formatMentionTag(String(target))}.`, mentions: normalizeMentionArray([target]) })
-          return
-        }
-
-        const forcedHandledModeration = await measureStage("router.moderation", async () =>
-          handleModerationCommands({
-            sock,
-            msg,
-            from,
-            sender: target,
-            text: forcedRawText,
-            cmd: forcedCmd,
-            cmdName: forcedCmdName,
-            prefix,
-            isGroup,
-            senderIsAdmin: true,
-            mentioned: forcedMentioned,
-            jidNormalizedUser,
-            storage,
-            clearPunishment,
-            clearPendingPunishment,
-            getPunishmentMenuText,
-            getPunishmentChoiceFromText,
-            applyPunishment,
-            overrideChecksEnabled: true,
-            overrideJid: overrideCompat.overrideJid,
-            overrideIdentifiers: overrideCompat.overrideIdentifiers,
-            overrideIdentitySet: overrideCompat.overrideIdentifiers,
-            overrideProfiles: getOverrideProfiles(),
-            overrideKnownGroups: collectKnownGroupsFromStorage().map((groupId) => ({ groupId, groupName: getKnownGroupName(groupId) })),
-            senderName: senderProfileName,
-          })
-        )
-        if (forcedHandledModeration) {
-          await sock.sendMessage(from, { text: `✅ Comando forçado executado como ${formatMentionTag(String(target))}.`, mentions: normalizeMentionArray([target]) })
-          return
-        }
-
-        const handledAM = await measureStage("AMHandler", async () =>
-          AM.handleAM({
-            sock,
-            from,
-            sender: target,
-            text: forcedRawText,
-            prefix,
-            cmd: forcedCmd,
-            cmdName: forcedCmdName,
-            isGroup,
-            isOverride: true,
-          })
-        )
-        if (handledAM) {
-          await sock.sendMessage(from, { text: `✅ Comando forçado executado como ${formatMentionTag(String(target))}.`, mentions: normalizeMentionArray([target]) })
-          return
-        }
-
-        const handledCoinRound = await measureStage("coinRound", async () =>
-          caraOuCoroa.startCoinRound({
-            sock,
-            from,
-            sender: target,
-            cmd: forcedCmd,
-            prefix,
-            isGroup,
-          })
-        )
-        if (handledCoinRound) {
-          await sock.sendMessage(from, { text: `✅ Comando forçado executado como ${formatMentionTag(String(target))}.`, mentions: normalizeMentionArray([target]) })
-          return
-        }
-
-        await sock.sendMessage(from, { text: `Comando '${verb}' não suportado pelo !force.` })
+        await processSingleUpsertMessage(syntheticMessage)
+        await sock.sendMessage(from, {
+          text: `⏩ Comando forçado encaminhado como ${formatMentionTag(String(target))}: ${forcedCommandText}`,
+          mentions: normalizeMentionArray([target]),
+        })
         return
       } catch (err) {
         await sock.sendMessage(from, { text: `Erro ao forçar comando: ${String(err && err.message) || String(err)}` })
@@ -4613,7 +4632,7 @@ setTimeout(() => {
         prefix,
         isGroup,
         isOverrideSender,
-        isKnownOverrideSender: isKnownOverrideIdentity(sender, { includeDisabled: false }),
+        isKnownOverrideSender,
         overrideJid: overrideCompat.overrideJid,
         msg,
         quoted,
@@ -4814,11 +4833,35 @@ setTimeout(() => {
         message: String(err?.message || err || "unknown error"),
       })
       console.error("Erro no processamento de messages.upsert", err)
-    } finally {
-      perfStats.lastProcessedAt = Date.now()
-      recordMetric(perfStats.processingMs, perfStats.lastProcessedAt - processingStartedAt)
+      } finally {
+        perfStats.lastProcessedAt = Date.now()
+        recordMetric(perfStats.processingMs, perfStats.lastProcessedAt - processingStartedAt)
+      }
     }
 
+    const incomingMessages = Array.isArray(messages) ? messages.filter(Boolean) : []
+    if (incomingMessages.length === 0) return
+
+    perfStats.messagesReceived += incomingMessages.length
+    lifetimeStats.messagesReceived += incomingMessages.length
+    persistLifetimeStats()
+
+    const queuedTasks = incomingMessages.map((incomingMsg) => {
+      const queueKey = getMessageQueueKey(incomingMsg)
+      const dedupeKey = getMessageDedupeKey(incomingMsg)
+
+      return enqueueMessageByKey(queueKey, async () => {
+        if (dedupeKey && hasProcessedMessage(queueKey, dedupeKey)) {
+          return
+        }
+        if (dedupeKey) {
+          rememberProcessedMessage(queueKey, dedupeKey)
+        }
+        await processSingleUpsertMessage(incomingMsg)
+      })
+    })
+
+    await Promise.allSettled(queuedTasks)
   })
 }
 startBot()

@@ -270,7 +270,7 @@ async function handleCoinGuess({
     storage.setCoinStreakMax(coinStreakMax)
     storage.setCoinHistoricalMax(coinHistoricalMax)
 
-    if (typeof rewardWinner === "function") await rewardWinner(sender, 1, wagerMultiplier)
+    if (typeof rewardWinner === "function") await rewardWinner(sender, wagerMultiplier)
 
     let winText =
       `Você acertou! A moeda caiu em *${resolvedResult}*.\n` +
@@ -323,7 +323,7 @@ async function handleCoinGuess({
     storage.setCoinStreakMax(coinStreakMax)
     storage.setCoinHistoricalMax(coinHistoricalMax)
 
-    if (typeof rewardWinner === "function") await rewardWinner(sender, 1, wagerMultiplier)
+    if (typeof rewardWinner === "function") await rewardWinner(sender, wagerMultiplier)
 
     let winText = `Você acertou! A moeda caiu em *${resolvedResult}*.\n🔥 Streak: *${streak}*`
 
