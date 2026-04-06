@@ -60,7 +60,6 @@ const sharp = require("sharp")
 const fs = require("fs")
 const path = require("path")
 const crypto = require("crypto")
-const { execFile } = require("child_process")
 const ffmpeg = require("fluent-ffmpeg")
 const ffmpegPath = require("ffmpeg-static")
 ffmpeg.setFfmpegPath(ffmpegPath)
@@ -90,6 +89,7 @@ const { handleGameCommands, handleGameMessageFlow } = require("./routers/gamesRo
 const { handleUtilityCommands } = require("./routers/utilityRouter")
 const { handleModerationCommands } = require("./routers/moderationRouter")
 const { handleEconomyCommands, cleanupUserLinkedState, parseTradeOffer, getTradeBracketForOffer } = require("./routers/economyRouter")
+const { registerDashboardRoutes } = require("./routers/dashboardRouter")
 
 const app = express()
 const logger = pino({ level: "silent" })
@@ -293,20 +293,6 @@ function enqueueMessageByKey(queueKey = "global", task = async () => {}) {
     })
   messageQueueByChat.set(key, next)
   return next
-}
-
-function execFileAsync(file, args = [], options = {}) {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, options, (error, stdout, stderr) => {
-      if (error) {
-        error.stdout = stdout
-        error.stderr = stderr
-        reject(error)
-        return
-      }
-      resolve({ stdout, stderr })
-    })
-  })
 }
 
 function recordTerminalOutput(source, chunk) {
@@ -1591,406 +1577,15 @@ function getDashboardPayload() {
   }
 }
 
-app.get("/profiler-data", (req, res) => {
-  try {
-    console.log("GET /profiler-data - headers:", {
-      accept: req.headers.accept,
-      referer: req.headers.referer,
-      "user-agent": req.headers["user-agent"],
-      host: req.headers.host,
-    })
-  } catch (e) {}
-  res.setHeader("Content-Type", "application/json; charset=utf-8")
-  res.json(getDashboardPayload())
-})
-
-app.get("/dashboard-data", (req, res) => {
-  try {
-    console.log("GET /dashboard-data - headers:", {
-      accept: req.headers.accept,
-      referer: req.headers.referer,
-      "user-agent": req.headers["user-agent"],
-      host: req.headers.host,
-    })
-  } catch (e) {}
-  res.setHeader("Content-Type", "application/json; charset=utf-8")
-  res.json(getDashboardPayload())
-})
-
-// lightweight debug endpoint to inspect QR state
-app.get("/dashboard-debug", (req, res) => {
-  res.json({
+registerDashboardRoutes(app, {
+  getDashboardPayload,
+  getDashboardDebugPayload: () => ({
     authReady: Boolean(perfStats.authenticatedAt),
     hasQr: Boolean(qrImage),
     qrLength: qrImage ? qrImage.length : 0,
-  })
+  }),
+  baseDir: __dirname,
 })
-
-app.get("/download-data", async (req, res) => {
-  const dataDir = path.join(__dirname, ".data")
-  if (!fs.existsSync(dataDir)) {
-    res.status(404).json({ ok: false, error: "data-folder-not-found" })
-    return
-  }
-
-  const tmpZip = path.join(__dirname, `vitin-bot-data-${Date.now()}.zip`)
-  try {
-    if (process.platform === "win32") {
-      await execFileAsync("powershell.exe", [
-        "-NoProfile",
-        "-Command",
-        `Compress-Archive -Path \"${path.join(dataDir, "*")}\" -DestinationPath \"${tmpZip}\" -Force`,
-      ])
-    } else {
-      await execFileAsync("tar", ["-czf", tmpZip, "-C", __dirname, ".data"])
-    }
-
-    res.download(tmpZip, "vitin-bot-data.zip", () => {
-      fs.unlink(tmpZip, () => {})
-    })
-  } catch (err) {
-    fs.unlink(tmpZip, () => {})
-    console.error("Erro ao gerar export da pasta .data", err)
-    res.status(500).json({ ok: false, error: "export-failed" })
-  }
-})
-
-app.get("/", (req,res)=>{
-  const paramSimple = String(req.query?.simple || "").trim().toLowerCase()
-  const _simpleToggle = String(process.env.SIMPLE_DASHBOARD || process.env.SERVE_SIMPLE_PAGE || "").trim().toLowerCase()
-  const isSimple = [paramSimple, _simpleToggle].some(v => v === "1" || v === "true" || v === "yes")
-  console.log(`[Dashboard] Request for /, simple param: "${paramSimple}", env toggle: "${_simpleToggle}", isSimple: ${isSimple}`)
-  if (isSimple) {
-    console.log("Serving simple dashboard page (simple mode active). paramSimple=", paramSimple, "env=", _simpleToggle)
-    res.send(`<!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width,initial-scale=1">
-        <title>Vitin Bot</title>
-      </head>
-      <body style="font-family:Segoe UI,Arial,sans-serif;padding:16px">
-        <section style="max-width:980px">
-          <h2 style="margin:0 0 8px 0">Vitin Bot</h2>
-          <p id="polling-status" style="margin:0 0 12px 0;color:#555">Atualizando automaticamente a cada 1000ms.</p>
-        </section>
-
-        <section id="qr-section" style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px;display:none"></section>
-
-        <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
-          <h3 style="margin:0 0 10px 0">Download de dados</h3>
-          <a href="/download-data" style="display:inline-block;padding:8px 12px;background:#0f766e;color:white;border-radius:6px;text-decoration:none">Baixar .data</a>
-        </section>
-
-        <script>
-          const POLLING_MS = 1000
-          const pollingStatusEl = document.getElementById("polling-status")
-          const qrSectionEl = document.getElementById("qr-section")
-
-          async function refreshSimple() {
-            try {
-              const response = await fetch("/dashboard-data", { cache: "no-store" })
-              if (!response.ok) throw new Error("HTTP " + response.status)
-              const payload = await response.json()
-              const authReady = Boolean(payload.authReady)
-              const qrImage = payload.qrImage || null
-
-              if (!authReady && qrImage) {
-                qrSectionEl.style.display = "block"
-                qrSectionEl.innerHTML = '<h3 style="margin:0 0 10px 0">Escaneie o QR Code</h3>' + '<img src="' + qrImage + '" style="max-width:320px;width:100%;height:auto">'
-              } else {
-                qrSectionEl.style.display = "block"
-                qrSectionEl.innerHTML = '<h3 style="margin:0">' + (authReady ? 'Bot conectado' : 'Aguardando autenticação') + '</h3>'
-              }
-
-              pollingStatusEl.textContent = "Atualizando automaticamente a cada 1000ms. Última atualização: " + new Date().toLocaleTimeString("pt-BR")
-            } catch (err) {
-              pollingStatusEl.textContent = "Falha ao atualizar painel: " + (err && err.message ? err.message : err)
-              qrSectionEl.style.display = 'none'
-            }
-          }
-
-          refreshSimple()
-          setInterval(refreshSimple, POLLING_MS)
-        </script>
-      </body>
-    </html>`)
-    return
-  }
-
-  const downloadBlock = `
-    <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px">
-      <h3 style="margin:0 0 10px 0">Download de dados</h3>
-      <a href="/download-data" style="display:inline-block;padding:8px 12px;background:#0f766e;color:white;border-radius:6px;text-decoration:none">Baixar .data</a>
-    </section>
-  `
-
-  res.send(
-    `<!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width,initial-scale=1">
-        <title>Vitin Bot</title>
-      </head>
-      <body style="font-family:Segoe UI,Arial,sans-serif;padding:16px">
-        <section style="max-width:980px">
-          <h2 style="margin:0 0 8px 0">Painel Vitin Bot</h2>
-          <p id="polling-status" style="margin:0 0 12px 0;color:#555">Atualizando automaticamente a cada 1000ms.</p>
-        </section>
-
-        <section id="qr-section" style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px;display:none"></section>
-        <section id="perf-section" style="display:none"></section>
-        <section id="users-section" style="display:none"></section>
-        <section id="commands-section" style="display:none"></section>
-        <section id="terminal-section" style="display:none"></section>
-
-        ${downloadBlock}
-
-        <script>
-          const POLLING_MS = 1000
-          const pollingStatusEl = document.getElementById("polling-status")
-          const qrSectionEl = document.getElementById("qr-section")
-          const perfSectionEl = document.getElementById("perf-section")
-          const usersSectionEl = document.getElementById("users-section")
-          const commandsSectionEl = document.getElementById("commands-section")
-          const terminalSectionEl = document.getElementById("terminal-section")
-
-          function escapeHtml(value) {
-            return String(value || "")
-              .replace(/&/g, "&amp;")
-              .replace(/</g, "&lt;")
-              .replace(/>/g, "&gt;")
-              .replace(/"/g, "&quot;")
-              .replace(/'/g, "&#39;")
-          }
-
-          function formatMs(value) {
-            return Number(value || 0).toFixed(1) + " ms"
-          }
-
-          function formatElapsed(ms) {
-            const totalSec = Math.max(0, Math.floor(Number(ms || 0) / 1000))
-            const h = Math.floor(totalSec / 3600)
-            const m = Math.floor((totalSec % 3600) / 60)
-            const s = totalSec % 60
-            return h + "h " + m + "m " + s + "s"
-          }
-
-          function formatDateTime(value) {
-            if (!value) return "-"
-            const shifted = new Date(Number(value) - (3 * 60 * 60 * 1000))
-            return shifted.toISOString().replace("T", " ").slice(0, 19) + " (UTC-3)"
-          }
-
-          function readPath(obj, path, fallback) {
-            let current = obj
-            for (let i = 0; i < path.length; i++) {
-              if (!current || typeof current !== "object") return fallback
-              current = current[path[i]]
-            }
-            return current === undefined || current === null ? fallback : current
-          }
-
-          function renderMetricRow(label, bucket) {
-            return "<tr>" +
-              "<td style=\"text-align:left;border-bottom:1px solid #eee;padding:4px\">" + escapeHtml(label) + "</td>" +
-              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + Number(readPath(bucket, ["count"], 0)) + "</td>" +
-              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(readPath(bucket, ["lastMs"], 0)) + "</td>" +
-              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(readPath(bucket, ["avgMs"], 0)) + "</td>" +
-              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(readPath(bucket, ["p95Ms"], 0)) + "</td>" +
-              "<td style=\"text-align:right;border-bottom:1px solid #eee;padding:4px\">" + formatMs(readPath(bucket, ["maxMs"], 0)) + "</td>" +
-            "</tr>"
-          }
-
-          function renderQr(authReady, qrImage) {
-            if (!authReady && qrImage) {
-              qrSectionEl.style.display = "block"
-              qrSectionEl.innerHTML = "<h3 style=\"margin:0 0 10px 0\">Escaneie o QR Code</h3>" +
-                "<img src=\"" + qrImage + "\" style=\"max-width:320px;width:100%;height:auto\">"
-              return
-            }
-            qrSectionEl.style.display = "block"
-            qrSectionEl.innerHTML = "<h3 style=\"margin:0\">" + (authReady ? "Bot conectado" : "Aguardando autenticação") + "</h3>"
-          }
-
-          function renderPerf(snapshot) {
-            if (!snapshot) {
-              perfSectionEl.style.display = "none"
-              return
-            }
-
-            const stageRows = (readPath(snapshot, ["metrics", "stages"], []) || []).map((stage) =>
-              renderMetricRow("stage:" + stage.name, stage)
-            ).join("")
-
-            perfSectionEl.style.display = "block"
-            perfSectionEl.innerHTML =
-              "<section style=\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\">" +
-                "<h3 style=\"margin:0 0 10px 0\">Performance</h3>" +
-                "<p style=\"margin:4px 0\">Estado da conexão: <b>" + escapeHtml(snapshot.connectionState) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Uptime do bot (sessão atual): <b>" + formatElapsed(snapshot.uptimeMs) + "</b> | Desde autenticação atual: <b>" + formatElapsed(snapshot.authUptimeMs) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Autenticado em: <b>" + formatDateTime(snapshot.authenticatedAt) + "</b> | Conectado em: <b>" + formatDateTime(snapshot.connectedAt) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Mensagens recebidas: <b>" + Number(snapshot.messagesReceived || 0) + "</b> | Erros: <b>" + Number(snapshot.messagesErrored || 0) + "</b> | Ignoradas (sem conteúdo): <b>" + Number(snapshot.ignoredNoMessage || 0) + "</b> | Ignoradas (fromMe): <b>" + Number(snapshot.ignoredFromMe || 0) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Lifetime desde <b>" + formatDateTime(readPath(snapshot, ["lifetime", "sinceAt"], 0)) + "</b>: mensagens <b>" + Number(readPath(snapshot, ["lifetime", "messagesReceived"], 0)) + "</b>, erros <b>" + Number(readPath(snapshot, ["lifetime", "messagesErrored"], 0)) + "</b>, ignoradas sem conteúdo <b>" + Number(readPath(snapshot, ["lifetime", "ignoredNoMessage"], 0)) + "</b>, ignoradas fromMe <b>" + Number(readPath(snapshot, ["lifetime", "ignoredFromMe"], 0)) + "</b>, comandos <b>" + Number(readPath(snapshot, ["lifetime", "commandsExecuted"], 0)) + "</b>, reconexões <b>" + Number(readPath(snapshot, ["lifetime", "reconnects"], 0)) + "</b>, uptime autenticado <b>" + formatElapsed(readPath(snapshot, ["lifetime", "authUptimeMs"], 0)) + "</b>, boots <b>" + Number(readPath(snapshot, ["lifetime", "bootCount"], 0)) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Último comando: <b>" + escapeHtml(snapshot.lastCommand || "-") + "</b> | Último processamento: <b>" + formatDateTime(snapshot.lastProcessedAt) + "</b> | Reconexões: <b>" + Number(snapshot.reconnects || 0) + "</b></p>" +
-                "<p style=\"margin:4px 0\">Memória: heap <b>" + Number(readPath(snapshot, ["memory", "heapUsed"], 0)) + " MB</b> | rss <b>" + Number(readPath(snapshot, ["memory", "rss"], 0)) + " MB</b> | Registrados <b>" + Number(snapshot.registeredUsers || 0) + "</b></p>" +
-                "<table style=\"width:100%;margin-top:12px;border-collapse:collapse;font-family:monospace;font-size:12px\">" +
-                  "<thead>" +
-                    "<tr>" +
-                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Métrica</th>" +
-                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Count</th>" +
-                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Last</th>" +
-                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Avg</th>" +
-                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">P95</th>" +
-                      "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Max</th>" +
-                    "</tr>" +
-                  "</thead>" +
-                  "<tbody>" +
-                    renderMetricRow("message.processing", readPath(snapshot, ["metrics", "processing"], {})) +
-                    renderMetricRow("message.queueDelay", readPath(snapshot, ["metrics", "queueDelay"], {})) +
-                    renderMetricRow("sock.sendMessage", readPath(snapshot, ["metrics", "sendMessage"], {})) +
-                    renderMetricRow("sock.groupMetadata", readPath(snapshot, ["metrics", "groupMetadata"], {})) +
-                    renderMetricRow("eventLoop.lag", readPath(snapshot, ["metrics", "eventLoopLag"], {})) +
-                    stageRows +
-                  "</tbody>" +
-                "</table>" +
-              "</section>"
-          }
-
-          function renderRegisteredUsers(snapshot) {
-            if (!snapshot) {
-              usersSectionEl.style.display = "none"
-              return
-            }
-
-            const users = Array.isArray(snapshot.registeredUsersList) ? snapshot.registeredUsersList : []
-            const rows = users.map((entry) => {
-              const command = readPath(entry, ["lastCommand", "command"], "-")
-              const commandAt = formatDateTime(readPath(entry, ["lastCommand", "at"], 0))
-              return "<tr>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["waNumber"], "-")) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["waName"], "-")) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["nickname"], "-")) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc;text-align:right\">" + Number(readPath(entry, ["coins"], 0)).toLocaleString("pt-BR") + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(command) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(commandAt) + "</td>" +
-              "</tr>"
-            }).join("")
-
-            usersSectionEl.style.display = "block"
-            usersSectionEl.innerHTML =
-              "<section style=\"margin-top:20px;max-width:980px\">" +
-                "<details open style=\"padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa\">" +
-                  "<summary style=\"cursor:pointer;font-weight:700\">Usuários registrados (" + users.length + ")</summary>" +
-                  "<div style=\"margin-top:10px;overflow:auto\">" +
-                    "<table style=\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\">" +
-                      "<thead>" +
-                        "<tr>" +
-                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">WhatsApp nº</th>" +
-                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Nome WhatsApp</th>" +
-                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Apelido escolhido</th>" +
-                          "<th style=\"text-align:right;border-bottom:1px solid #ccc;padding:4px\">Coins</th>" +
-                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Último comando</th>" +
-                          "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Quando</th>" +
-                        "</tr>" +
-                      "</thead>" +
-                      "<tbody>" + (rows || "<tr><td colspan=\"6\" style=\"padding:6px\">Sem usuários registrados.</td></tr>") + "</tbody>" +
-                    "</table>" +
-                  "</div>" +
-                "</details>" +
-              "</section>"
-          }
-
-          function renderCommands(snapshot) {
-            if (!snapshot) {
-              commandsSectionEl.style.display = "none"
-              return
-            }
-
-            const rows = (snapshot.commandHistory || []).slice(-10).map((entry) =>
-              "<tr>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + formatDateTime(readPath(entry, ["at"], 0)) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["command"], "-")) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["senderName"], "-")) + "</td>" +
-                "<td style=\"padding:4px;border-bottom:1px solid #ccc\">" + escapeHtml(readPath(entry, ["groupName"], "-")) + "</td>" +
-              "</tr>"
-            ).join("")
-
-            commandsSectionEl.style.display = "block"
-            commandsSectionEl.innerHTML =
-              "<section style=\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\">" +
-                "<h3 style=\"margin:0 0 10px 0\">Últimos 10 comandos</h3>" +
-                "<table style=\"width:100%;border-collapse:collapse;font-family:monospace;font-size:12px\">" +
-                  "<thead>" +
-                    "<tr>" +
-                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Quando</th>" +
-                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Comando</th>" +
-                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Usuário</th>" +
-                      "<th style=\"text-align:left;border-bottom:1px solid #ccc;padding:4px\">Grupo</th>" +
-                    "</tr>" +
-                  "</thead>" +
-                  "<tbody>" + (rows || "<tr><td colspan=\"4\" style=\"padding:6px\">Sem comandos registrados.</td></tr>") + "</tbody>" +
-                "</table>" +
-              "</section>"
-          }
-
-          function renderTerminal(snapshot) {
-            if (!snapshot) {
-              terminalSectionEl.style.display = "none"
-              return
-            }
-
-            const terminalText = (snapshot.terminalLines || []).map((line) => {
-              return "[" + formatDateTime(readPath(line, ["at"], 0)) + "] " + readPath(line, ["source"], "log") + ": " + readPath(line, ["line"], "")
-            }).join("\n") || "Sem saída capturada ainda."
-
-            terminalSectionEl.style.display = "block"
-            terminalSectionEl.innerHTML =
-              "<section style=\"margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;background:#fafafa;max-width:980px\">" +
-                "<h3 style=\"margin:0 0 10px 0\">Terminal (somente leitura)</h3>" +
-                "<pre style=\"max-height:260px;overflow:auto;background:#0d1117;color:#c9d1d9;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap\">" + escapeHtml(terminalText) + "</pre>" +
-              "</section>"
-          }
-
-          function renderDashboard(payload) {
-            const authReady = Boolean(readPath(payload, ["authReady"], false))
-            const snapshot = readPath(payload, ["snapshot"], null)
-            renderQr(authReady, readPath(payload, ["qrImage"], null))
-            renderPerf(snapshot)
-            renderRegisteredUsers(snapshot)
-            renderCommands(snapshot)
-            renderTerminal(snapshot)
-          }
-
-          let refreshInFlight = false
-          async function refreshDashboard() {
-            if (refreshInFlight) return
-            refreshInFlight = true
-            try {
-              const response = await fetch("/dashboard-data", { cache: "no-store" })
-              if (!response.ok) {
-                throw new Error("HTTP " + response.status)
-              }
-              const payload = await response.json()
-              renderDashboard(payload)
-              pollingStatusEl.textContent = "Atualizando automaticamente a cada 1000ms. Última atualização: " + new Date().toLocaleTimeString("pt-BR")
-            } catch (err) {
-              const errMessage = err && err.message ? err.message : err
-              pollingStatusEl.textContent = "Falha ao atualizar painel: " + String(errMessage)
-            } finally {
-              refreshInFlight = false
-            }
-          }
-
-          refreshDashboard()
-          setInterval(refreshDashboard, POLLING_MS)
-        </script>
-      </body>
-    </html>`
-  )
-})
-
 const PORT = process.env.PORT || 3000
 
 // basic health endpoint
@@ -3590,9 +3185,9 @@ setTimeout(() => {
           })
           if (!deleteSucceeded) {
             console.log("[bot] mutedDelete - delete attempt failed; keeping message blocked")
-          } else {
             return
           }
+          return
         }
       }
     }

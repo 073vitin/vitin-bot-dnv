@@ -350,6 +350,40 @@ test("punishment enforcement matches @lid and @s variants for same user", async 
   punishmentService.clearPunishment(groupId, targetS)
 })
 
+test("punishment enforcement remains blocking when delete fails", async () => {
+  const groupId = `__punishment_delete_fail_${Date.now()}@g.us`
+  const target = "deletefail@s.whatsapp.net"
+  const sent = []
+  const sock = {
+    async sendMessage(to, payload) {
+      sent.push({ to, payload })
+      if (payload?.delete) {
+        throw new Error("simulated delete failure")
+      }
+    },
+  }
+
+  await punishmentService.applyPunishment(sock, groupId, target, "1", {
+    origin: "admin",
+    severityMultiplier: 1,
+  })
+
+  const enforced = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-delete-fail", remoteJid: groupId, fromMe: false, participant: target } },
+    groupId,
+    target,
+    "mensagem longa demais",
+    true,
+    false,
+    false
+  )
+
+  assert.equal(enforced, true)
+  assert.ok(sent.some((entry) => Boolean(entry.payload?.delete)))
+  punishmentService.clearPunishment(groupId, target)
+})
+
 test("lettersBlock requires all blocked letters and only blocked letters plus whitespace", async () => {
   const groupId = `__punishment_letters_unlock_${Date.now()}@g.us`
   const target = "letters@s.whatsapp.net"

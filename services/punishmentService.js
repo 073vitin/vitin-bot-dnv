@@ -973,7 +973,7 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
   }
   if (!deleteSucceeded) {
     console.log("[punishment] handlePunishmentEnforcement - delete attempt failed but punishment remains enforced")
-    return false
+    return true
   }
   return true
 }
