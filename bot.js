@@ -1988,6 +1988,8 @@ setTimeout(() => {
 
         const title = getBroadcastTitle(broadcastState.type)
         const finalText = `${title}\n\n${broadcastState.message}`
+        console.log(`[!msg] finalText length: ${finalText?.length || 0}, type: ${typeof finalText}`)
+        console.log(`[!msg] Socket status - user: ${sock.user?.id || "no-user"}, auth: ${sock.authState?.creds ? "yes" : "no"}`)
         const users = registrationService.getRegisteredUsersForNotifications()
         console.log(`[!msg] Usuários a enviar (${users.length}):`, users.slice(0, 3).map(u => `${u}`))
         const usersSet = new Set(users)
@@ -2031,10 +2033,27 @@ setTimeout(() => {
           for (const userId of users) {
             try {
               console.log(`[!msg] Enviando para usuário: ${userId}`)
+              console.log(`[!msg] Detalhes - JID format: ${userId.includes("@") ? "has-@" : "no-@"}, length: ${userId.length}`)
               // Adiciona delay para evitar problema de fila de mensagens não entregues no Baileys
-              await new Promise(resolve => setTimeout(resolve, 500))
-              const result = await sock.sendMessage(userId, { text: finalText })
-              console.log(`[!msg] Sucesso ao enviar para ${userId}:`, result?.key?.id || "OK")
+              await new Promise(resolve => setTimeout(resolve, 1000))
+              
+              // Tenta enviar com retry logic
+              let result
+              let retries = 0
+              while(retries < 3) {
+                try {
+                  const messagePayload = { text: finalText }
+                  console.log(`[!msg] Sending payload to ${userId}: type=${typeof messagePayload}, keys=${Object.keys(messagePayload).join(",")}`)
+                  result = await sock.sendMessage(userId, messagePayload, { retry: 10 })
+                  console.log(`[!msg] Sucesso ao enviar para ${userId}:`, result?.key?.id || "OK")
+                  break
+                } catch(err) {
+                  retries++
+                  if(retries >= 3) throw err
+                  console.log(`[!msg] Retry ${retries}/${3} para ${userId}`)
+                  await new Promise(resolve => setTimeout(resolve, 500))
+                }
+              }
               usersOk += 1
             } catch (err) {
               usersFail += 1
@@ -2061,6 +2080,10 @@ setTimeout(() => {
 
         pendingBroadcastBySender.delete(sender)
         const modeLabel = mentionMode
+        
+        // Aguarda um pouco para garantir que as mensagens foram processadas pelo socket
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        
         await sock.sendMessage(from, {
           text:
             `Envio finalizado. DMs: *${usersOk}* sucesso | *${usersFail}* falhas.\n` +
