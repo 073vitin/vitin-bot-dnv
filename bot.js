@@ -2019,6 +2019,7 @@ setTimeout(() => {
 
           for (const userId of adminUsers) {
             try {
+              await new Promise(resolve => setTimeout(resolve, 500))
               await sock.sendMessage(userId, { text: finalText })
               usersOk += 1
             } catch (err) {
@@ -2030,6 +2031,8 @@ setTimeout(() => {
           for (const userId of users) {
             try {
               console.log(`[!msg] Enviando para usuário: ${userId}`)
+              // Adiciona delay para evitar problema de fila de mensagens não entregues no Baileys
+              await new Promise(resolve => setTimeout(resolve, 500))
               const result = await sock.sendMessage(userId, { text: finalText })
               console.log(`[!msg] Sucesso ao enviar para ${userId}:`, result?.key?.id || "OK")
               usersOk += 1
@@ -2046,6 +2049,7 @@ setTimeout(() => {
           for (const groupId of groups) {
             if (!sendGroups) continue
             try {
+              await new Promise(resolve => setTimeout(resolve, 500))
               await sock.sendMessage(groupId, { text: finalText })
               groupsOk += 1
             } catch (err) {
