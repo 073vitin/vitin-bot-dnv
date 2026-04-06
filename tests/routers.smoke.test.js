@@ -25,6 +25,30 @@ function createSockCapture() {
   }
 }
 
+function createGameStateStorage(initialByGroup = {}) {
+  const clone = (value) => JSON.parse(JSON.stringify(value || {}))
+  const stateByGroup = {}
+
+  for (const [groupId, values] of Object.entries(initialByGroup || {})) {
+    stateByGroup[groupId] = clone(values)
+  }
+
+  return {
+    getGameState(groupId, key) {
+      return clone(stateByGroup?.[groupId]?.[key] || null)
+    },
+    setGameState(groupId, key, value) {
+      if (!stateByGroup[groupId] || typeof stateByGroup[groupId] !== "object") {
+        stateByGroup[groupId] = {}
+      }
+      stateByGroup[groupId][key] = clone(value)
+    },
+    __getGameState(groupId, key) {
+      return clone(stateByGroup?.[groupId]?.[key] || null)
+    },
+  }
+}
+
 test("economy router handles !economia command", async () => {
   const { sock, sent } = createSockCapture()
 
@@ -3276,6 +3300,254 @@ test("utility router handles !feedback command", async () => {
   assert.equal(sent.length, 1)
   assert.match(String(sent[0].payload?.text || ""), /wa\.me\/\+5521995409899/i)
   assert.match(String(sent[0].payload?.text || ""), /wa\.me\/\+557398579450/i)
+})
+
+test("utility router handles !bugbounty summary and sends report flow instructions only in DM", async () => {
+  __resetUtilityRouterStateForTests()
+  const { sock, sent } = createSockCapture()
+  const storage = createGameStateStorage({
+    __system__: {
+      bugBountyState: {
+        reports: {
+          "10001": {
+            id: "10001",
+            reporter: "top@s.whatsapp.net",
+            reportedPriority: 2,
+            finalPriority: 2,
+            description: "bug aberto",
+            status: "open",
+            resolution: "",
+            createdAt: Date.now() - 10_000,
+          },
+          "10002": {
+            id: "10002",
+            reporter: "top@s.whatsapp.net",
+            reportedPriority: 3,
+            finalPriority: 3,
+            description: "bug fechado",
+            status: "closed",
+            resolution: "fixed",
+            payoutCoins: 1000,
+            totalCreditedCoins: 1000,
+            createdAt: Date.now() - 20_000,
+            closedAt: Date.now() - 5_000,
+          },
+        },
+      },
+    },
+  })
+
+  const handled = await handleUtilityCommands({
+    sock,
+    from: "group@g.us",
+    sender: "caller@s.whatsapp.net",
+    rawText: "!bugbounty",
+    isCommand: true,
+    cmd: "!bugbounty",
+    prefix: "!",
+    isGroup: true,
+    storage,
+    economyService: {
+      isMentionOptIn: (userId) => userId !== "top@s.whatsapp.net",
+      getProfile: (userId) => ({
+        preferences: {
+          publicLabel: userId === "top@s.whatsapp.net" ? "TopNick" : "",
+        },
+      }),
+      getStablePublicLabel: (userId) => (userId === "top@s.whatsapp.net" ? "TOP-STABLE" : "USR-0000"),
+    },
+    registrationService: {
+      getRegisteredEntry: () => ({ lastKnownName: "Top Name" }),
+      normalizeUserId: (id) => String(id || ""),
+      getUserIdAliases: () => [],
+    },
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+    jidNormalizedUser: (id) => id,
+  })
+
+  assert.equal(handled, true)
+  assert.equal(sent.length, 2)
+  assert.equal(sent[0].to, "group@g.us")
+  assert.match(String(sent[0].payload?.text || ""), /Tabela de recompensas/i)
+  assert.match(String(sent[0].payload?.text || ""), /TopNick/i)
+  assert.equal(sent[1].to, "caller@s.whatsapp.net")
+  assert.match(String(sent[1].payload?.text || ""), /Fluxo de reporte de bugs/i)
+  assert.doesNotMatch(String(sent[1].payload?.text || ""), /Tabela de recompensas/i)
+})
+
+test("utility router handles !bugbounty reportar flow with 5-digit protocol and storage persistence", async () => {
+  __resetUtilityRouterStateForTests()
+  const { sock, sent } = createSockCapture()
+  const storage = createGameStateStorage()
+  const sender = "reporter@s.whatsapp.net"
+  const override = "override@s.whatsapp.net"
+
+  const armed = await handleUtilityCommands({
+    sock,
+    from: sender,
+    sender,
+    rawText: "!bugbounty reportar 3",
+    isCommand: true,
+    cmd: "!bugbounty reportar 3",
+    prefix: "!",
+    isGroup: false,
+    overrideJid: override,
+    storage,
+    registrationService: {
+      normalizeUserId: (id) => String(id || ""),
+      getUserIdAliases: () => [],
+    },
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+    jidNormalizedUser: (id) => id,
+  })
+
+  const submitted = await handleUtilityCommands({
+    sock,
+    from: sender,
+    sender,
+    rawText: "quando uso !perfil no privado, trava e nao responde",
+    isCommand: false,
+    cmd: "quando uso !perfil no privado, trava e nao responde",
+    prefix: "!",
+    isGroup: false,
+    overrideJid: override,
+    storage,
+    registrationService: {
+      normalizeUserId: (id) => String(id || ""),
+      getUserIdAliases: () => [],
+    },
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+    jidNormalizedUser: (id) => id,
+  })
+
+  assert.equal(armed, true)
+  assert.equal(submitted, true)
+  assert.equal(sent.length, 3)
+  assert.equal(sent[1].to, override)
+  const overrideText = String(sent[1].payload?.text || "")
+  assert.match(overrideText, /BUG REPORT/i)
+
+  const idMatch = overrideText.match(/\((\d{5})\)/)
+  assert.ok(idMatch)
+  const reportId = idMatch[1]
+
+  const state = storage.__getGameState("__system__", "bugBountyState")
+  assert.ok(state?.reports?.[reportId])
+  assert.equal(state.reports[reportId].reportedPriority, 3)
+  assert.equal(state.reports[reportId].status, "open")
+})
+
+test("utility router handles !bugbounty close fixed and reopen with optional reclassification", async () => {
+  __resetUtilityRouterStateForTests()
+  const { sock, sent } = createSockCapture()
+  const storage = createGameStateStorage({
+    __system__: {
+      bugBountyState: {
+        reports: {
+          "54321": {
+            id: "54321",
+            reporter: "reporter@s.whatsapp.net",
+            reportedPriority: 2,
+            finalPriority: 2,
+            description: "teste",
+            status: "open",
+            resolution: "",
+            createdAt: Date.now() - 1000,
+          },
+        },
+      },
+    },
+  })
+
+  const closeHandled = await handleUtilityCommands({
+    sock,
+    from: "group@g.us",
+    sender: "override@s.whatsapp.net",
+    rawText: "!bugbounty close 54321 F",
+    isCommand: true,
+    cmd: "!bugbounty close 54321 f",
+    prefix: "!",
+    isGroup: true,
+    isKnownOverrideSender: true,
+    overrideJid: "override@s.whatsapp.net",
+    storage,
+    economyService: {
+      creditCoins: (_userId, amount) => amount,
+    },
+    registrationService: {
+      normalizeUserId: (id) => String(id || ""),
+      getUserIdAliases: () => [],
+    },
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+    jidNormalizedUser: (id) => id,
+  })
+
+  const reopenHandled = await handleUtilityCommands({
+    sock,
+    from: "group@g.us",
+    sender: "override@s.whatsapp.net",
+    rawText: "!bugbounty reopen 54321 5",
+    isCommand: true,
+    cmd: "!bugbounty reopen 54321 5",
+    prefix: "!",
+    isGroup: true,
+    isKnownOverrideSender: true,
+    overrideJid: "override@s.whatsapp.net",
+    storage,
+    registrationService: {
+      normalizeUserId: (id) => String(id || ""),
+      getUserIdAliases: () => [],
+    },
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+    jidNormalizedUser: (id) => id,
+  })
+
+  assert.equal(closeHandled, true)
+  assert.equal(reopenHandled, true)
+
+  const state = storage.__getGameState("__system__", "bugBountyState")
+  assert.equal(state?.reports?.["54321"]?.status, "open")
+  assert.equal(state?.reports?.["54321"]?.finalPriority, 5)
+  assert.equal(state?.reports?.["54321"]?.reopenCount, 1)
+
+  const reporterDm = sent.find((entry) => entry.to === "reporter@s.whatsapp.net")
+  assert.ok(reporterDm)
+  assert.match(String(reporterDm.payload?.text || ""), /CORRIGIDO/i)
 })
 
 test("utility router handles !feedbackpriv and forwards next group message to override DM once", async () => {

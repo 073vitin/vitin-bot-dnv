@@ -4229,6 +4229,8 @@ setTimeout(() => {
         isOverrideSender,
         isKnownOverrideSender,
         overrideJid: overrideCompat.overrideJid,
+        storage,
+        economyService,
         msg,
         quoted,
         mentioned,

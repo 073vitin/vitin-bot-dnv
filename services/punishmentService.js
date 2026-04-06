@@ -255,11 +255,9 @@ function matchesUrgentPrefix(text = "", requiredPrefix = "🚨URGENTE:") {
   const trimmedStart = raw.trimStart()
   if (!trimmedStart) return false
 
-  // Keep strict support for configured prefix, but accept small user-input variations.
+  // Require EXACT prefix match - no variations allowed
   const strictPrefix = String(requiredPrefix || "🚨URGENTE:").trim()
-  if (strictPrefix && trimmedStart.startsWith(strictPrefix)) return true
-
-  return /^(?:🚨\s*)?urgente\s*:?\s*/i.test(trimmedStart)
+  return strictPrefix && trimmedStart.startsWith(strictPrefix)
 }
 
 function getResendText(msg, text = "") {

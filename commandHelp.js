@@ -786,6 +786,21 @@ blackjack: {
     details: "A próxima mensagem será enviada privadamente aos admins.",
   },
 
+  bugbounty: {
+    name: "Bug Bounty",
+    aliases: ["bugbounty"],
+    description: "Mostra resumo do programa de bugs e permite reportar no privado",
+    usage: "!bugbounty | !bugbounty reportar <1-5>",
+    commonUsage: [
+      "!bugbounty - Ver contadores, top reporter e tabela de recompensa",
+      "!bugbounty reportar 3 - Armar captura da próxima mensagem como reporte",
+      "!bugbounty list open - [override] listar reportes abertos",
+      "!bugbounty close 12345 F - [override] fechar como corrigido",
+      "!bugbounty reopen 12345 5 - [override] reabrir e reclassificar prioridade",
+    ],
+    details: "A resposta de !bugbounty vem em duas mensagens: resumo no chat atual e fluxo de reporte apenas no seu DM. Subcomandos list/info/close/reopen são exclusivos para override.",
+  },
+
   pergunta: {
     name: "Pergunta Privada",
     aliases: ["pergunta"],

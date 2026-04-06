@@ -12,6 +12,26 @@ const questionInboxById = new Map()
 const pendingEnqueteBySender = new Map()
 const pendingEnqueteReplyBySender = new Map()
 const enqueteInboxById = new Map()
+const pendingBugReportBySender = new Map()
+
+const BUG_BOUNTY_STATE_GROUP_ID = "__system__"
+const BUG_BOUNTY_STATE_KEY = "bugBountyState"
+const BUG_BOUNTY_PRIORITY_PAYOUT = Object.freeze({
+  1: 250,
+  2: 500,
+  3: 1000,
+  4: 2000,
+  5: 4000,
+})
+const BUG_BOUNTY_IGNORE_REASONS = Object.freeze({
+  NR: "nao reproduzivel",
+  DUP: "duplicado",
+  CAT: "categoria incorreta",
+  DET: "detalhes insuficientes",
+  FAKE: "reporte falso",
+})
+
+let bugBountyStateFallback = { reports: {} }
 
 function generateQuestionId() {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -38,6 +58,209 @@ function allocateEnqueteId() {
   return enqueteId
 }
 
+function buildEmptyBugBountyState() {
+  return { reports: {} }
+}
+
+function normalizeBugPriority(value, fallback = 1) {
+  const parsed = Number.parseInt(String(value || "").trim(), 10)
+  if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 5) {
+    return parsed
+  }
+  return fallback
+}
+
+function normalizeTimestamp(value, fallback = 0) {
+  const parsed = Math.floor(Number(value) || 0)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return parsed
+}
+
+function normalizeBugReportRecord(raw = {}, reportId = "") {
+  const idFromRecord = String(raw?.id || "").trim()
+  const id = /^\d{5}$/.test(String(reportId || "").trim())
+    ? String(reportId || "").trim()
+    : (/^\d{5}$/.test(idFromRecord) ? idFromRecord : "")
+  if (!id) return null
+
+  const reporter = String(raw?.reporter || raw?.reporterJid || "").trim().toLowerCase()
+  if (!reporter) return null
+
+  const reportedPriority = normalizeBugPriority(raw?.reportedPriority ?? raw?.priority, 1)
+  const finalPriority = normalizeBugPriority(raw?.finalPriority, reportedPriority)
+  const statusRaw = String(raw?.status || "open").trim().toLowerCase()
+  const status = statusRaw === "closed" ? "closed" : "open"
+
+  const resolutionRaw = String(raw?.resolution || "").trim().toLowerCase()
+  const resolution = status === "closed" && (resolutionRaw === "fixed" || resolutionRaw === "ignored")
+    ? resolutionRaw
+    : ""
+
+  const ignoreReasonRaw = String(raw?.ignoreReason || raw?.closeReason || "").trim().toUpperCase()
+  const ignoreReason = BUG_BOUNTY_IGNORE_REASONS[ignoreReasonRaw] ? ignoreReasonRaw : ""
+
+  return {
+    id,
+    reporter,
+    reportedPriority,
+    finalPriority,
+    description: String(raw?.description || "").trim(),
+    status,
+    resolution,
+    ignoreReason,
+    closeNote: String(raw?.closeNote || "").trim(),
+    createdAt: normalizeTimestamp(raw?.createdAt, Date.now()),
+    closedAt: normalizeTimestamp(raw?.closedAt, 0),
+    closedBy: String(raw?.closedBy || "").trim().toLowerCase(),
+    payoutCoins: Math.max(0, Math.floor(Number(raw?.payoutCoins) || 0)),
+    creditedAt: normalizeTimestamp(raw?.creditedAt, 0),
+    totalCreditedCoins: Math.max(0, Math.floor(Number(raw?.totalCreditedCoins) || 0)),
+    lastInfoRequestedAt: normalizeTimestamp(raw?.lastInfoRequestedAt, 0),
+    lastInfoRequestedBy: String(raw?.lastInfoRequestedBy || "").trim().toLowerCase(),
+    reopenedAt: normalizeTimestamp(raw?.reopenedAt, 0),
+    reopenedBy: String(raw?.reopenedBy || "").trim().toLowerCase(),
+    reopenCount: Math.max(0, Math.floor(Number(raw?.reopenCount) || 0)),
+  }
+}
+
+function normalizeBugBountyState(raw = null) {
+  const state = raw && typeof raw === "object" ? raw : {}
+  const rawReports = state.reports && typeof state.reports === "object" ? state.reports : {}
+  const reports = {}
+
+  for (const [reportId, reportRaw] of Object.entries(rawReports)) {
+    const normalized = normalizeBugReportRecord(reportRaw, reportId)
+    if (!normalized) continue
+    reports[normalized.id] = normalized
+  }
+
+  return { reports }
+}
+
+function getBugBountyState(storage) {
+  if (typeof storage?.getGameState !== "function") {
+    return normalizeBugBountyState(bugBountyStateFallback)
+  }
+  const raw = storage.getGameState(BUG_BOUNTY_STATE_GROUP_ID, BUG_BOUNTY_STATE_KEY)
+  return normalizeBugBountyState(raw)
+}
+
+function setBugBountyState(storage, state) {
+  const normalized = normalizeBugBountyState(state)
+  if (typeof storage?.setGameState === "function") {
+    storage.setGameState(BUG_BOUNTY_STATE_GROUP_ID, BUG_BOUNTY_STATE_KEY, normalized)
+    return
+  }
+  bugBountyStateFallback = normalized
+}
+
+function generateBugReportId() {
+  const randomNumber = Math.floor(Math.random() * 100000)
+  return String(randomNumber).padStart(5, "0")
+}
+
+function allocateBugReportId(state = null) {
+  const reports = state?.reports && typeof state.reports === "object" ? state.reports : {}
+  let id = generateBugReportId()
+  let safety = 0
+  while (reports[id] && safety < 100000) {
+    id = generateBugReportId()
+    safety += 1
+  }
+  if (reports[id]) {
+    return String(Date.now()).replace(/\D+/g, "").slice(-5).padStart(5, "0")
+  }
+  return id
+}
+
+function canonicalizeBugReporterId(userId = "", registrationService, jidNormalizedUser) {
+  const normalizedByRegistration = typeof registrationService?.normalizeUserId === "function"
+    ? registrationService.normalizeUserId(userId)
+    : normalizeUserId(userId)
+  const normalizedByJid = typeof jidNormalizedUser === "function"
+    ? jidNormalizedUser(userId)
+    : ""
+
+  return String(normalizedByRegistration || normalizedByJid || userId || "")
+    .trim()
+    .toLowerCase()
+}
+
+function buildBugReporterCandidates(userId = "", registrationService, jidNormalizedUser) {
+  const candidates = new Set()
+  const addCandidate = (value) => {
+    const normalized = canonicalizeBugReporterId(value, registrationService, jidNormalizedUser)
+    if (normalized) candidates.add(normalized)
+  }
+
+  addCandidate(userId)
+
+  if (typeof registrationService?.getUserIdAliases === "function") {
+    const aliases = registrationService.getUserIdAliases(userId)
+    for (const alias of aliases) addCandidate(alias)
+  }
+
+  return candidates
+}
+
+function getBugBountyIdentityLabel(userId = "", options = {}) {
+  const economyService = options?.economyService
+  const registrationService = options?.registrationService
+  const normalizedUserId = String(userId || "").trim().toLowerCase()
+
+  const mentionOptIn = typeof economyService?.isMentionOptIn === "function"
+    ? economyService.isMentionOptIn(normalizedUserId)
+    : true
+
+  const profile = typeof economyService?.getProfile === "function"
+    ? economyService.getProfile(normalizedUserId)
+    : null
+  const customLabel = String(profile?.preferences?.publicLabel || "").trim()
+  const registeredEntry = typeof registrationService?.getRegisteredEntry === "function"
+    ? registrationService.getRegisteredEntry(normalizedUserId)
+    : null
+  const knownName = String(registeredEntry?.lastKnownName || "").trim()
+  const stableLabel = typeof economyService?.getStablePublicLabel === "function"
+    ? economyService.getStablePublicLabel(normalizedUserId)
+    : (getMentionHandleFromJid(normalizedUserId) || "Jogador")
+
+  const fallbackLabel = customLabel || knownName || stableLabel || "Jogador"
+  const mentionJid = normalizeMentionJid(normalizedUserId)
+
+  if (mentionOptIn && mentionJid) {
+    const tag = getMentionHandleFromJid(mentionJid).split(":")[0]
+    if (tag) {
+      return {
+        label: `@${tag}`,
+        mentionId: mentionJid,
+      }
+    }
+  }
+
+  return {
+    label: fallbackLabel,
+    mentionId: null,
+  }
+}
+
+function getBugBountyListFilter(value = "") {
+  const normalized = String(value || "").trim().toLowerCase()
+  if (!normalized) return "open"
+  if (["open", "closed", "fixed", "ignored"].includes(normalized)) {
+    return normalized
+  }
+  return ""
+}
+
+function getBugBountyIgnoreReasonLabel(reasonCode = "") {
+  const normalized = String(reasonCode || "").trim().toUpperCase()
+  return BUG_BOUNTY_IGNORE_REASONS[normalized] || "motivo nao especificado"
+}
+
+function getBugBountyPriorityLabel(priority = 1) {
+  return `P${normalizeBugPriority(priority, 1)}`
+}
+
 async function handleUtilityCommands(ctx) {
   const {
     sock,
@@ -61,6 +284,8 @@ async function handleUtilityCommands(ctx) {
     isOverrideSender,
     isKnownOverrideSender,
     overrideJid,
+    storage,
+    economyService,
     registrationService,
     botHasGroupAdminPrivileges,
   } = ctx
@@ -81,6 +306,7 @@ async function handleUtilityCommands(ctx) {
         { cmd: `${prefix}pergunta`, usage: `${prefix}pergunta`, effect: "captura a proxima mensagem como pergunta privada com protocolo", badges: ["DM"] },
         { cmd: `${prefix}feedback`, usage: `${prefix}feedback`, effect: "links para feedback e report de bugs", badges: ["GERAL"] },
         { cmd: `${prefix}feedbackpriv`, usage: `${prefix}feedbackpriv`, effect: "captura a proxima mensagem e envia feedback no privado para override", badges: ["GERAL"] },
+        { cmd: `${prefix}bugbounty`, usage: `${prefix}bugbounty | ${prefix}bugbounty reportar <1-5>`, effect: "menu e fluxo de reporte de bugs", badges: ["GERAL", "DM"] },
         { cmd: `${prefix}menu`, usage: `${prefix}menu`, effect: "abre o menu principal", badges: ["GERAL"] },
         { cmd: `${prefix}perf`, usage: `${prefix}perf`, effect: "mede latencia", badges: ["GERAL"] },
         { cmd: `${prefix}s`, aliases: [`${prefix}fig`, `${prefix}sticker`, `${prefix}f`], usage: `${prefix}s (com midia)`, effect: "converte em figurinha", badges: ["GERAL"] },
@@ -194,6 +420,7 @@ async function handleUtilityCommands(ctx) {
         { cmd: `${prefix}criarcupom`, usage: `${prefix}criarcupom @usuario <1-100>`, effect: "gera cupom de desconto para usuario", badges: ["OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}enquete`, usage: `${prefix}enquete <titulo> <S|N>`, effect: "enquete guiada (S=DM registrados | N=grupos registrados)", badges: ["OVERRIDE", "OCULTO"] },
         { cmd: `${prefix}enquete <ID> responder`, usage: `${prefix}enquete <ID> responder`, effect: "responde a uma enquete", badges: ["GRUPO", "DM"] },
+        { cmd: `${prefix}bugbounty list/info/close/reopen`, usage: `${prefix}bugbounty list [open|closed|fixed|ignored] | ${prefix}bugbounty close <id> <F|I> [motivo]`, effect: "gerencia reportes de bugs (override)", badges: ["OVERRIDE", "OCULTO"] },
       ],
     }
 
@@ -286,6 +513,521 @@ async function handleUtilityCommands(ctx) {
     })
   }
 
+  const isBugBountyCommand = cmd === prefix + "bugbounty" || cmd.startsWith(prefix + "bugbounty ")
+  const hasBugBountyOverrideAccess = Boolean(isKnownOverrideSender || isOverrideSender)
+
+  if (isBugBountyCommand) {
+    const tokens = String(cmd || "").trim().split(/\s+/).filter(Boolean)
+    const rawTokens = String(rawText || "").trim().split(/\s+/).filter(Boolean)
+    const action = String(tokens[1] || "").trim().toLowerCase()
+    const bugState = getBugBountyState(storage)
+    const allReports = Object.values(bugState.reports || {})
+    const senderCandidates = buildBugReporterCandidates(sender, registrationService, jidNormalizedUser)
+    const canonicalSender = canonicalizeBugReporterId(sender, registrationService, jidNormalizedUser)
+
+    const getReportById = (bugId = "") => {
+      const normalizedId = String(bugId || "").trim()
+      if (!/^\d{5}$/.test(normalizedId)) return null
+      return bugState.reports[normalizedId] || null
+    }
+
+    const denyOverrideOnlyAction = async (requestedAction = "") => {
+      trackUtility("bugbounty", "rejected", { reason: "not-override", action: requestedAction })
+      await sock.sendMessage(from, {
+        text: "Somente overrides podem usar esse subcomando do bugbounty.",
+      })
+      return true
+    }
+
+    if (!action) {
+      const openReports = allReports.filter((report) => report.status === "open")
+      const closedReports = allReports.filter((report) => report.status === "closed")
+      const fixedReports = closedReports.filter((report) => report.resolution === "fixed")
+      const ignoredReports = closedReports.filter((report) => report.resolution === "ignored")
+
+      const myReports = allReports.filter((report) => {
+        const reporterId = canonicalizeBugReporterId(report.reporter, registrationService, jidNormalizedUser)
+        return senderCandidates.has(reporterId)
+      })
+      const myEarned = myReports.reduce((acc, report) => {
+        if (report.resolution !== "fixed") return acc
+        const gained = Math.max(
+          0,
+          Math.floor(Number(report.totalCreditedCoins || report.payoutCoins) || 0)
+        )
+        return acc + gained
+      }, 0)
+
+      const groupedByReporter = new Map()
+      for (const report of allReports) {
+        const reporterId = canonicalizeBugReporterId(report.reporter, registrationService, jidNormalizedUser)
+        if (!reporterId) continue
+        const current = groupedByReporter.get(reporterId) || {
+          reporterId,
+          reports: 0,
+          earned: 0,
+        }
+        current.reports += 1
+        if (report.resolution === "fixed") {
+          current.earned += Math.max(
+            0,
+            Math.floor(Number(report.totalCreditedCoins || report.payoutCoins) || 0)
+          )
+        }
+        groupedByReporter.set(reporterId, current)
+      }
+
+      const topReporter = Array.from(groupedByReporter.values()).sort((a, b) => {
+        if (b.reports !== a.reports) return b.reports - a.reports
+        if (b.earned !== a.earned) return b.earned - a.earned
+        return String(a.reporterId || "").localeCompare(String(b.reporterId || ""))
+      })[0] || null
+
+      const topReporterIdentity = topReporter
+        ? getBugBountyIdentityLabel(topReporter.reporterId, {
+          economyService,
+          registrationService,
+        })
+        : null
+      const topReporterMentions = topReporterIdentity?.mentionId
+        ? normalizeMentionArray([topReporterIdentity.mentionId])
+        : []
+
+      const summaryLines = [
+        "🐞 BUGBOUNTY",
+        "",
+        `Abertos: *${openReports.length}*`,
+        `Fechados: *${closedReports.length}* (corrigidos: ${fixedReports.length} | ignorados: ${ignoredReports.length})`,
+        "",
+        `Seus reportes: *${myReports.length}*`,
+        `Seus ganhos por reportes corrigidos: *${myEarned}* Epsteincoins`,
+        "",
+      ]
+
+      if (topReporter && topReporterIdentity) {
+        summaryLines.push(`Top reporter: *${topReporterIdentity.label}*`)
+        summaryLines.push(`- Reportes: *${topReporter.reports}*`)
+        summaryLines.push(`- Ganhos: *${topReporter.earned}* Epsteincoins`)
+      } else {
+        summaryLines.push("Top reporter: *ainda sem reportes válidos.*")
+      }
+
+      summaryLines.push("")
+      summaryLines.push("Tabela de recompensas:")
+      for (let priority = 1; priority <= 5; priority++) {
+        const payout = BUG_BOUNTY_PRIORITY_PAYOUT[priority] || 0
+        summaryLines.push(`- P${priority}: *${payout}* Epsteincoins`)
+      }
+
+      await sock.sendMessage(from, {
+        text: summaryLines.join("\n"),
+        mentions: topReporterMentions,
+      })
+
+      await sock.sendMessage(sender, {
+        text:
+`📬 Fluxo de reporte de bugs
+
+1) Abra o privado com o bot.
+2) Use: ${prefix}bugbounty reportar <1-5>
+3) Envie a descrição completa na próxima mensagem.
+4) Aguarde revisão da equipe.
+5) O reporte será fechado como corrigido (F) ou ignorado (I).`,
+      })
+
+      trackUtility("bugbounty", "success", {
+        action: "menu",
+        openCount: openReports.length,
+        closedCount: closedReports.length,
+      })
+      return true
+    }
+
+    if (action === "reportar") {
+      if (isGroup) {
+        trackUtility("bugbounty", "rejected", { reason: "group-only-dm-command", action: "reportar" })
+        await sock.sendMessage(from, {
+          text: `Este comando so funciona no privado com o bot. Use: ${prefix}bugbounty reportar <1-5> no DM.`,
+        })
+        return true
+      }
+
+      const reportedPriority = normalizeBugPriority(tokens[2], 0)
+      if (!reportedPriority) {
+        trackUtility("bugbounty", "rejected", { reason: "invalid-priority", action: "reportar" })
+        await sock.sendMessage(from, {
+          text: `Use: ${prefix}bugbounty reportar <1-5>`,
+        })
+        return true
+      }
+
+      pendingBugReportBySender.set(sender, {
+        createdAt: Date.now(),
+        reportedPriority,
+      })
+      trackUtility("bugbounty", "armed", { action: "reportar", reportedPriority })
+      await sock.sendMessage(from, {
+        text:
+`✅ Modo reporte de bug ativado.
+
+Prioridade escolhida: *P${reportedPriority}*.
+Envie a descrição completa na próxima mensagem.
+Apenas a próxima mensagem será capturada.`,
+      })
+      return true
+    }
+
+    if (action === "list") {
+      if (!hasBugBountyOverrideAccess) {
+        return denyOverrideOnlyAction("list")
+      }
+
+      const filter = getBugBountyListFilter(tokens[2])
+      if (!filter) {
+        trackUtility("bugbounty", "rejected", { reason: "invalid-filter", action: "list" })
+        await sock.sendMessage(from, {
+          text: `Use: ${prefix}bugbounty list [open|closed|fixed|ignored]`,
+        })
+        return true
+      }
+
+      let filtered = allReports
+      if (filter === "open") filtered = allReports.filter((report) => report.status === "open")
+      if (filter === "closed") filtered = allReports.filter((report) => report.status === "closed")
+      if (filter === "fixed") filtered = allReports.filter((report) => report.status === "closed" && report.resolution === "fixed")
+      if (filter === "ignored") filtered = allReports.filter((report) => report.status === "closed" && report.resolution === "ignored")
+
+      filtered = filtered.sort((a, b) => {
+        const bTs = Math.max(Number(b.closedAt) || 0, Number(b.createdAt) || 0)
+        const aTs = Math.max(Number(a.closedAt) || 0, Number(a.createdAt) || 0)
+        return bTs - aTs
+      })
+
+      if (filtered.length === 0) {
+        await sock.sendMessage(from, {
+          text: `Nenhum reporte encontrado para o filtro *${filter}*.`,
+        })
+        trackUtility("bugbounty", "success", { action: "list", filter, total: 0 })
+        return true
+      }
+
+      const mentions = []
+      const listLines = filtered.slice(0, 15).map((report) => {
+        const reporterIdentity = getBugBountyIdentityLabel(report.reporter, {
+          economyService,
+          registrationService,
+        })
+        if (reporterIdentity.mentionId) {
+          mentions.push(reporterIdentity.mentionId)
+        }
+
+        const statusLabel = report.status === "open"
+          ? "aberto"
+          : (report.resolution === "fixed" ? "fechado/corrigido" : "fechado/ignorado")
+        const reasonLabel = report.resolution === "ignored" && report.ignoreReason
+          ? ` (${getBugBountyIgnoreReasonLabel(report.ignoreReason)})`
+          : ""
+        const payoutLabel = report.resolution === "fixed"
+          ? ` | +${Math.max(0, Math.floor(Number(report.totalCreditedCoins || report.payoutCoins) || 0))} Epsteincoins`
+          : ""
+        return `- ${report.id} | ${getBugBountyPriorityLabel(report.reportedPriority)} -> ${getBugBountyPriorityLabel(report.finalPriority)} | ${statusLabel}${reasonLabel} | ${reporterIdentity.label}${payoutLabel}`
+      })
+
+      if (filtered.length > 15) {
+        listLines.push(`... +${filtered.length - 15} reportes`) 
+      }
+
+      await sock.sendMessage(from, {
+        text: `🐞 Lista de reportes (${filter})\n\n${listLines.join("\n")}`,
+        mentions: normalizeMentionArray(mentions),
+      })
+      trackUtility("bugbounty", "success", { action: "list", filter, total: filtered.length })
+      return true
+    }
+
+    if (action === "info") {
+      if (!hasBugBountyOverrideAccess) {
+        return denyOverrideOnlyAction("info")
+      }
+
+      const bugId = String(tokens[2] || "").trim()
+      if (!/^\d{5}$/.test(bugId)) {
+        trackUtility("bugbounty", "rejected", { reason: "invalid-id", action: "info" })
+        await sock.sendMessage(from, {
+          text: `Use: ${prefix}bugbounty info <BUG_ID>`,
+        })
+        return true
+      }
+
+      const report = getReportById(bugId)
+      if (!report) {
+        trackUtility("bugbounty", "rejected", { reason: "unknown-id", action: "info", bugId })
+        await sock.sendMessage(from, {
+          text: `Nao encontrei reporte com ID *${bugId}*.`,
+        })
+        return true
+      }
+
+      const infoText =
+`🛠️ Precisamos de mais detalhes sobre o reporte *${report.id}*.
+
+Entre em contato direto com os desenvolvedores usando os contatos de ${prefix}feedback:
+- Jessé: wa.me/+5521995409899
+- Vitin: wa.me/+557398579450`
+
+      try {
+        await sock.sendMessage(report.reporter, { text: infoText })
+      } catch (err) {
+        console.error("Erro ao enviar bugbounty info ao reportante", err)
+        await sock.sendMessage(from, {
+          text: `Nao consegui enviar mensagem para o reportante do bug *${bugId}* agora.`,
+        })
+        trackUtility("bugbounty", "error", { reason: "reporter-dm-failed", action: "info", bugId })
+        return true
+      }
+
+      report.lastInfoRequestedAt = Date.now()
+      report.lastInfoRequestedBy = canonicalSender
+      setBugBountyState(storage, bugState)
+
+      await sock.sendMessage(from, {
+        text: `✅ Mensagem de solicitacao de detalhes enviada ao reportante do bug *${bugId}*.`,
+      })
+      trackUtility("bugbounty", "success", { action: "info", bugId })
+      return true
+    }
+
+    if (action === "close") {
+      if (!hasBugBountyOverrideAccess) {
+        return denyOverrideOnlyAction("close")
+      }
+
+      const bugId = String(tokens[2] || "").trim()
+      const closeMode = String(tokens[3] || "").trim().toUpperCase()
+      if (!/^\d{5}$/.test(bugId) || !["F", "I"].includes(closeMode)) {
+        trackUtility("bugbounty", "rejected", { reason: "invalid-close-syntax", action: "close" })
+        await sock.sendMessage(from, {
+          text: `Use: ${prefix}bugbounty close <BUG_ID> <F|I> [NR|DUP|CAT|DET|FAKE] [nota]`,
+        })
+        return true
+      }
+
+      const report = getReportById(bugId)
+      if (!report) {
+        trackUtility("bugbounty", "rejected", { reason: "unknown-id", action: "close", bugId })
+        await sock.sendMessage(from, {
+          text: `Nao encontrei reporte com ID *${bugId}*.`,
+        })
+        return true
+      }
+
+      if (report.status !== "open") {
+        trackUtility("bugbounty", "rejected", { reason: "already-closed", action: "close", bugId })
+        await sock.sendMessage(from, {
+          text: `O reporte *${bugId}* ja esta fechado. Use ${prefix}bugbounty reopen ${bugId} [1-5] para reabrir.`,
+        })
+        return true
+      }
+
+      if (closeMode === "I") {
+        const ignoreReason = String(tokens[4] || "").trim().toUpperCase()
+        if (!BUG_BOUNTY_IGNORE_REASONS[ignoreReason]) {
+          trackUtility("bugbounty", "rejected", { reason: "missing-ignore-reason", action: "close", bugId })
+          await sock.sendMessage(from, {
+            text: `Para fechar como ignorado, use: ${prefix}bugbounty close ${bugId} I <NR|DUP|CAT|DET|FAKE> [nota]`,
+          })
+          return true
+        }
+
+        const closeNote = String(rawTokens.slice(5).join(" ") || "").trim()
+        report.status = "closed"
+        report.resolution = "ignored"
+        report.ignoreReason = ignoreReason
+        report.closeNote = closeNote
+        report.closedAt = Date.now()
+        report.closedBy = canonicalSender
+        report.payoutCoins = 0
+        report.creditedAt = 0
+        setBugBountyState(storage, bugState)
+
+        const reporterMessage =
+`ℹ️ Atualizacao do seu reporte *${bugId}*:
+
+Status: *IGNORADO*
+Motivo: *${getBugBountyIgnoreReasonLabel(ignoreReason)}*${closeNote ? `\nNota da equipe: ${closeNote}` : ""}
+
+Você nao recebeu credito neste fechamento.`
+
+        try {
+          await sock.sendMessage(report.reporter, { text: reporterMessage })
+        } catch (err) {
+          console.error("Erro ao notificar reportante no close ignorado", err)
+        }
+
+        await sock.sendMessage(from, {
+          text: `✅ Reporte *${bugId}* fechado como ignorado (${getBugBountyIgnoreReasonLabel(ignoreReason)}).`,
+        })
+        trackUtility("bugbounty", "success", {
+          action: "close",
+          mode: "ignored",
+          bugId,
+          ignoreReason,
+        })
+        return true
+      }
+
+      const priority = normalizeBugPriority(report.finalPriority, report.reportedPriority)
+      const expectedPayout = BUG_BOUNTY_PRIORITY_PAYOUT[priority] || 0
+      const alreadyCredited = Math.max(0, Math.floor(Number(report.totalCreditedCoins) || 0))
+      let creditedNow = 0
+
+      if (alreadyCredited <= 0 && expectedPayout > 0 && typeof economyService?.creditCoins === "function") {
+        creditedNow = Math.max(0, Math.floor(Number(
+          economyService.creditCoins(report.reporter, expectedPayout, {
+            type: "bugbounty_fixed",
+            details: `Reporte de bug ${bugId} marcado como corrigido`,
+            meta: {
+              bugId,
+              priority,
+            },
+          })
+        ) || 0))
+      }
+
+      const totalCredited = alreadyCredited + creditedNow
+      report.status = "closed"
+      report.resolution = "fixed"
+      report.ignoreReason = ""
+      report.closeNote = ""
+      report.closedAt = Date.now()
+      report.closedBy = canonicalSender
+      report.payoutCoins = creditedNow > 0 ? creditedNow : expectedPayout
+      report.creditedAt = creditedNow > 0 ? Date.now() : report.creditedAt
+      report.totalCreditedCoins = totalCredited
+      setBugBountyState(storage, bugState)
+
+      let creditText = `Crédito previsto: *${expectedPayout}* Epsteincoins.`
+      if (creditedNow > 0) {
+        creditText = `Você foi creditado com *${creditedNow}* Epsteincoins.`
+      } else if (alreadyCredited > 0) {
+        creditText = `Esse reporte ja havia sido creditado anteriormente com *${alreadyCredited}* Epsteincoins.`
+      }
+
+      const reporterMessage =
+`✅ Atualizacao do seu reporte *${bugId}*:
+
+Status: *CORRIGIDO*
+Prioridade: *${getBugBountyPriorityLabel(priority)}*
+${creditText}`
+
+      try {
+        await sock.sendMessage(report.reporter, { text: reporterMessage })
+      } catch (err) {
+        console.error("Erro ao notificar reportante no close corrigido", err)
+      }
+
+      await sock.sendMessage(from, {
+        text: `✅ Reporte *${bugId}* fechado como corrigido. ${creditText}`,
+      })
+      trackUtility("bugbounty", "success", {
+        action: "close",
+        mode: "fixed",
+        bugId,
+        expectedPayout,
+        creditedNow,
+      })
+      return true
+    }
+
+    if (action === "reopen") {
+      if (!hasBugBountyOverrideAccess) {
+        return denyOverrideOnlyAction("reopen")
+      }
+
+      const bugId = String(tokens[2] || "").trim()
+      const reclassifyArg = String(tokens[3] || "").trim()
+      if (!/^\d{5}$/.test(bugId)) {
+        trackUtility("bugbounty", "rejected", { reason: "invalid-id", action: "reopen" })
+        await sock.sendMessage(from, {
+          text: `Use: ${prefix}bugbounty reopen <BUG_ID> [1-5]`,
+        })
+        return true
+      }
+
+      const newPriority = reclassifyArg ? normalizeBugPriority(reclassifyArg, 0) : 0
+      if (reclassifyArg && !newPriority) {
+        trackUtility("bugbounty", "rejected", { reason: "invalid-reclassify", action: "reopen", bugId })
+        await sock.sendMessage(from, {
+          text: `Prioridade invalida. Use: ${prefix}bugbounty reopen <BUG_ID> [1-5]`,
+        })
+        return true
+      }
+
+      const report = getReportById(bugId)
+      if (!report) {
+        trackUtility("bugbounty", "rejected", { reason: "unknown-id", action: "reopen", bugId })
+        await sock.sendMessage(from, {
+          text: `Nao encontrei reporte com ID *${bugId}*.`,
+        })
+        return true
+      }
+
+      if (report.status !== "closed") {
+        trackUtility("bugbounty", "rejected", { reason: "already-open", action: "reopen", bugId })
+        await sock.sendMessage(from, {
+          text: `O reporte *${bugId}* ja esta aberto.`,
+        })
+        return true
+      }
+
+      report.status = "open"
+      report.resolution = ""
+      report.ignoreReason = ""
+      report.closeNote = ""
+      report.closedAt = 0
+      report.closedBy = ""
+      report.payoutCoins = 0
+      report.creditedAt = 0
+      report.reopenedAt = Date.now()
+      report.reopenedBy = canonicalSender
+      report.reopenCount = Math.max(0, Math.floor(Number(report.reopenCount) || 0)) + 1
+
+      if (newPriority) {
+        report.finalPriority = newPriority
+      }
+
+      setBugBountyState(storage, bugState)
+
+      await sock.sendMessage(from, {
+        text: `✅ Reporte *${bugId}* reaberto com sucesso.${newPriority ? ` Nova prioridade final: ${getBugBountyPriorityLabel(newPriority)}.` : ""}`,
+      })
+      trackUtility("bugbounty", "success", {
+        action: "reopen",
+        bugId,
+        reclassified: Boolean(newPriority),
+        newPriority,
+      })
+      return true
+    }
+
+    trackUtility("bugbounty", "rejected", { reason: "invalid-subcommand", action })
+    await sock.sendMessage(from, {
+      text:
+`Subcomando invalido.
+
+Uso publico:
+- ${prefix}bugbounty
+- ${prefix}bugbounty reportar <1-5>
+
+Uso override:
+- ${prefix}bugbounty list [open|closed|fixed|ignored]
+- ${prefix}bugbounty info <BUG_ID>
+- ${prefix}bugbounty close <BUG_ID> <F|I> [NR|DUP|CAT|DET|FAKE] [nota]
+- ${prefix}bugbounty reopen <BUG_ID> [1-5]`,
+    })
+    return true
+  }
+
   if (cmd === prefix + "menu") {
     trackUtility("menu", "success")
     await sock.sendMessage(from, {
@@ -304,6 +1046,7 @@ async function handleUtilityCommands(ctx) {
 ╭━━━〔 🛠️ FEEDBACK 〕━━━╮
 │ ${prefix}feedback
 │ ${prefix}feedbackpriv
+│ ${prefix}bugbounty - sistema de recompensas por bugs
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 🎨 FIGURINHAS 〕━━━╮
@@ -323,7 +1066,7 @@ async function handleUtilityCommands(ctx) {
 
 ╭━━━〔 ⚡ ADM 〕━━━╮
 │ ${prefix}adm
-│ ${prefix}admeconomia
+│ ${prefix}admeconomia (apenas donos)
 ╰━━━━━━━━━━━━━━━━━━━━╯`,
     })
     return true
@@ -565,6 +1308,100 @@ Quando houver resposta, eu envio para voce no privado.`,
       mode: "question",
       questionId,
       questionLength: questionText.length,
+    })
+    return true
+  }
+
+  const pendingBugReport = pendingBugReportBySender.get(sender)
+  if (pendingBugReport && !isGroup && !isBugBountyCommand) {
+    pendingBugReportBySender.delete(sender)
+
+    const bugDescription = String(rawText || "").trim()
+    if (!bugDescription) {
+      trackUtility("bugbounty", "rejected", { reason: "empty-report-description", action: "reportar" })
+      await sock.sendMessage(from, {
+        text: "Nao recebi texto para registrar o reporte de bug.",
+      })
+      return true
+    }
+
+    const overrideTarget = String(overrideJid || "").trim()
+    if (!overrideTarget) {
+      trackUtility("bugbounty", "error", { reason: "missing-override-jid", action: "reportar" })
+      await sock.sendMessage(from, {
+        text: "Reporte de bug indisponivel no momento: nao encontrei o destino de encaminhamento.",
+      })
+      return true
+    }
+
+    const bugState = getBugBountyState(storage)
+    const reportId = allocateBugReportId(bugState)
+    const reporter = canonicalizeBugReporterId(sender, registrationService, jidNormalizedUser)
+    const reportedPriority = normalizeBugPriority(pendingBugReport.reportedPriority, 1)
+    const now = Date.now()
+
+    bugState.reports[reportId] = {
+      id: reportId,
+      reporter,
+      reportedPriority,
+      finalPriority: reportedPriority,
+      description: bugDescription,
+      status: "open",
+      resolution: "",
+      ignoreReason: "",
+      closeNote: "",
+      createdAt: now,
+      closedAt: 0,
+      closedBy: "",
+      payoutCoins: 0,
+      creditedAt: 0,
+      totalCreditedCoins: 0,
+      lastInfoRequestedAt: 0,
+      lastInfoRequestedBy: "",
+      reopenedAt: 0,
+      reopenedBy: "",
+      reopenCount: 0,
+    }
+    setBugBountyState(storage, bugState)
+
+    const reporterIdentity = getBugBountyIdentityLabel(reporter, {
+      economyService,
+      registrationService,
+    })
+    const priorityReward = BUG_BOUNTY_PRIORITY_PAYOUT[reportedPriority] || 0
+
+    await sock.sendMessage(overrideTarget, {
+      text:
+`🐞 BUG REPORT (${reportId})
+De: ${reporterIdentity.label}
+ID reportante: ${reporter}
+Prioridade reportada: ${getBugBountyPriorityLabel(reportedPriority)} (${priorityReward} Epsteincoins)
+
+${bugDescription}
+
+Acoes:
+- ${prefix}bugbounty list open
+- ${prefix}bugbounty close ${reportId} F
+- ${prefix}bugbounty close ${reportId} I <NR|DUP|CAT|DET|FAKE> [nota]
+- ${prefix}bugbounty info ${reportId}
+- ${prefix}bugbounty reopen ${reportId} [1-5]`,
+      mentions: reporterIdentity.mentionId ? normalizeMentionArray([reporterIdentity.mentionId]) : [],
+    })
+
+    await sock.sendMessage(from, {
+      text:
+`✅ Reporte enviado com sucesso.
+Protocolo: *${reportId}*
+Prioridade: *${getBugBountyPriorityLabel(reportedPriority)}*
+
+Quando houver atualizacao, eu aviso no privado.`,
+    })
+
+    trackUtility("bugbounty", "success", {
+      action: "reportar",
+      reportId,
+      reportedPriority,
+      descriptionLength: bugDescription.length,
     })
     return true
   }
@@ -1366,5 +2203,7 @@ module.exports = {
     pendingQuestionBySender.clear()
     pendingQuestionReplyBySender.clear()
     questionInboxById.clear()
+    pendingBugReportBySender.clear()
+    bugBountyStateFallback = buildEmptyBugBountyState()
   },
 }
