@@ -3839,6 +3839,288 @@ test("utility router handles !pergunta ask and override answer flow", async () =
   assert.match(String(sent[sent.length - 1].payload?.text || ""), /Nao encontrei pergunta com protocolo/i)
 })
 
+test("utility router persists enquete IDs and responses via storage", async () => {
+  __resetUtilityRouterStateForTests()
+  const { sock, sent } = createSockCapture()
+  const storage = createGameStateStorage()
+  const override = "override@s.whatsapp.net"
+  const respondent = "user@s.whatsapp.net"
+
+  const registrationService = {
+    getRegisteredUsersForNotifications: () => [respondent],
+    getRegisteredEntry: () => ({ lastKnownName: "Respondente" }),
+  }
+
+  const armed = await handleUtilityCommands({
+    sock,
+    from: override,
+    sender: override,
+    rawText: "!enquete pesquisa S",
+    isCommand: true,
+    cmd: "!enquete pesquisa S",
+    prefix: "!",
+    isGroup: false,
+    isKnownOverrideSender: true,
+    storage,
+    registrationService,
+    isYesToken: (value) => /^y(es)?$/i.test(String(value || "").trim()),
+    isNoToken: (value) => /^n(ao|o)?$/i.test(String(value || "").trim()),
+    isQuitToken: (value) => /^q(uit)?$/i.test(String(value || "").trim()),
+    collectKnownGroupsFromStorage: () => [],
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  const drafted = await handleUtilityCommands({
+    sock,
+    from: override,
+    sender: override,
+    rawText: "qual recurso devemos priorizar?",
+    isCommand: false,
+    cmd: "qual recurso devemos priorizar?",
+    prefix: "!",
+    isGroup: false,
+    isKnownOverrideSender: true,
+    storage,
+    registrationService,
+    isYesToken: (value) => /^y(es)?$/i.test(String(value || "").trim()),
+    isNoToken: (value) => /^n(ao|o)?$/i.test(String(value || "").trim()),
+    isQuitToken: (value) => /^q(uit)?$/i.test(String(value || "").trim()),
+    collectKnownGroupsFromStorage: () => [],
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  const confirmed = await handleUtilityCommands({
+    sock,
+    from: override,
+    sender: override,
+    rawText: "y",
+    isCommand: false,
+    cmd: "y",
+    prefix: "!",
+    isGroup: false,
+    isKnownOverrideSender: true,
+    storage,
+    registrationService,
+    isYesToken: (value) => /^y(es)?$/i.test(String(value || "").trim()),
+    isNoToken: (value) => /^n(ao|o)?$/i.test(String(value || "").trim()),
+    isQuitToken: (value) => /^q(uit)?$/i.test(String(value || "").trim()),
+    collectKnownGroupsFromStorage: () => [],
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  assert.equal(armed, true)
+  assert.equal(drafted, true)
+  assert.equal(confirmed, true)
+
+  const pollMessage = sent.find((entry) => entry.to === respondent && /ENQUETE/i.test(String(entry.payload?.text || "")))
+  assert.ok(pollMessage)
+  const idMatch = String(pollMessage.payload?.text || "").match(/\(([A-Z0-9]{5})\)/)
+  assert.ok(idMatch)
+  const enqueteId = idMatch[1]
+
+  const stateBeforeReply = storage.__getGameState("__system__", "enqueteInboxState")
+  assert.ok(stateBeforeReply?.enquetes?.[enqueteId])
+  assert.equal(stateBeforeReply.enquetes[enqueteId].responses.length, 0)
+
+  __resetUtilityRouterStateForTests()
+
+  const armReply = await handleUtilityCommands({
+    sock,
+    from: "group@g.us",
+    sender: respondent,
+    rawText: `!enquete ${enqueteId} responder`,
+    isCommand: true,
+    cmd: `!enquete ${enqueteId} responder`,
+    prefix: "!",
+    isGroup: true,
+    storage,
+    registrationService,
+    isYesToken: (value) => /^y(es)?$/i.test(String(value || "").trim()),
+    isNoToken: (value) => /^n(ao|o)?$/i.test(String(value || "").trim()),
+    isQuitToken: (value) => /^q(uit)?$/i.test(String(value || "").trim()),
+    collectKnownGroupsFromStorage: () => [],
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  const submitReply = await handleUtilityCommands({
+    sock,
+    from: "group@g.us",
+    sender: respondent,
+    rawText: "priorizem a economia",
+    isCommand: false,
+    cmd: "priorizem a economia",
+    prefix: "!",
+    isGroup: true,
+    storage,
+    registrationService,
+    isYesToken: (value) => /^y(es)?$/i.test(String(value || "").trim()),
+    isNoToken: (value) => /^n(ao|o)?$/i.test(String(value || "").trim()),
+    isQuitToken: (value) => /^q(uit)?$/i.test(String(value || "").trim()),
+    collectKnownGroupsFromStorage: () => [],
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  assert.equal(armReply, true)
+  assert.equal(submitReply, true)
+
+  const stateAfterReply = storage.__getGameState("__system__", "enqueteInboxState")
+  assert.equal(stateAfterReply.enquetes[enqueteId].responses.length, 1)
+  assert.equal(stateAfterReply.enquetes[enqueteId].responses[0].respondent, respondent)
+  assert.match(String(stateAfterReply.enquetes[enqueteId].responses[0].response || ""), /economia/i)
+})
+
+test("utility router persists question protocols via storage across reset", async () => {
+  __resetUtilityRouterStateForTests()
+  const { sock, sent } = createSockCapture()
+  const storage = createGameStateStorage()
+  const override = "override@s.whatsapp.net"
+  const sender = "user@s.whatsapp.net"
+
+  const armedQuestion = await handleUtilityCommands({
+    sock,
+    from: sender,
+    sender,
+    rawText: "!pergunta",
+    isCommand: true,
+    cmd: "!pergunta",
+    prefix: "!",
+    isGroup: false,
+    overrideJid: override,
+    storage,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  const forwardedQuestion = await handleUtilityCommands({
+    sock,
+    from: sender,
+    sender,
+    rawText: "como farmar moedas rapido?",
+    isCommand: false,
+    cmd: "como farmar moedas rapido?",
+    prefix: "!",
+    isGroup: false,
+    overrideJid: override,
+    storage,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  assert.equal(armedQuestion, true)
+  assert.equal(forwardedQuestion, true)
+
+  const overrideMessage = sent.find((entry) => entry.to === override && /PERGUNTA PRIVADA/i.test(String(entry.payload?.text || "")))
+  assert.ok(overrideMessage)
+  const idMatch = String(overrideMessage.payload?.text || "").match(/\(([A-Z0-9]{5})\)/)
+  assert.ok(idMatch)
+  const questionId = idMatch[1]
+
+  const stateBeforeAnswer = storage.__getGameState("__system__", "questionInboxState")
+  assert.ok(stateBeforeAnswer?.questions?.[questionId])
+
+  __resetUtilityRouterStateForTests()
+
+  const armAnswer = await handleUtilityCommands({
+    sock,
+    from: override,
+    sender: override,
+    rawText: `!pergunta ${questionId}`,
+    isCommand: true,
+    cmd: `!pergunta ${questionId}`,
+    prefix: "!",
+    isGroup: false,
+    isKnownOverrideSender: true,
+    overrideJid: override,
+    storage,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  const sendAnswer = await handleUtilityCommands({
+    sock,
+    from: override,
+    sender: override,
+    rawText: "daily + trabalho + missao",
+    isCommand: false,
+    cmd: "daily + trabalho + missao",
+    prefix: "!",
+    isGroup: false,
+    isKnownOverrideSender: true,
+    overrideJid: override,
+    storage,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+  })
+
+  assert.equal(armAnswer, true)
+  assert.equal(sendAnswer, true)
+
+  const delivered = sent.find((entry) => entry.to === sender && /Resposta da sua pergunta/i.test(String(entry.payload?.text || "")))
+  assert.ok(delivered)
+
+  const stateAfterAnswer = storage.__getGameState("__system__", "questionInboxState")
+  assert.equal(Boolean(stateAfterAnswer?.questions?.[questionId]), false)
+})
+
 test("utility router handles hidden !jid only in DM", async () => {
   const { sock, sent } = createSockCapture()
   const sender = "5511999999999:5@s.whatsapp.net"

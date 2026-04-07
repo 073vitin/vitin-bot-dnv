@@ -8,14 +8,14 @@ const { normalizeMentionJid, getFirstMentionedJid, normalizeMentionArray, getMen
 const pendingPrivateFeedbackBySender = new Map()
 const pendingQuestionBySender = new Map()
 const pendingQuestionReplyBySender = new Map()
-const questionInboxById = new Map()
 const pendingEnqueteBySender = new Map()
 const pendingEnqueteReplyBySender = new Map()
-const enqueteInboxById = new Map()
 const pendingBugReportBySender = new Map()
 
 const BUG_BOUNTY_STATE_GROUP_ID = "__system__"
 const BUG_BOUNTY_STATE_KEY = "bugBountyState"
+const QUESTION_INBOX_STATE_KEY = "questionInboxState"
+const ENQUETE_INBOX_STATE_KEY = "enqueteInboxState"
 const BUG_BOUNTY_PRIORITY_PAYOUT = Object.freeze({
   1: 250,
   2: 500,
@@ -31,6 +31,8 @@ const BUG_BOUNTY_IGNORE_REASONS = Object.freeze({
   FAKE: "reporte falso",
 })
 
+let questionInboxStateFallback = { questions: {} }
+let enqueteInboxStateFallback = { enquetes: {} }
 let bugBountyStateFallback = { reports: {} }
 
 function generateQuestionId() {
@@ -42,20 +44,148 @@ function generateQuestionId() {
   return generated
 }
 
-function allocateQuestionId() {
+function allocateQuestionId(state = null) {
+  const questions = state?.questions && typeof state.questions === "object" ? state.questions : {}
   let questionId = generateQuestionId()
-  while (questionInboxById.has(questionId)) {
+  while (questions[questionId]) {
     questionId = generateQuestionId()
   }
   return questionId
 }
 
-function allocateEnqueteId() {
+function allocateEnqueteId(state = null) {
+  const enquetes = state?.enquetes && typeof state.enquetes === "object" ? state.enquetes : {}
   let enqueteId = generateQuestionId()
-  while (enqueteInboxById.has(enqueteId)) {
+  while (enquetes[enqueteId]) {
     enqueteId = generateQuestionId()
   }
   return enqueteId
+}
+
+function normalizeProtocolId(value = "") {
+  const normalized = String(value || "").trim().toUpperCase()
+  return /^[A-Z0-9]{5}$/.test(normalized) ? normalized : ""
+}
+
+function normalizeQuestionRecord(raw = {}, questionId = "") {
+  const id = normalizeProtocolId(questionId || raw?.id)
+  if (!id) return null
+
+  const sender = String(raw?.sender || "").trim().toLowerCase()
+  if (!sender) return null
+
+  return {
+    id,
+    sender,
+    text: String(raw?.text || "").trim(),
+    askedAt: normalizeTimestamp(raw?.askedAt, Date.now()),
+    answeredAt: normalizeTimestamp(raw?.answeredAt, 0),
+    answeredBy: String(raw?.answeredBy || "").trim().toLowerCase(),
+  }
+}
+
+function normalizeQuestionInboxState(raw = null) {
+  const state = raw && typeof raw === "object" ? raw : {}
+  const rawQuestions = state.questions && typeof state.questions === "object" ? state.questions : {}
+  const questions = {}
+
+  for (const [questionId, questionRaw] of Object.entries(rawQuestions)) {
+    const normalized = normalizeQuestionRecord(questionRaw, questionId)
+    if (!normalized) continue
+    questions[normalized.id] = normalized
+  }
+
+  return { questions }
+}
+
+function getQuestionInboxState(storage) {
+  if (typeof storage?.getGameState !== "function") {
+    return normalizeQuestionInboxState(questionInboxStateFallback)
+  }
+  const raw = storage.getGameState(BUG_BOUNTY_STATE_GROUP_ID, QUESTION_INBOX_STATE_KEY)
+  return normalizeQuestionInboxState(raw)
+}
+
+function setQuestionInboxState(storage, state) {
+  const normalized = normalizeQuestionInboxState(state)
+  if (typeof storage?.setGameState === "function") {
+    storage.setGameState(BUG_BOUNTY_STATE_GROUP_ID, QUESTION_INBOX_STATE_KEY, normalized)
+    return
+  }
+  questionInboxStateFallback = normalized
+}
+
+function normalizeEnqueteResponseRecord(raw = {}) {
+  const respondent = String(raw?.respondent || "").trim().toLowerCase()
+  const response = String(raw?.response || "").trim()
+  if (!respondent || !response) return null
+
+  return {
+    respondent,
+    respondentName: String(raw?.respondentName || "").trim(),
+    response,
+    respondedAt: normalizeTimestamp(raw?.respondedAt, Date.now()),
+  }
+}
+
+function normalizeEnqueteRecord(raw = {}, enqueteId = "") {
+  const id = normalizeProtocolId(enqueteId || raw?.id)
+  if (!id) return null
+
+  const modeRaw = String(raw?.mode || "").trim().toUpperCase()
+  const mode = modeRaw === "S" ? "S" : "N"
+  const responsesRaw = Array.isArray(raw?.responses) ? raw.responses : []
+  const responses = []
+  const respondentSeen = new Set()
+
+  for (const responseRaw of responsesRaw) {
+    const normalizedResponse = normalizeEnqueteResponseRecord(responseRaw)
+    if (!normalizedResponse) continue
+    if (respondentSeen.has(normalizedResponse.respondent)) continue
+    respondentSeen.add(normalizedResponse.respondent)
+    responses.push(normalizedResponse)
+  }
+
+  return {
+    id,
+    title: String(raw?.title || "").trim(),
+    message: String(raw?.message || "").trim(),
+    mode,
+    createdBy: String(raw?.createdBy || "").trim().toLowerCase(),
+    createdAt: normalizeTimestamp(raw?.createdAt, Date.now()),
+    responses,
+  }
+}
+
+function normalizeEnqueteInboxState(raw = null) {
+  const state = raw && typeof raw === "object" ? raw : {}
+  const rawEnquetes = state.enquetes && typeof state.enquetes === "object" ? state.enquetes : {}
+  const enquetes = {}
+
+  for (const [enqueteId, enqueteRaw] of Object.entries(rawEnquetes)) {
+    const normalized = normalizeEnqueteRecord(enqueteRaw, enqueteId)
+    if (!normalized) continue
+    enquetes[normalized.id] = normalized
+  }
+
+  return { enquetes }
+}
+
+function getEnqueteInboxState(storage) {
+  if (typeof storage?.getGameState !== "function") {
+    return normalizeEnqueteInboxState(enqueteInboxStateFallback)
+  }
+  const raw = storage.getGameState(BUG_BOUNTY_STATE_GROUP_ID, ENQUETE_INBOX_STATE_KEY)
+  return normalizeEnqueteInboxState(raw)
+}
+
+function setEnqueteInboxState(storage, state) {
+  const normalized = normalizeEnqueteInboxState(state)
+  if (typeof storage?.setGameState === "function") {
+    storage.setGameState(BUG_BOUNTY_STATE_GROUP_ID, ENQUETE_INBOX_STATE_KEY, normalized)
+    return
+  }
+  enqueteInboxStateFallback = normalized
 }
 
 function buildEmptyBugBountyState() {
@@ -1185,7 +1315,8 @@ Somente a proxima mensagem é capturada nesse fluxo.`,
       return true
     }
 
-    const questionRecord = questionInboxById.get(questionIdRaw)
+    const questionInboxState = getQuestionInboxState(storage)
+    const questionRecord = questionInboxState.questions[questionIdRaw] || null
     if (!questionRecord) {
       trackUtility("pergunta", "rejected", { reason: "unknown-question-id", questionId: questionIdRaw })
       await sock.sendMessage(from, {
@@ -1227,7 +1358,8 @@ Envie a resposta na proxima mensagem para encaminhar no privado ao usuario.`,
       return true
     }
 
-    const questionRecord = questionInboxById.get(pendingQuestionReply.questionId)
+    const questionInboxState = getQuestionInboxState(storage)
+    const questionRecord = questionInboxState.questions[pendingQuestionReply.questionId] || null
     if (!questionRecord) {
       trackUtility("pergunta", "error", { reason: "missing-question-record", questionId: pendingQuestionReply.questionId })
       await sock.sendMessage(from, { text: "Pergunta nao encontrada. Talvez tenha expirado." })
@@ -1244,7 +1376,8 @@ Envie a resposta na proxima mensagem para encaminhar no privado ao usuario.`,
 ${answerText}`,
     })
     // Release the protocol ID after a successful answer to avoid unbounded growth.
-    questionInboxById.delete(questionRecord.id)
+    delete questionInboxState.questions[questionRecord.id]
+    setQuestionInboxState(storage, questionInboxState)
     await sock.sendMessage(from, {
       text: `✅ Resposta enviada ao usuario do protocolo *${questionRecord.id}* no privado.`,
     })
@@ -1278,15 +1411,17 @@ ${answerText}`,
       return true
     }
 
-    const questionId = allocateQuestionId()
-    questionInboxById.set(questionId, {
+    const questionInboxState = getQuestionInboxState(storage)
+    const questionId = allocateQuestionId(questionInboxState)
+    questionInboxState.questions[questionId] = {
       id: questionId,
       sender,
       text: questionText,
       askedAt: Date.now(),
       answeredAt: 0,
       answeredBy: "",
-    })
+    }
+    setQuestionInboxState(storage, questionInboxState)
 
     const senderLabel = getMentionHandleFromJid(String(sender || ""))
     await sock.sendMessage(overrideTarget, {
@@ -1497,10 +1632,11 @@ ${pendingEnquete.message}`,
       }
 
       pendingEnqueteBySender.delete(sender)
-      const enqueteId = allocateEnqueteId()
+      const enqueteInboxState = getEnqueteInboxState(storage)
+      const enqueteId = allocateEnqueteId(enqueteInboxState)
       const registeredUsers = registrationService.getRegisteredUsersForNotifications()
 
-      enqueteInboxById.set(enqueteId, {
+      enqueteInboxState.enquetes[enqueteId] = {
         id: enqueteId,
         title: pendingEnquete.title,
         message: pendingEnquete.message,
@@ -1508,7 +1644,8 @@ ${pendingEnquete.message}`,
         createdBy: sender,
         createdAt: Date.now(),
         responses: [],
-      })
+      }
+      setEnqueteInboxState(storage, enqueteInboxState)
 
       let sentCount = 0
       let failCount = 0
@@ -1574,7 +1711,8 @@ Envios: ${sentCount} sucesso | ${failCount} falhas`,
     if (!enqueteIdRaw) return false
     if (subcommand !== "responder") return false
 
-    const enqueteRecord = enqueteInboxById.get(enqueteIdRaw)
+    const enqueteInboxState = getEnqueteInboxState(storage)
+    const enqueteRecord = enqueteInboxState.enquetes[enqueteIdRaw] || null
     if (!enqueteRecord) {
       trackUtility("enquete", "rejected", { reason: "unknown-enquete-id", enqueteId: enqueteIdRaw })
       await sock.sendMessage(from, {
@@ -1617,19 +1755,26 @@ Envie sua resposta na próxima mensagem.`,
       return true
     }
 
-    const enqueteRecord = enqueteInboxById.get(pendingEnqueteReply.enqueteId)
+    const enqueteInboxState = getEnqueteInboxState(storage)
+    const enqueteRecord = enqueteInboxState.enquetes[pendingEnqueteReply.enqueteId] || null
     if (!enqueteRecord) {
       trackUtility("enquete", "error", { reason: "missing-enquete-record", enqueteId: pendingEnqueteReply.enqueteId })
       await sock.sendMessage(from, { text: "Enquete não encontrada. Talvez tenha expirado." })
       return true
     }
 
+    const respondentEntry = typeof registrationService?.getRegisteredEntry === "function"
+      ? registrationService.getRegisteredEntry(sender)
+      : null
+    const respondentName = String(respondentEntry?.lastKnownName || "").trim() || getMentionHandleFromJid(sender)
+
     enqueteRecord.responses.push({
       respondent: sender,
-      respondentName: userNameCache[sender] || getMentionHandleFromJid(sender),
+      respondentName,
       response: responseText,
       respondedAt: Date.now(),
     })
+    setEnqueteInboxState(storage, enqueteInboxState)
 
     const overrideTarget = String(overrideJid || "").trim()
     if (overrideTarget) {
@@ -2224,8 +2369,11 @@ module.exports = {
     pendingPrivateFeedbackBySender.clear()
     pendingQuestionBySender.clear()
     pendingQuestionReplyBySender.clear()
-    questionInboxById.clear()
+    pendingEnqueteBySender.clear()
+    pendingEnqueteReplyBySender.clear()
     pendingBugReportBySender.clear()
+    questionInboxStateFallback = { questions: {} }
+    enqueteInboxStateFallback = { enquetes: {} }
     bugBountyStateFallback = buildEmptyBugBountyState()
   },
 }
