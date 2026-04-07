@@ -1957,7 +1957,7 @@ ${feedbackText}`,
 ║
 ║ 💻 SISTEMA  
 ║ ├ 🖥️ Implementado via Railway
-║ └ 📊 Uso de RAM: ${usedRamMB}MB / ${totalRamMB}MB
+║ └ 📊 Uso de RAM: ${usedRamMB}MB / 1000MB
 ║
 ║ 🧠 MEMÓRIA
 ║ ├ 📈 Total: ${totalStorageText}
