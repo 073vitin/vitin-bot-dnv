@@ -4588,6 +4588,7 @@ setTimeout(() => {
         isYesToken,
         isNoToken,
         isQuitToken,
+        collectKnownGroupsFromStorage,
       })
     )
     if (handledUtilityCommand) return

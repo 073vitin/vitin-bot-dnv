@@ -291,6 +291,7 @@ async function handleUtilityCommands(ctx) {
     isYesToken,
     isNoToken,
     isQuitToken,
+    collectKnownGroupsFromStorage,
   } = ctx
 
   const buildCommandManualPages = ({ section = "todos", detailed = false } = {}) => {
@@ -1035,7 +1036,7 @@ Uso override:
     trackUtility("menu", "success")
     await sock.sendMessage(from, {
       text:
-`╭━━━〔 🤖 VITIN BOT 〕━━━╮
+`╭━━━〔 🤖 VIRJENS BOT 〕━━━╮
 │ 👑 Status: Online
 │ ⚙️ Sistema: Baileys
 ╰━━━━━━━━━━━━━━━━━━━━╯
@@ -1526,7 +1527,7 @@ Para responder: ${prefix}enquete ${enqueteId} responder`,
           }
         }
       } else {
-        const groups = Array.from(knownGroupIds || [])
+        const groups = collectKnownGroupsFromStorage()
         for (const groupId of groups) {
           try {
             await sock.sendMessage(groupId, {

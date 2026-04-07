@@ -13,11 +13,11 @@ function renderSimpleDashboardPage() {
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Vitin Bot</title>
+    <title>VIRJENS DASHBOARD</title>
   </head>
   <body style="font-family:Segoe UI,Arial,sans-serif;padding:16px">
     <section style="max-width:980px">
-      <h2 style="margin:0 0 8px 0">Vitin Bot</h2>
+      <h2 style="margin:0 0 8px 0">VIRJENS</h2>
       <p id="polling-status" style="margin:0 0 12px 0;color:#555">Atualizando automaticamente a cada 1000ms.</p>
     </section>
 
@@ -36,11 +36,11 @@ function renderFullDashboardPage() {
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Vitin Bot</title>
+    <title>VIRJENS Dashboard</title>
   </head>
   <body style="font-family:Segoe UI,Arial,sans-serif;padding:16px">
     <section style="max-width:980px">
-      <h2 style="margin:0 0 8px 0">Painel Vitin Bot</h2>
+      <h2 style="margin:0 0 8px 0">Painel VIRJENS</h2>
       <p id="polling-status" style="margin:0 0 12px 0;color:#555">Atualizando automaticamente a cada 1000ms.</p>
     </section>
 

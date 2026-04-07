@@ -247,7 +247,7 @@ const acao = String(textParts || "").toLowerCase();
   // Modo pobreza
   if (acao === 'pobreza') {
     if (!isOverrideSender) {
-      await sock.sendMessage(from, { text: '❌ Só os overrides (VITIN e JESSE) podem ativar o modo pobreza!' });
+      await sock.sendMessage(from, { text: '❌ Apenas overrides podem ativar o modo pobreza!' });
       return true;
     }
     if (lobby.active) {

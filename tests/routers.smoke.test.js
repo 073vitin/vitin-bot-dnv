@@ -3241,7 +3241,7 @@ test("utility router handles !menu command", async () => {
 
   assert.equal(handled, true)
   assert.equal(sent.length, 1)
-  assert.match(sent[0].payload.text, /VITIN BOT/)
+  assert.match(sent[0].payload.text, /VIRJENS BOT/)
   assert.match(sent[0].payload.text, /!ajuda <comando>/i)
   assert.match(sent[0].payload.text, /!pergunta/i)
   assert.match(sent[0].payload.text, /feedback/i)
