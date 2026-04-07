@@ -1411,40 +1411,46 @@ Quando houver atualizacao, eu aviso no privado.`,
   }
 
   if (cmd === prefix + "enquete" || cmd.startsWith(prefix + "enquete ")) {
-    if (!isOverrideSender && !isKnownOverrideSender) {
-      trackUtility("enquete", "rejected", { reason: "not-override" })
-      return false
-    }
-
     const tokens = String(cmd || "").trim().split(/\s+/).filter(Boolean)
-    const enqueteTitle = String(tokens.slice(1, -1).join(" ") || "").trim()
-    const mode = String(tokens[tokens.length - 1] || "").trim().toUpperCase()
+    const enqueteIdCandidate = String(tokens[1] || "").trim()
+    const enqueteSubcommand = String(tokens[2] || "").trim().toLowerCase()
+    const isEnqueteReplyCommand = Boolean(enqueteIdCandidate) && enqueteSubcommand === "responder"
 
-    if (!enqueteTitle || !["S", "N"].includes(mode)) {
-      trackUtility("enquete", "rejected", { reason: "invalid-syntax" })
-      await sock.sendMessage(from, {
-        text: `Use: ${prefix}enquete <titulo> <S|N>\nS = DM apenas para registrados | N = Grupo apenas registrados`,
+    if (!isEnqueteReplyCommand) {
+      if (!isOverrideSender && !isKnownOverrideSender) {
+        trackUtility("enquete", "rejected", { reason: "not-override" })
+        return false
+      }
+
+      const enqueteTitle = String(tokens.slice(1, -1).join(" ") || "").trim()
+      const mode = String(tokens[tokens.length - 1] || "").trim().toUpperCase()
+
+      if (!enqueteTitle || !["S", "N"].includes(mode)) {
+        trackUtility("enquete", "rejected", { reason: "invalid-syntax" })
+        await sock.sendMessage(from, {
+          text: `Use: ${prefix}enquete <titulo> <S|N>\nS = DM apenas para registrados | N = Grupo apenas registrados`,
+        })
+        return true
+      }
+
+      pendingEnqueteBySender.set(sender, {
+        createdAt: Date.now(),
+        phase: "await-content",
+        title: enqueteTitle,
+        mode: mode,
       })
-      return true
-    }
-
-    pendingEnqueteBySender.set(sender, {
-      createdAt: Date.now(),
-      phase: "await-content",
-      title: enqueteTitle,
-      mode: mode,
-    })
-    trackUtility("enquete", "armed", { phase: "await-content", title: enqueteTitle, mode })
-    await sock.sendMessage(from, {
-      text:
+      trackUtility("enquete", "armed", { phase: "await-content", title: enqueteTitle, mode })
+      await sock.sendMessage(from, {
+        text:
 `✅ Modo enquete ativado.
 
 Título: *${enqueteTitle}*
 Modo: ${mode === "S" ? "DM para registrados" : "Grupo para registrados"}
 
 Envie a mensagem da enquete na próxima mensagem.`,
-    })
-    return true
+      })
+      return true
+    }
   }
 
   const pendingEnquete = pendingEnqueteBySender.get(sender)
