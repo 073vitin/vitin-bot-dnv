@@ -1735,15 +1735,17 @@ async function videoToSticker(buffer){
 
   fs.writeFileSync(input, buffer)
 
-  await new Promise((resolve,reject)=>{
+  await new Promise((resolve, reject) => {
     ffmpeg(input)
       .outputOptions([
+        "-t 10",                          // Limita a 10 segundos
         "-vcodec libwebp",
-        "-vf scale=512:512:flags=lanczos", // força deformação completa para 512x512
-        "-loop 0",
+        "-vf scale=512:512:flags=lanczos", 
+        "-loop 0",                         
         "-preset default",
-        "-an",
-        "-vsync 0"
+        "-an",                             
+        "-vsync 0",
+        "-delay 10"                       
       ])
       .toFormat("webp")
       .save(output)
