@@ -4838,18 +4838,19 @@ setTimeout(() => {
     )
     if (handledStreakValue) return
     
-    const handledWeaponsCommand = await measureStage("weaponsHandler", async () => 
-      weapons.handleWeaponsCommand({
-        sock,
-        from,
-        sender,
-        text,
-        isGroup,
-        participants,
-        senderName,
-        isOverrideSender,
-      })
-    )
+   const handledWeaponsCommand = await measureStage("weaponsHandler", async () => 
+  weapons.handleWeaponsCommand({
+    sock,
+    from,
+    sender,
+    text,
+    isGroup,
+    senderName: senderProfileName,
+    isOverrideSender,
+    prefix,
+    storage,
+  })
+)
     if (handledWeaponsCommand) return
 
     if (isCommand) {
