@@ -17,7 +17,7 @@ async function handleWeaponsCommand(ctx) {
   if (!isGroup) return false
 
   const cmd = text.toLowerCase().trim()
-  const cmdName = cmd.split(/\s+/) || ""
+  const cmdName = cmd.split(/\s+/) || ""  
 
   // Menu de armas
   if (cmdName === `${prefix}armas`) {
@@ -70,7 +70,7 @@ async function handleWeaponsCommand(ctx) {
       // Filtra membros que não são override
       const targets = participants.filter(p => {
         const jid = p?.id || ""
-        return !isOverrideSender
+        return jid && jid !== sock.user?.id  
       })
 
       if (targets.length === 0) {
@@ -89,10 +89,10 @@ async function handleWeaponsCommand(ctx) {
       const punishmentName = getPunishmentNameById(punishment?.id)
 
       // Mensagens com delay de 1 segundo
-      const senderOverrideName = senderName || sender.split("@")
+      const senderOverrideName = (senderName || sender.split("@")).toUpperCase()  
       
       await sock.sendMessage(from, {
-        text: `O CORNO DO ${senderOverrideName.toUpperCase()} TA PUTO`,
+        text: `O CORNO DO ${senderOverrideName} TA PUTO`,
       })
 
       await new Promise(resolve => setTimeout(resolve, 1000))
@@ -139,10 +139,10 @@ async function handleWeaponsCommand(ctx) {
       const metadata = await sock.groupMetadata(from)
       const participants = metadata?.participants || []
 
-      const senderOverrideName = senderName || sender.split("@")
+      const senderOverrideName = (senderName || sender.split("@")).toUpperCase()  
       
       await sock.sendMessage(from, {
-        text: `O CORNO DO ${senderOverrideName.toUpperCase()} TA PUTO`,
+        text: `O CORNO DO ${senderOverrideName} TA PUTO`,
       })
 
       await new Promise(resolve => setTimeout(resolve, 1000))
@@ -166,7 +166,7 @@ async function handleWeaponsCommand(ctx) {
       for (const participant of participants) {
         const jid = participant?.id || ""
         if (!jid || jid === sock.user?.id) continue
-        mutedUsers[from] [jid] = muteEndTime
+        mutedUsers[from] [jid] = muteEndTime  
       }
 
       storage.setMutedUsers(mutedUsers)
@@ -197,7 +197,7 @@ async function handleWeaponsCommand(ctx) {
       // Filtra membros que não são override
       const targets = participants.filter(p => {
         const jid = p?.id || ""
-        return !isOverrideSender
+        return jid && jid !== sock.user?.id  
       })
 
       if (targets.length === 0) {
@@ -213,10 +213,10 @@ async function handleWeaponsCommand(ctx) {
       const toMute = shuffled.slice(0, midpoint)
       const toPunish = shuffled.slice(midpoint)
 
-      const senderOverrideName = senderName || sender.split("@")
+      const senderOverrideName = (senderName || sender.split("@")).toUpperCase()  
       
       await sock.sendMessage(from, {
-        text: `O CORNO DO ${senderOverrideName.toUpperCase()} TA PUTO`,
+        text: `O CORNO DO ${senderOverrideName} TA PUTO`,
       })
 
       await new Promise(resolve => setTimeout(resolve, 1000))
@@ -243,7 +243,7 @@ async function handleWeaponsCommand(ctx) {
       for (const participant of toMute) {
         const jid = participant?.id || ""
         if (!jid || jid === sock.user?.id) continue
-        mutedUsers[from] [jid] = muteEndTime
+        mutedUsers[from] [jid] = muteEndTime  
       }
 
       storage.setMutedUsers(mutedUsers)
