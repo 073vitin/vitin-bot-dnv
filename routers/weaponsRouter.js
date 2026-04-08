@@ -24,16 +24,16 @@ async function handleWeaponsCommand(ctx) {
   if (cmdName === `${prefix}armas`) {
     const armasMenu = `
 ╭━━━〔 ⚔️ MENU: ARMAS 〕━━━╮
-│ Comandos exclusivos para overrides:
+│ Comandos exclusivos para overrides
 │
 │ ${prefix}hiroshima
 │ └─ Aplica 1 punição aleatória
 │    para TODOS os membros do grupo
-│    (exceto overrides)
+│    (afeta overrides)
 │
 │ ${prefix}nagasaki
 │ └─ Muta todos os membros do grupo
-│    por 3 minutos (exceto overrides)
+│    por 3 minutos (afeta overrides)
 │
 │ ${prefix}chernobyl
 │ └─ Muta metade do grupo e aplica
