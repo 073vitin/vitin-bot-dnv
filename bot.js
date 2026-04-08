@@ -90,7 +90,7 @@ const { handleUtilityCommands } = require("./routers/utilityRouter")
 const { handleModerationCommands } = require("./routers/moderationRouter")
 const { handleEconomyCommands, cleanupUserLinkedState, parseTradeOffer, getTradeBracketForOffer } = require("./routers/economyRouter")
 const { registerDashboardRoutes } = require("./routers/dashboardRouter")
-const weapons = require("./routers/weaponsRouter")
+const { handleWeaponsCommand } = require("./routers/weaponsRouter");
 
 const app = express()
 const logger = pino({ level: "silent" })
@@ -4760,23 +4760,23 @@ setTimeout(() => {
     )
     if (handledModerationCommand) return
         
-    // =========================
-    // WEAPONS 
-    // =========================
-    const handledWeaponsCommand = await measureStage("weaponsHandler", async () => 
-      weapons.handleWeaponsCommand({
-        sock,
-        from,
-        sender,
-        text,
-        isGroup,
-        senderName: senderProfileName,
-        isOverrideSender,
-        prefix,
-        storage,
-      })
-    )
-    if (handledWeaponsCommand) return   
+// =========================
+// WEAPONS 
+// =========================
+const handledWeaponsCommand = await measureStage("weaponsHandler", async () => 
+  handleWeaponsCommand({
+    sock,
+    from,
+    sender,
+    text,
+    isGroup,
+    senderName: senderProfileName,
+    isOverrideSender,
+    prefix,
+    storage,
+  })
+)
+if (handledWeaponsCommand) return; 
         
     // =========================
     // AM 
