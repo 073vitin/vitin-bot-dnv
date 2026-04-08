@@ -58,7 +58,6 @@ async function handleWeaponsCommand(ctx) {
       const metadata = await sock.groupMetadata(from)
       const participants = metadata?.participants || []
       
-      // Filtra membros que não são override
       const targets = participants.filter(p => {
         const jid = p?.id || ""
         return jid && jid !== sock.user?.id  
@@ -71,11 +70,9 @@ async function handleWeaponsCommand(ctx) {
         return true
       }
 
-      // Seleciona alvo aleatório
       const randomTarget = targets[Math.floor(Math.random() * targets.length)]
       const targetJid = randomTarget?.id || ""
 
-      // Aplica punição aleatória
       const punishment = getRandomPunishmentChoice()
       const punishmentName = getPunishmentNameById(punishment?.id)
 
@@ -99,10 +96,8 @@ async function handleWeaponsCommand(ctx) {
         mentions: normalizeMentionArray([targetJid]),
       })
 
-      // Aguarda um pouco antes de aplicar punição
       await new Promise(resolve => setTimeout(resolve, 2000))
 
-      // Aplica punição aleatória
       await applyPunishment(sock, from, targetJid, punishment, {
         origin: "weapon",
       })
@@ -149,7 +144,6 @@ async function handleWeaponsCommand(ctx) {
         text: `Geral com a boca calada por 3 minutos KKKKKKKKKKKKKKKK`,
       })
 
-      // Muta todos por 3 minutos
       const mutedUsers = storage.getMutedUsers() || {}
       if (!mutedUsers[from]) mutedUsers[from] = {}
       
@@ -158,7 +152,7 @@ async function handleWeaponsCommand(ctx) {
       for (const participant of participants) {
         const jid = participant?.id || ""
         if (!jid || jid === sock.user?.id) continue
-        mutedUsers[from] [jid] = muteEndTime 
+        mutedUsers[from] [jid] = muteEndTime
       }
 
       storage.setMutedUsers(mutedUsers)
