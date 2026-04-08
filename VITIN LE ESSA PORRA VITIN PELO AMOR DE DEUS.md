@@ -223,7 +223,7 @@ Categorias recorrentes:
 
 ### 6.2 Aliases
 - Suporte a aliases e variantes sem acento e com acento.
-- Ex.: `comecar/comecar/start`, `memoria/memoria com acento` etc.
+- Ex.: `comecar/começar/start`, `memoria/memória` etc.
 
 ### 6.3 Ordem de dispatch no runtime
 Ordem efetiva observada:
@@ -329,15 +329,11 @@ Padrao recorrente para acoes:
 - Modulos exportam objeto com funcoes de estado (start, recordacao, resultados, formatacao).
 - Estado do jogo e passado explicitamente.
 
-### 11.2 Excecao importante
-- `games/blackjack.js` e `blackjack.js` raiz coexistem; o da raiz segue estilo mais legado.
-- Evitar copiar estilo antigo do arquivo raiz quando houver equivalente modular.
-
-### 11.3 Lobbies e apostas
+### 11.2 Lobbies e apostas
 - IDs de lobby normalizados (`normalizeLobbyId`) e controle de timeout/warning.
 - Apostas normalmente clampadas entre 1..10 em fluxos de lobby.
 
-### 11.4 Integracao punicao/recompensa
+### 11.3 Integracao punicao/recompensa
 - Jogos chamam callbacks injetados para reward/punishment em vez de acessar tudo globalmente.
 
 ---
@@ -460,11 +456,7 @@ Fontes: `tests/*.test.js` e `tests/*.smoke.test.js`.
 - Estilo mais antigo, alta densidade de estado global mutavel.
 - Ainda usa utilitarios de mention, mas arquitetura difere do padrao atual de routers + ctx.
 
-### 17.2 `blackjack.js` (raiz)
-- Implementacao legado paralela ao blackjack modular em `games/blackjack.js`.
-- Estrutura menos alinhada ao modelo de router + state em storage.
-
-### 17.3 Consequencia pratica
+### 17.2 Consequencia pratica
 - Ao desenvolver funcionalidade nova, preferir padrao moderno (router/service/helpers) em vez de copiar estilo legado de arquivo raiz.
 
 ---

@@ -846,6 +846,56 @@ test("economy router handles !missao list and claim", async () => {
   assert.match(String(sent[1].payload?.text || ""), /Level up/)
 })
 
+test("economy router handles !usaritem quest reroll token", async () => {
+  const { sock, sent } = createSockCapture()
+  const useItemCalls = []
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "autor@s.whatsapp.net",
+    cmd: "!usaritem questRerollToken",
+    cmdName: "!usaritem",
+    cmdArg1: "questRerollToken",
+    cmdArg2: "",
+    cmdParts: ["!usaritem", "questRerollToken"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    economyService: {
+      useItem: (userId, itemKey) => {
+        useItemCalls.push({ userId, itemKey })
+        return { ok: true, effect: "quest-reroll" }
+      },
+      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {}, preferences: { publicLabel: "Autor" } }),
+      getStatement: () => [],
+      getGroupRanking: () => [],
+      getShopIndexText: () => "shop",
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(useItemCalls.length, 1)
+  assert.deepEqual(useItemCalls[0], {
+    userId: "autor@s.whatsapp.net",
+    itemKey: "questRerollToken",
+  })
+  assert.equal(sent.length, 1)
+  assert.match(String(sent[0].payload?.text || ""), /re-roladas/i)
+})
+
 test("economy router grants XP on !daily claim", async () => {
   const { sock, sent } = createSockCapture()
   const xpCalls = []

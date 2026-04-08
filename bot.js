@@ -149,6 +149,40 @@ const messageQueueByChat = new Map()
 const processedMessageCacheByChat = new Map()
 const MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000
 const MESSAGE_DEDUPE_MAX_KEYS = 600
+const QUEST_RESET_AUTOGEN_INTERVAL_MS = 60 * 1000
+let questResetAutogenInterval = null
+let questResetAutogenInFlight = false
+
+async function triggerQuestResetAutogeneration(reason = "interval") {
+  if (questResetAutogenInFlight) return
+  if (typeof economyService?.runQuestResetAutogeneration !== "function") return
+
+  questResetAutogenInFlight = true
+  try {
+    const result = economyService.runQuestResetAutogeneration({ reason })
+    if (result && !result.skipped && (result.dailyGeneratedUsers > 0 || result.weeklyGeneratedUsers > 0)) {
+      console.log(
+        `[quest-reset] ${reason} | day=${result.dayKey} week=${result.weekKey} | dailyUsers=${result.dailyGeneratedUsers} weeklyUsers=${result.weeklyGeneratedUsers}`
+      )
+    }
+  } catch (err) {
+    console.error("Erro ao auto-gerar quests no reset:", err)
+  } finally {
+    questResetAutogenInFlight = false
+  }
+}
+
+function ensureQuestResetAutogenerationScheduler() {
+  if (questResetAutogenInterval) return
+
+  void triggerQuestResetAutogeneration("startup")
+  questResetAutogenInterval = setInterval(() => {
+    void triggerQuestResetAutogeneration("interval")
+  }, QUEST_RESET_AUTOGEN_INTERVAL_MS)
+  if (typeof questResetAutogenInterval.unref === "function") {
+    questResetAutogenInterval.unref()
+  }
+}
 
 function unwrapMessageContent(message = null) {
   let current = message
@@ -1748,6 +1782,7 @@ async function startBot(){
 
   // keep a reference for graceful shutdown and external checks
   activeSock = sock
+  ensureQuestResetAutogenerationScheduler()
 
   const groupMentionLookupByGroup = new Map()
 
@@ -1850,6 +1885,7 @@ async function startBot(){
       if (!perfStats.authenticatedAt) {
         perfStats.authenticatedAt = perfStats.connectedAt
       }
+      void triggerQuestResetAutogeneration("connection-open")
       if (!lifetimeStats.authSessionStartedAt) {
         lifetimeStats.authSessionStartedAt = perfStats.connectedAt
         persistLifetimeStats()
@@ -3265,7 +3301,7 @@ setTimeout(() => {
           await sock.sendMessage(from, {
             text:
               "✅ Registro existente detectado e vinculado automaticamente para este novo JID de grupo.\n" +
-              `DM para envios: *${autoLink.dmJid || resolvedDmJid}*`,
+              `DM para envios: *${autoLink.dmJid.split("@")[0] || resolvedDmJid.split("@")[0]}*`,
           })
           return
         }
@@ -3307,7 +3343,8 @@ setTimeout(() => {
           : "✅ Registro concluído. Você já pode usar comandos de economia e figurinhas no privado.") +
           (linkedDm
             ? `\n🔗 DM vinculada automaticamente: *${linkedDm}*`
-            : `\nℹ️ Se seu JID de grupo e DM forem diferentes, rode *${LINK_DM_COMMAND}* no grupo para vincular.`),
+            : `\nℹ️ Seu ID em grupos é diferente do seu ID em mensagens privadas, isso pode te impedir de receber atualizações sobre o bot.\n
+            Rode *${LINK_DM_COMMAND}* no grupo para vincular seus IDs.`),
       })
       return
     }

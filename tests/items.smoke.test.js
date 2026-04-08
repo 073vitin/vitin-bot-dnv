@@ -58,6 +58,45 @@ test("manual-use items can be activated via !usaritem backend", () => {
   assert.equal(economy.getTeamContributionMultiplier(a), 2)
 })
 
+test("quest reroll token regenerates daily quests for the same day", () => {
+  cleanupTestUsers()
+  const a = TEST_USERS[0]
+  const fixedDayKey = "2099-12-31"
+
+  const baselineState = economy.getDailyQuestState(a, fixedDayKey)
+  assert.equal(Array.isArray(baselineState.quests), true)
+  assert.equal(baselineState.quests.length > 0, true)
+
+  const baselineSignature = baselineState.quests
+    .map((quest) => `${quest.key}:${quest.target}`)
+    .join("|")
+
+  let changed = false
+  let previousNonce = 0
+  for (let attempt = 0; attempt < 3; attempt++) {
+    economy.addItem(a, "questRerollToken", 1)
+
+    const used = economy.useItem(a, "questRerollToken")
+    assert.equal(used.ok, true)
+    assert.equal(used.effect, "quest-reroll")
+    assert.equal(Number(used.rerollNonce) || 0, previousNonce + 1)
+    previousNonce = Number(used.rerollNonce) || previousNonce
+    assert.equal(economy.getItemQuantity(a, "questRerollToken"), 0)
+
+    const rerolledState = economy.getDailyQuestState(a, fixedDayKey)
+    const rerolledSignature = rerolledState.quests
+      .map((quest) => `${quest.key}:${quest.target}`)
+      .join("|")
+
+    if (rerolledSignature !== baselineSignature) {
+      changed = true
+      break
+    }
+  }
+
+  assert.equal(changed, true)
+})
+
 test("passive items are not manually usable", () => {
   cleanupTestUsers()
   const a = TEST_USERS[0]

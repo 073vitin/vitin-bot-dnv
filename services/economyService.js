@@ -754,6 +754,11 @@ let economyCache = {
   seasonState: buildDefaultSeasonState(),
 }
 
+let questResetAutogenCursor = {
+  dayKey: null,
+  weekKey: null,
+}
+
 function splitDeviceSuffix(value = "") {
   return String(value || "").split(":")[0]
 }
@@ -934,6 +939,8 @@ function recordDailyEconomyHealthSnapshot(reason = "runtime") {
 }
 
 function loadEconomy() {
+  questResetAutogenCursor.dayKey = null
+  questResetAutogenCursor.weekKey = null
   try {
     if (!fs.existsSync(ECONOMY_FILE)) return
     const now = Date.now()
@@ -1321,6 +1328,7 @@ function ensureUser(userId) {
   const normalized = normalizeUserId(userId)
   if (!normalized) return null
 
+  let createdFresh = false
   let migratedAlias = false
   const aliases = getUserIdAliases(userId)
   for (const alias of aliases) {
@@ -1333,6 +1341,7 @@ function ensureUser(userId) {
   }
 
   if (!economyCache.users[normalized]) {
+    createdFresh = true
     economyCache.users[normalized] = {
       coins: DEFAULT_COINS,
       items: {},
@@ -1376,6 +1385,17 @@ function ensureUser(userId) {
 
   const user = economyCache.users[normalized]
   migrateUserShape(user)
+
+  if (createdFresh) {
+    try {
+      seedCurrentResetQuestsForUser(normalized, {
+        reason: "user-create",
+      })
+    } catch (err) {
+      console.error("Erro ao gerar quests iniciais para novo usuário:", err)
+    }
+  }
+
   return user
 }
 
@@ -1686,6 +1706,127 @@ function buildProgressionDeps() {
     maxItemOperation: MAX_ITEM_OPERATION,
     maxLevel: MAX_LEVEL,
     addXp,
+  }
+}
+
+function seedCurrentResetQuestsForUser(userId, options = {}) {
+  const normalizedUserId = normalizeUserId(userId)
+  if (!normalizedUserId) {
+    return { ok: false, reason: "invalid-user" }
+  }
+
+  const dayKey = String(options.dayKey || getDayKey())
+  const weekKey = String(options.weekKey || getWeekKey())
+  const generateDaily = options.generateDaily !== false
+  const generateWeekly = options.generateWeekly !== false
+
+  const user = ensureUser(normalizedUserId)
+  if (!user) {
+    return { ok: false, reason: "invalid-user" }
+  }
+
+  const hasDailyForKey =
+    user.progression.lastQuestDayKey === dayKey &&
+    Array.isArray(user.progression.dailyQuests) &&
+    user.progression.dailyQuests.length > 0
+
+  const hasWeeklyForKey =
+    user.progression.lastQuestWeekKey === weekKey &&
+    Array.isArray(user.progression.weeklyQuests) &&
+    user.progression.weeklyQuests.length > 0
+
+  const deps = buildProgressionDeps()
+  if (generateDaily && !hasDailyForKey) {
+    getDailyQuestStateEngine(deps, normalizedUserId, dayKey)
+  }
+  if (generateWeekly && !hasWeeklyForKey) {
+    getWeeklyQuestStateEngine(deps, normalizedUserId, weekKey)
+  }
+
+  return {
+    ok: true,
+    userId: normalizedUserId,
+    dayKey,
+    weekKey,
+    generatedDaily: Boolean(generateDaily && !hasDailyForKey),
+    generatedWeekly: Boolean(generateWeekly && !hasWeeklyForKey),
+  }
+}
+
+function runQuestResetAutogeneration(options = {}) {
+  const dayKey = String(options.dayKey || getDayKey())
+  const weekKey = String(options.weekKey || getWeekKey())
+  const reason = String(options.reason || "runtime")
+  const force = Boolean(options.force)
+
+  const scanDaily = force || questResetAutogenCursor.dayKey !== dayKey
+  const scanWeekly = force || questResetAutogenCursor.weekKey !== weekKey
+
+  if (!scanDaily && !scanWeekly) {
+    return {
+      ok: true,
+      skipped: true,
+      reason,
+      dayKey,
+      weekKey,
+      force,
+      userCount: 0,
+      scanDaily,
+      scanWeekly,
+      dailyGeneratedUsers: 0,
+      weeklyGeneratedUsers: 0,
+    }
+  }
+
+  const userIds = getAllUserIds()
+  let dailyGeneratedUsers = 0
+  let weeklyGeneratedUsers = 0
+
+  for (const userId of userIds) {
+    const seeded = seedCurrentResetQuestsForUser(userId, {
+      dayKey,
+      weekKey,
+      generateDaily: scanDaily,
+      generateWeekly: scanWeekly,
+    })
+    if (!seeded.ok) continue
+    if (seeded.generatedDaily) dailyGeneratedUsers += 1
+    if (seeded.generatedWeekly) weeklyGeneratedUsers += 1
+  }
+
+  if (scanDaily) questResetAutogenCursor.dayKey = dayKey
+  if (scanWeekly) questResetAutogenCursor.weekKey = weekKey
+
+  telemetry.incrementCounter("economy.quest.autogen.run", 1, {
+    reason,
+    forced: force ? "yes" : "no",
+    dailyScan: scanDaily ? "yes" : "no",
+    weeklyScan: scanWeekly ? "yes" : "no",
+  })
+  telemetry.appendEvent("economy.quest.autogen.run", {
+    reason,
+    force,
+    dayKey,
+    weekKey,
+    userCount: userIds.length,
+    scanDaily,
+    scanWeekly,
+    dailyGeneratedUsers,
+    weeklyGeneratedUsers,
+  })
+
+  return {
+    ok: true,
+    skipped: false,
+    reason,
+    force,
+    dayKey,
+    weekKey,
+    userCount: userIds.length,
+    scanDaily,
+    scanWeekly,
+    dailyGeneratedUsers,
+    weeklyGeneratedUsers,
   }
 }
 
@@ -2753,7 +2894,8 @@ function ensureDailyQuestsForUser(userId, dayKey = getDayKey()) {
     return user.progression.dailyQuests
   }
 
-  const seed = `${normalizeUserId(userId)}:${currentDayKey}`
+  const rerollNonce = Math.max(0, Math.floor(Number(user.progression?.dailyQuestRerollNonce) || 0))
+  const seed = `${normalizeUserId(userId)}:${currentDayKey}:${rerollNonce}`
   const used = new Set()
   const quests = []
   for (let i = 0; i < DAILY_QUEST_COUNT; i++) {
@@ -3461,6 +3603,7 @@ module.exports = {
   addXp,
   getDayKey,
   getWeekKey,
+  runQuestResetAutogeneration,
   getDailyQuestState,
   claimDailyQuest,
   getWeeklyQuestState,
