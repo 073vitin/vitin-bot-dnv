@@ -16,8 +16,9 @@ async function handleWeaponsCommand(ctx) {
 
   if (!isGroup) return false;
 
-  const cmd = text.toLowerCase().trim();
-  const cmdName = cmd.split(/\s+/);
+  const cmd = (text || "").toLowerCase().trim();
+  const cmdParts = cmd.split(/\s+/);
+  const cmdName = cmdParts[0];
 
   // Menu de armas
   if (cmdName === `${prefix}armas`) {
@@ -46,9 +47,7 @@ async function handleWeaponsCommand(ctx) {
 ╰━━━━━━━━━━━━━━━━━━━━╯
     `;
 
-    await sock.sendMessage(from, {
-      text: armasMenu,
-    });
+    await sock.sendMessage(from, { text: armasMenu });
     return true;
   }
 
@@ -159,7 +158,7 @@ async function handleWeaponsCommand(ctx) {
       for (const participant of participants) {
         const jid = participant?.id || "";
         if (!jid || jid === sock.user?.id) continue;
-        mutedUsers[from] [jid] = muteEndTime;
+        mutedUsers[from][jid] = muteEndTime;
       }
 
       storage.setMutedUsers(mutedUsers);
@@ -218,23 +217,20 @@ async function handleWeaponsCommand(ctx) {
         text: `CHERNOBYL ATIVADO!`,
       });
 
-      // Embaralha e divide em duas metades
       const shuffled = [...targets].sort(() => 0.5 - Math.random());
       const half = Math.ceil(shuffled.length / 2);
       const mutedHalf = shuffled.slice(0, half);
       const punishedHalf = shuffled.slice(half);
 
-      // Muta metade
       const mutedUsers = storage.getMutedUsers() || {};
       if (!mutedUsers[from]) mutedUsers[from] = {};
       const muteEndTime = Date.now() + (3 * 60 * 1000);
 
       for (const participant of mutedHalf) {
         const jid = participant?.id || "";
-        if (jid) mutedUsers[from] [jid] = muteEndTime;
+        if (jid) mutedUsers[from][jid] = muteEndTime;
       }
 
-      // Aplica punição na outra metade
       for (const participant of punishedHalf) {
         const jid = participant?.id || "";
         if (!jid) continue;
@@ -279,7 +275,6 @@ async function handleWeaponsCommand(ctx) {
       const mutedUsers = storage.getMutedUsers() || {};
       const groupMuted = mutedUsers[from] || {};
 
-      // Remove muta
       for (const jid in groupMuted) {
         delete groupMuted[jid];
       }
