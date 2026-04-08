@@ -1,5 +1,5 @@
 const { normalizeMentionArray, formatMentionTag, getMentionHandleFromJid } = require("../services/mentionService");
-const { applyPunishment, getPunishmentNameById, getRandomPunishmentChoice } = require("../services/punishmentService");
+const { applyPunishment, getPunishmentNameById, getRandomPunishmentChoice, clearAllPunishmentsFromGroup } = require("../services/punishmentService");
 
 async function handleWeaponsCommand(ctx) {
   const {
@@ -20,7 +20,9 @@ async function handleWeaponsCommand(ctx) {
   const cmdParts = cmd.split(/\s+/);
   const cmdName = cmdParts[0];
 
-  // Menu de armas
+  // =========================
+  // MENU DE ARMAS 
+  // =========================
   if (cmdName === `${prefix}armas`) {
     const armasMenu = `
 ╭━━━〔 ⚔️ MENU: ARMAS 〕━━━╮
@@ -40,7 +42,7 @@ async function handleWeaponsCommand(ctx) {
 │    punição aleatória na outra metade
 │
 │ ${prefix}removerradiacao
-│ └─ Desfaz efeitos de !chernobyl
+│ └─ Remove TODAS punições e mutes
 │
 │ ⚠️ Cuidado: Essas armas afetam
 │    TODOS os membros simultaneamente!
@@ -51,7 +53,9 @@ async function handleWeaponsCommand(ctx) {
     return true;
   }
 
-  // Comando !hiroshima
+  // =========================
+  // HIROSHIMA
+  // =========================
   if (cmdName === `${prefix}hiroshima`) {
     if (!isOverrideSender) {
       await sock.sendMessage(from, {
@@ -64,61 +68,49 @@ async function handleWeaponsCommand(ctx) {
       const metadata = await sock.groupMetadata(from);
       const participants = metadata?.participants || [];
 
-      const targets = participants.filter(p => {
-        const jid = p?.id || "";
-        return jid && jid !== sock.user?.id;
+      const targets = participants.filter(p => p?.id && p.id !== sock.user?.id);
+
+      if (!targets.length) return true;
+
+      const overrides = participants.filter(p => p?.admin);
+      const randomOverride = overrides[Math.floor(Math.random() * overrides.length)];
+      const overrideJid = randomOverride?.id;
+
+      await sock.sendMessage(from, {
+        text: `O CORNO DO ${formatMentionTag(overrideJid)} TA PUTO`,
+        mentions: normalizeMentionArray([overrideJid]),
       });
 
-      if (targets.length === 0) {
-        await sock.sendMessage(from, {
-          text: "Ninguém para punir.",
+      await new Promise(r => setTimeout(r, 1000));
+
+      await sock.sendMessage(from, {
+        text: `VAI BOTAR TODO MUNDO DE CASTIGO KKKKKKKKKKKKKKKKK`,
+      });
+
+      for (const target of targets) {
+        const jid = target.id;
+
+        const punishment = getRandomPunishmentChoice();
+
+        await applyPunishment(sock, from, jid, punishment, {
+          origin: "weapon",
+          ignoreShield: true 
         });
-        return true;
+
+        await new Promise(r => setTimeout(r, 300));
       }
 
-      const randomTarget = targets[Math.floor(Math.random() * targets.length)];
-      const targetJid = randomTarget?.id || "";
-
-      const punishment = getRandomPunishmentChoice();
-      const punishmentName = getPunishmentNameById(punishment?.id);
-
-      const senderHandle = getMentionHandleFromJid(sender);
-      const senderOverrideName = (senderName || senderHandle || "CORNO").toUpperCase();
-
-      await sock.sendMessage(from, {
-        text: `O CORNO DO ${senderOverrideName} TA PUTO`,
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      await sock.sendMessage(from, {
-        text: `VAI BOTAR TODO MUNDO DE CASTIGO PQ N TÃO USANDO OS OUTROS COMANDOS DO BOT KKKKKKKKKKKKKKKKK`,
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      await sock.sendMessage(from, {
-        text: `A punição aplicada foi: ${punishmentName || punishment?.id}\n${formatMentionTag(targetJid)}`,
-        mentions: normalizeMentionArray([targetJid]),
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      await applyPunishment(sock, from, targetJid, punishment, {
-        origin: "weapon",
-      });
-
       return true;
+
     } catch (err) {
       console.error("Erro ao executar hiroshima:", err);
-      await sock.sendMessage(from, {
-        text: "❌ Erro ao executar hiroshima.",
-      });
       return true;
     }
   }
 
-  // Comando !nagasaki
+  // =========================
+  // NAGASAKI 
+  // =========================
   if (cmdName === `${prefix}nagasaki`) {
     if (!isOverrideSender) {
       await sock.sendMessage(from, {
@@ -131,49 +123,47 @@ async function handleWeaponsCommand(ctx) {
       const metadata = await sock.groupMetadata(from);
       const participants = metadata?.participants || [];
 
-      const senderHandle = getMentionHandleFromJid(sender);
-      const senderOverrideName = (senderName || senderHandle || "CORNO").toUpperCase();
+      const overrides = participants.filter(p => p?.admin);
+      const randomOverride = overrides[Math.floor(Math.random() * overrides.length)];
+      const overrideJid = randomOverride?.id;
 
       await sock.sendMessage(from, {
-        text: `O CORNO DO ${senderOverrideName} TA PUTO`,
+        text: `O CORNO DO ${formatMentionTag(overrideJid)} TA PUTO`,
+        mentions: normalizeMentionArray([overrideJid]),
       });
 
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(r => setTimeout(r, 1000));
 
       await sock.sendMessage(from, {
-        text: `VAI CALAR A BOCA DE TODO MUNDO QUE MAMOU ELE KKKKKKKKKKKKKKKKKK`,
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      await sock.sendMessage(from, {
-        text: `Geral com a boca calada por 3 minutos KKKKKKKKKKKKKKKK`,
+        text: `GERAL CALADO POR 3 MINUTOS KKKKKKKKKKK`,
       });
 
       const mutedUsers = storage.getMutedUsers() || {};
       if (!mutedUsers[from]) mutedUsers[from] = {};
 
-      const muteEndTime = Date.now() + (3 * 60 * 1000);
+      const now = Date.now();
+      const duration = 3 * 60 * 1000;
 
       for (const participant of participants) {
-        const jid = participant?.id || "";
+        const jid = participant?.id;
         if (!jid || jid === sock.user?.id) continue;
-        mutedUsers[from][jid] = muteEndTime;
+
+        mutedUsers[from][jid] = now + duration;
       }
 
       storage.setMutedUsers(mutedUsers);
 
       return true;
+
     } catch (err) {
       console.error("Erro ao executar nagasaki:", err);
-      await sock.sendMessage(from, {
-        text: "❌ Erro ao executar nagasaki.",
-      });
       return true;
     }
   }
 
-  // Comando !chernobyl
+  // =========================
+  // CHERNOBYL
+  // =========================
   if (cmdName === `${prefix}chernobyl`) {
     if (!isOverrideSender) {
       await sock.sendMessage(from, {
@@ -186,83 +176,50 @@ async function handleWeaponsCommand(ctx) {
       const metadata = await sock.groupMetadata(from);
       const participants = metadata?.participants || [];
 
-      const targets = participants.filter(p => {
-        const jid = p?.id || "";
-        return jid && jid !== sock.user?.id;
-      });
+      const targets = participants.filter(p => p?.id && p.id !== sock.user?.id);
 
-      if (targets.length < 2) {
-        await sock.sendMessage(from, {
-          text: "Precisa de pelo menos 2 membros para usar !chernobyl.",
-        });
-        return true;
-      }
-
-      const senderHandle = getMentionHandleFromJid(sender);
-      const senderOverrideName = (senderName || senderHandle || "CORNO").toUpperCase();
-
-      await sock.sendMessage(from, {
-        text: `O CORNO DO ${senderOverrideName} TA PUTO`,
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      await sock.sendMessage(from, {
-        text: `VAI CONTAMINAR METADE DO GRUPO E PUNIR A OUTRA METADE KKKKKKKKKKKKKKKKK`,
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      await sock.sendMessage(from, {
-        text: `CHERNOBYL ATIVADO!`,
-      });
+      if (targets.length < 2) return true;
 
       const shuffled = [...targets].sort(() => 0.5 - Math.random());
       const half = Math.ceil(shuffled.length / 2);
+
       const mutedHalf = shuffled.slice(0, half);
       const punishedHalf = shuffled.slice(half);
 
       const mutedUsers = storage.getMutedUsers() || {};
       if (!mutedUsers[from]) mutedUsers[from] = {};
-      const muteEndTime = Date.now() + (3 * 60 * 1000);
 
-      for (const participant of mutedHalf) {
-        const jid = participant?.id || "";
-        if (jid) mutedUsers[from][jid] = muteEndTime;
+      const now = Date.now();
+      const duration = 3 * 60 * 1000;
+
+      for (const p of mutedHalf) {
+        mutedUsers[from][p.id] = now + duration;
       }
 
-      for (const participant of punishedHalf) {
-        const jid = participant?.id || "";
-        if (!jid) continue;
-
+      for (const p of punishedHalf) {
         const punishment = getRandomPunishmentChoice();
-        const punishmentName = getPunishmentNameById(punishment?.id);
 
-        await sock.sendMessage(from, {
-          text: `Punição aplicada em ${formatMentionTag(jid)}: ${punishmentName || punishment?.id}`,
-          mentions: normalizeMentionArray([jid]),
-        });
-
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        await applyPunishment(sock, from, jid, punishment, {
+        await applyPunishment(sock, from, p.id, punishment, {
           origin: "weapon",
+          ignoreShield: true
         });
+
+        await new Promise(r => setTimeout(r, 300));
       }
 
       storage.setMutedUsers(mutedUsers);
 
       return true;
+
     } catch (err) {
       console.error("Erro ao executar chernobyl:", err);
-      await sock.sendMessage(from, {
-        text: "❌ Erro ao executar chernobyl.",
-      });
       return true;
     }
   }
 
-  // Comando !removerradiacao
+  // =========================
+  // REMOVER RADIAÇÃO 
+  // =========================
   if (cmdName === `${prefix}removerradiacao`) {
     if (!isOverrideSender) {
       await sock.sendMessage(from, {
@@ -273,24 +230,22 @@ async function handleWeaponsCommand(ctx) {
 
     try {
       const mutedUsers = storage.getMutedUsers() || {};
-      const groupMuted = mutedUsers[from] || {};
 
-      for (const jid in groupMuted) {
-        delete groupMuted[jid];
-      }
-
-      await sock.sendMessage(from, {
-        text: "☢️ RADIAÇÃO REMOVIDA! Todos voltaram ao normal(eu acho).",
-      });
-
+      // limpa mutes
+      mutedUsers[from] = {};
       storage.setMutedUsers(mutedUsers);
 
+      // limpa punições
+      await clearAllPunishmentsFromGroup(from);
+
+      await sock.sendMessage(from, {
+        text: "☢️ RADIAÇÃO REMOVIDA! Tudo voltou ao normal (eu acho).",
+      });
+
       return true;
+
     } catch (err) {
       console.error("Erro ao executar removerradiacao:", err);
-      await sock.sendMessage(from, {
-        text: "❌ Erro ao executar removerradiacao.",
-      });
       return true;
     }
   }
