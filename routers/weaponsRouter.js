@@ -16,11 +16,11 @@ async function handleWeaponsCommand(ctx) {
 
   if (!isGroup) return false
 
-const cmd = text.toLowerCase().trim()
-const cmdName = cmd.split(/\s+/) || ""  
+  const cmd = text.toLowerCase().trim()
+  const cmdName = cmd.split(/\s+/) || ""  
 
-// Menu de armas
-if (cmdName === `${prefix}armas`) {
+  // Menu de armas
+  if (cmdName === `${prefix}armas`) {
     const armasMenu = `
 ╭━━━〔 ⚔️ MENU: ARMAS 〕━━━╮
 │ Comandos exclusivos para overrides:
@@ -166,7 +166,7 @@ if (cmdName === `${prefix}armas`) {
       for (const participant of participants) {
         const jid = participant?.id || ""
         if (!jid || jid === sock.user?.id) continue
-        mutedUsers[from] [jid] = muteEndTime  
+        mutedUsers[from] [jid] = muteEndTime 
       }
 
       storage.setMutedUsers(mutedUsers)
@@ -243,7 +243,7 @@ if (cmdName === `${prefix}armas`) {
       for (const participant of toMute) {
         const jid = participant?.id || ""
         if (!jid || jid === sock.user?.id) continue
-        mutedUsers[from] [jid] = muteEndTime  
+        mutedUsers[from] [jid] = muteEndTime   
       }
 
       storage.setMutedUsers(mutedUsers)
