@@ -1,4 +1,4 @@
-const { normalizeMentionArray } = require("../services/mentionService")
+const { normalizeMentionArray, formatMentionTag, getMentionHandleFromJid } = require("../services/mentionService")
 const { applyPunishment, getPunishmentNameById, getRandomPunishmentChoice } = require("../services/punishmentService")
 
 async function handleWeaponsCommand(ctx) {
@@ -26,22 +26,13 @@ async function handleWeaponsCommand(ctx) {
 │ Comandos exclusivos para overrides:
 │
 │ ${prefix}hiroshima
-│ └─ Aplica 1 punição aleatória (3 min)
+│ └─ Aplica 1 punição aleatória
 │    para TODOS os membros do grupo
 │    (exceto overrides)
 │
 │ ${prefix}nagasaki
 │ └─ Muta todos os membros do grupo
 │    por 3 minutos (exceto overrides)
-│    com efeito cósmico baseado na hora
-│
-│ ${prefix}chernobyl
-│ └─ Muta 50% dos membros
-│    e os outros 50% recebem punição
-│
-│ ${prefix}limparradiacao
-│ └─ Remove o efeito da radiação
-│    Todos podem interagir normalmente
 │
 │ ⚠️ Cuidado: Essas armas afetam
 │    TODOS os membros simultaneamente!
@@ -88,8 +79,8 @@ async function handleWeaponsCommand(ctx) {
       const punishment = getRandomPunishmentChoice()
       const punishmentName = getPunishmentNameById(punishment?.id)
 
-      // Mensagens com delay de 1 segundo
-      const senderOverrideName = (senderName || sender.split("@")).toUpperCase()  
+      const senderHandle = getMentionHandleFromJid(sender)
+      const senderOverrideName = (senderName || senderHandle || "CORNO").toUpperCase()
       
       await sock.sendMessage(from, {
         text: `O CORNO DO ${senderOverrideName} TA PUTO`,
@@ -104,7 +95,7 @@ async function handleWeaponsCommand(ctx) {
       await new Promise(resolve => setTimeout(resolve, 1000))
 
       await sock.sendMessage(from, {
-        text: `A punição aplicada foi: ${punishmentName || punishment?.id}`,
+        text: `A punição aplicada foi: ${punishmentName || punishment?.id}\n${formatMentionTag(targetJid)}`,
         mentions: normalizeMentionArray([targetJid]),
       })
 
@@ -139,7 +130,8 @@ async function handleWeaponsCommand(ctx) {
       const metadata = await sock.groupMetadata(from)
       const participants = metadata?.participants || []
 
-      const senderOverrideName = (senderName || sender.split("@")).toUpperCase()  
+      const senderHandle = getMentionHandleFromJid(sender)
+      const senderOverrideName = (senderName || senderHandle || "CORNO").toUpperCase()
       
       await sock.sendMessage(from, {
         text: `O CORNO DO ${senderOverrideName} TA PUTO`,
@@ -176,126 +168,6 @@ async function handleWeaponsCommand(ctx) {
       console.error("Erro ao executar nagasaki:", err)
       await sock.sendMessage(from, {
         text: "❌ Erro ao executar nagasaki.",
-      })
-      return true
-    }
-  }
-
-  // Comando !chernobyl
-  if (cmdName === `${prefix}chernobyl`) {
-    if (!isOverrideSender) {
-      await sock.sendMessage(from, {
-        text: "❌ Apenas overrides podem usar essa arma!",
-      })
-      return true
-    }
-
-    try {
-      const metadata = await sock.groupMetadata(from)
-      const participants = metadata?.participants || []
-      
-      // Filtra membros que não são override
-      const targets = participants.filter(p => {
-        const jid = p?.id || ""
-        return jid && jid !== sock.user?.id  
-      })
-
-      if (targets.length === 0) {
-        await sock.sendMessage(from, {
-          text: "Ninguém para afetar.",
-        })
-        return true
-      }
-
-      // Embaralha e divide em 50/50
-      const shuffled = targets.sort(() => Math.random() - 0.5)
-      const midpoint = Math.ceil(shuffled.length / 2)
-      const toMute = shuffled.slice(0, midpoint)
-      const toPunish = shuffled.slice(midpoint)
-
-      const senderOverrideName = (senderName || sender.split("@")).toUpperCase()  
-      
-      await sock.sendMessage(from, {
-        text: `O CORNO DO ${senderOverrideName} TA PUTO`,
-      })
-
-      await new Promise(resolve => setTimeout(resolve, 1000))
-
-      await sock.sendMessage(from, {
-        text: `VAI EXPLODIR CHERNOBYL E AFETAR GERAL KKKKKKKKKKKKKKKKK`,
-      })
-
-      await new Promise(resolve => setTimeout(resolve, 1000))
-
-      await sock.sendMessage(from, {
-        text: `50% vai ficar mudo e 50% vai levar punição KKKKKKKKKKKKKKKK`,
-      })
-
-      // Aguarda um pouco antes de aplicar efeitos
-      await new Promise(resolve => setTimeout(resolve, 2000))
-
-      // Muta 50%
-      const mutedUsers = storage.getMutedUsers() || {}
-      if (!mutedUsers[from]) mutedUsers[from] = {}
-      
-      const muteEndTime = Date.now() + (3 * 60 * 1000)
-
-      for (const participant of toMute) {
-        const jid = participant?.id || ""
-        if (!jid || jid === sock.user?.id) continue
-        mutedUsers[from] [jid] = muteEndTime   
-      }
-
-      storage.setMutedUsers(mutedUsers)
-
-      // Aplica punição em 50%
-      for (const participant of toPunish) {
-        const jid = participant?.id || ""
-        if (!jid || jid === sock.user?.id) continue
-        
-        const punishment = getRandomPunishmentChoice()
-        await applyPunishment(sock, from, jid, punishment, {
-          origin: "weapon",
-        })
-      }
-
-      await sock.sendMessage(from, {
-        text: `☢️ CHERNOBYL ATIVADO ☢️\n${toMute.length} silenciados | ${toPunish.length} punidos KKKKKKKKKKKKKKKK`,
-      })
-
-      return true
-    } catch (err) {
-      console.error("Erro ao executar chernobyl:", err)
-      await sock.sendMessage(from, {
-        text: "❌ Erro ao executar chernobyl.",
-      })
-      return true
-    }
-  }
-
-  // Comando !limparradiacao / !limparradiação
-  if (cmdName === `${prefix}limparradiacao` || cmdName === `${prefix}limparradiação`) {
-    if (!isOverrideSender) {
-      await sock.sendMessage(from, {
-        text: "❌ Apenas overrides podem usar esse comando!",
-      })
-      return true
-    }
-
-    try {
-      const mutedUsers = storage.getMutedUsers() || {}
-      delete mutedUsers[from]
-      storage.setMutedUsers(mutedUsers)
-
-      await sock.sendMessage(from, {
-        text: `ACABOU A RESENHA\nTODOS PODEM INTERAGIR NORMALMENTE`,
-      })
-
-      return true
-    } catch (err) {
-      console.error("Erro ao executar limparradiacao:", err)
-      await sock.sendMessage(from, {
-        text: "❌ Erro ao limpar radiação.",
       })
       return true
     }
