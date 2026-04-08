@@ -16,11 +16,11 @@ async function handleWeaponsCommand(ctx) {
 
   if (!isGroup) return false
 
-  const cmd = text.toLowerCase().trim()
-  const cmdName = cmd.split(/\s+/) || ""  
+const cmd = text.toLowerCase().trim()
+const cmdName = cmd.split(/\s+/) || ""  
 
-  // Menu de armas
-  if (cmdName === `${prefix}armas`) {
+// Menu de armas
+if (cmdName === `${prefix}armas`) {
     const armasMenu = `
 ╭━━━〔 ⚔️ MENU: ARMAS 〕━━━╮
 │ Comandos exclusivos para overrides:
