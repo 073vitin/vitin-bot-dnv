@@ -1,5 +1,5 @@
 const { normalizeMentionArray } = require("../services/mentionService")
-const { applyPunishment, getPunishmentNameById } = require("../services/punishmentService")
+const { applyPunishment, getPunishmentNameById, getRandomPunishmentChoice } = require("../services/punishmentService")
 
 async function handleWeaponsCommand(ctx) {
   const {
@@ -8,25 +8,19 @@ async function handleWeaponsCommand(ctx) {
     sender,
     text,
     isGroup,
-    participants,
     senderName,
-    senderIsAdmin,
-    overrideIdentifiers,
+    isOverrideSender,
     prefix,
+    storage,
   } = ctx
 
   if (!isGroup) return false
 
-  if (!senderIsAdmin || !overrideIdentifiers?.includes(sender)) {
-    await sock.sendMessage(from, {
-      text: "❌ Apenas overrides podem usar comandos envolvendo as armas!",
-    })
-    return true
-  }
+  const cmd = text.toLowerCase().trim()
+  const cmdName = cmd.split(/\s+/) || ""
 
-  const command = text.toLowerCase().trim().split(" ")
-
-  if (command === `${prefix}armas`) {
+  // Menu de armas
+  if (cmdName === `${prefix}armas`) {
     const armasMenu = `
 ╭━━━〔 ⚔️ MENU: ARMAS 〕━━━╮
 │ Comandos exclusivos para overrides:
@@ -41,6 +35,14 @@ async function handleWeaponsCommand(ctx) {
 │    por 3 minutos (exceto overrides)
 │    com efeito cósmico baseado na hora
 │
+│ ${prefix}chernobyl
+│ └─ Muta 50% dos membros
+│    e os outros 50% recebem punição
+│
+│ ${prefix}limparradiacao
+│ └─ Remove o efeito da radiação
+│    Todos podem interagir normalmente
+│
 │ ⚠️ Cuidado: Essas armas afetam
 │    TODOS os membros simultaneamente!
 ╰━━━━━━━━━━━━━━━━━━━━╯
@@ -53,115 +55,253 @@ async function handleWeaponsCommand(ctx) {
   }
 
   // Comando !hiroshima
-  if (command === `${prefix}hiroshima`) {
-    const groupMembers = participants.map(p => p.id)
-    const targets = groupMembers.filter(jid => !overrideIdentifiers.includes(jid))
-
-    if (targets.length === 0) {
+  if (cmdName === `${prefix}hiroshima`) {
+    if (!isOverrideSender) {
       await sock.sendMessage(from, {
-        text: "Ninguém para punir.",
+        text: "❌ Apenas overrides podem usar essa arma!",
       })
       return true
     }
 
-    const randomTarget = targets[Math.floor(Math.random() * targets.length)]
-    const randomName = randomTarget.split("@")[0]
+    try {
+      const metadata = await sock.groupMetadata(from)
+      const participants = metadata?.participants || []
+      
+      // Filtra membros que não são override
+      const targets = participants.filter(p => {
+        const jid = p?.id || ""
+        return !isOverrideSender
+      })
 
-    await sock.sendMessage(from, {
-      text: `💥 CUIDADO, A MÃE DO @${randomName} TA CAINDO DO CÉU, CUIDADO!!!!!\n🌠 QUEDA EMINENTE EM...`,
-      mentions: normalizeMentionArray([randomTarget]),
-    })
+      if (targets.length === 0) {
+        await sock.sendMessage(from, {
+          text: "Ninguém para punir.",
+        })
+        return true
+      }
 
-    for (let i = 5; i > 0; i--) {
-      await new Promise(resolve => setTimeout(resolve, 1000))
+      // Seleciona alvo aleatório
+      const randomTarget = targets[Math.floor(Math.random() * targets.length)]
+      const targetJid = randomTarget?.id || ""
+
+      // Aplica punição aleatória
+      const punishment = getRandomPunishmentChoice()
+      const punishmentName = getPunishmentNameById(punishment?.id)
+
+      // Mensagens com delay de 1 segundo
+      const senderOverrideName = senderName || sender.split("@")
+      
       await sock.sendMessage(from, {
-        text: `${i} ⏳`,
+        text: `O CORNO DO ${senderOverrideName.toUpperCase()} TA PUTO`,
       })
-    }
 
-    await sock.sendMessage(from, {
-      text: "💣 OLHA A SENTADA MISTERIOSA",
-    })
+      await new Promise(resolve => setTimeout(resolve, 1000))
 
-    const punishmentChoices = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"]
-    const randomPunishment = punishmentChoices[Math.floor(Math.random() * punishmentChoices.length)]
-
-    for (const jid of targets) {
-      await applyPunishment(sock, from, jid, randomPunishment, {
-        severityMultiplier: 1,
-        origin: "admin",
+      await sock.sendMessage(from, {
+        text: `VAI BOTAR TODO MUNDO DE CASTIGO PQ N TÃO USANDO O BOT KKKKKKKKKKKKKKKKK`,
       })
+
+      await new Promise(resolve => setTimeout(resolve, 1000))
+
+      await sock.sendMessage(from, {
+        text: `A punição aplicada foi: ${punishmentName || punishment?.id}`,
+        mentions: normalizeMentionArray([targetJid]),
+      })
+
+      // Aguarda um pouco antes de aplicar punição
+      await new Promise(resolve => setTimeout(resolve, 2000))
+
+      // Aplica punição aleatória
+      await applyPunishment(sock, from, targetJid, punishment, {
+        origin: "weapon",
+      })
+
+      return true
+    } catch (err) {
+      console.error("Erro ao executar hiroshima:", err)
+      await sock.sendMessage(from, {
+        text: "❌ Erro ao executar hiroshima.",
+      })
+      return true
     }
-
-    const punishmentName = getPunishmentNameById(randomPunishment)
-    const mentionsList = targets.map(jid => `@${jid.split("@")[0]}`).join(", ")
-
-    await sock.sendMessage(from, {
-      text: `☢️ A MÃE DE @${randomName} ESTA EMITINDO RADIAÇÃO E MUDOU O AMBIENTE EM SUA VOLTA\n🌀 A MUTAÇÃO QUE VOCES RECEBERAM FOI: *${punishmentName}* (3 minutos)\n\n👥 Afetados: ${mentionsList}`,
-      mentions: normalizeMentionArray(targets),
-    })
-
-    return true
   }
 
   // Comando !nagasaki
-  if (command === `${prefix}nagasaki`) {
-    const groupMembers = participants.map(p => p.id)
-    const targets = groupMembers.filter(jid => !overrideIdentifiers.includes(jid))
-
-    if (targets.length === 0) {
+  if (cmdName === `${prefix}nagasaki`) {
+    if (!isOverrideSender) {
       await sock.sendMessage(from, {
-        text: "Ninguém para mutar.",
+        text: "❌ Apenas overrides podem usar essa arma!",
       })
       return true
     }
 
-    // Verificar horário
-    const now = new Date()
-    const hour = now.getHours()
+    try {
+      const metadata = await sock.groupMetadata(from)
+      const participants = metadata?.participants || []
 
-    let messages = []
-    if (hour < 18) {
-      messages = [
-        "Ué, pq tem dois sóis no céu",
-        "Um deles ta chegando perto...",
-        "EITA PORRA"
-      ]
-    } else {
-      messages = [
-        "Ué, pq ta dando pra ver o sol de noite?",
-        "Pq essa porra ta crescendo",
-        "EITA CARAI"
-      ]
-    }
-
-    for (const msg of messages) {
+      const senderOverrideName = senderName || sender.split("@")
+      
       await sock.sendMessage(from, {
-        text: msg,
+        text: `O CORNO DO ${senderOverrideName.toUpperCase()} TA PUTO`,
       })
+
       await new Promise(resolve => setTimeout(resolve, 1000))
-    }
 
-    for (const jid of targets) {
-      await applyPunishment(sock, from, jid, "5", {
-        severityMultiplier: 1,
-        origin: "admin",
+      await sock.sendMessage(from, {
+        text: `VAI CALAR A BOCA DE TODO MUNDO QUE MAMOU ELE KKKKKKKKKKKKKKKKKK`,
       })
+
+      await new Promise(resolve => setTimeout(resolve, 1000))
+
+      await sock.sendMessage(from, {
+        text: `Geral com a boca calada por 3 minutos KKKKKKKKKKKKKKKK`,
+      })
+
+      // Muta todos por 3 minutos
+      const mutedUsers = storage.getMutedUsers() || {}
+      if (!mutedUsers[from]) mutedUsers[from] = {}
+      
+      const muteEndTime = Date.now() + (3 * 60 * 1000)
+
+      for (const participant of participants) {
+        const jid = participant?.id || ""
+        if (!jid || jid === sock.user?.id) continue
+        mutedUsers[from] [jid] = muteEndTime
+      }
+
+      storage.setMutedUsers(mutedUsers)
+
+      return true
+    } catch (err) {
+      console.error("Erro ao executar nagasaki:", err)
+      await sock.sendMessage(from, {
+        text: "❌ Erro ao executar nagasaki.",
+      })
+      return true
+    }
+  }
+
+  // Comando !chernobyl
+  if (cmdName === `${prefix}chernobyl`) {
+    if (!isOverrideSender) {
+      await sock.sendMessage(from, {
+        text: "❌ Apenas overrides podem usar essa arma!",
+      })
+      return true
     }
 
-    const mentionsList = targets.map(jid => `@${jid.split("@")[0]}`).join(", ")
+    try {
+      const metadata = await sock.groupMetadata(from)
+      const participants = metadata?.participants || []
+      
+      // Filtra membros que não são override
+      const targets = participants.filter(p => {
+        const jid = p?.id || ""
+        return !isOverrideSender
+      })
 
-    await sock.sendMessage(from, {
-      text: `A RADIAÇÃO ESTÁ ALTERANDO O GRUPO...\nA MUTAÇÃO FOI: MUTE POR 3 MINUTOS!\nSE FUDERAM KKKKKKKKKKKKKKKKKKKKKKKKKKKKK\n\n👥 Afetados: ${mentionsList}`,
-      mentions: normalizeMentionArray(targets),
-    })
+      if (targets.length === 0) {
+        await sock.sendMessage(from, {
+          text: "Ninguém para afetar.",
+        })
+        return true
+      }
 
-    return true
+      // Embaralha e divide em 50/50
+      const shuffled = targets.sort(() => Math.random() - 0.5)
+      const midpoint = Math.ceil(shuffled.length / 2)
+      const toMute = shuffled.slice(0, midpoint)
+      const toPunish = shuffled.slice(midpoint)
+
+      const senderOverrideName = senderName || sender.split("@")
+      
+      await sock.sendMessage(from, {
+        text: `O CORNO DO ${senderOverrideName.toUpperCase()} TA PUTO`,
+      })
+
+      await new Promise(resolve => setTimeout(resolve, 1000))
+
+      await sock.sendMessage(from, {
+        text: `VAI EXPLODIR CHERNOBYL E AFETAR GERAL KKKKKKKKKKKKKKKKK`,
+      })
+
+      await new Promise(resolve => setTimeout(resolve, 1000))
+
+      await sock.sendMessage(from, {
+        text: `50% vai ficar mudo e 50% vai levar punição KKKKKKKKKKKKKKKK`,
+      })
+
+      // Aguarda um pouco antes de aplicar efeitos
+      await new Promise(resolve => setTimeout(resolve, 2000))
+
+      // Muta 50%
+      const mutedUsers = storage.getMutedUsers() || {}
+      if (!mutedUsers[from]) mutedUsers[from] = {}
+      
+      const muteEndTime = Date.now() + (3 * 60 * 1000)
+
+      for (const participant of toMute) {
+        const jid = participant?.id || ""
+        if (!jid || jid === sock.user?.id) continue
+        mutedUsers[from] [jid] = muteEndTime
+      }
+
+      storage.setMutedUsers(mutedUsers)
+
+      // Aplica punição em 50%
+      for (const participant of toPunish) {
+        const jid = participant?.id || ""
+        if (!jid || jid === sock.user?.id) continue
+        
+        const punishment = getRandomPunishmentChoice()
+        await applyPunishment(sock, from, jid, punishment, {
+          origin: "weapon",
+        })
+      }
+
+      await sock.sendMessage(from, {
+        text: `☢️ CHERNOBYL ATIVADO ☢️\n${toMute.length} silenciados | ${toPunish.length} punidos KKKKKKKKKKKKKKKK`,
+      })
+
+      return true
+    } catch (err) {
+      console.error("Erro ao executar chernobyl:", err)
+      await sock.sendMessage(from, {
+        text: "❌ Erro ao executar chernobyl.",
+      })
+      return true
+    }
+  }
+
+  // Comando !limparradiacao / !limparradiação
+  if (cmdName === `${prefix}limparradiacao` || cmdName === `${prefix}limparradiação`) {
+    if (!isOverrideSender) {
+      await sock.sendMessage(from, {
+        text: "❌ Apenas overrides podem usar esse comando!",
+      })
+      return true
+    }
+
+    try {
+      const mutedUsers = storage.getMutedUsers() || {}
+      delete mutedUsers[from]
+      storage.setMutedUsers(mutedUsers)
+
+      await sock.sendMessage(from, {
+        text: `ACABOU A RESENHA\nTODOS PODEM INTERAGIR NORMALMENTE`,
+      })
+
+      return true
+    } catch (err) {
+      console.error("Erro ao executar limparradiacao:", err)
+      await sock.sendMessage(from, {
+        text: "❌ Erro ao limpar radiação.",
+      })
+      return true
+    }
   }
 
   return false
 }
 
-module.exports = {
-  handleWeaponsCommand,
-}
+module.exports = { handleWeaponsCommand }
