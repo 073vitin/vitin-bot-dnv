@@ -1743,7 +1743,7 @@ async function videoToSticker(buffer){
         .outputOptions([
           "-t 10",
           "-vcodec libwebp",
-          "-vf scale=512:512:flags=lanczos",
+          "-vf fps=10,scale=512:512:flags=lanczos",
           "-loop 0",
           "-preset default",
           "-an",
