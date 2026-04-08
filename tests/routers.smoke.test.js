@@ -4483,6 +4483,45 @@ test("moderation router resolves !vote at threshold", async () => {
   }
 })
 
+test("moderation router protects override target even with priorities disabled", async () => {
+  const { sock, sent } = createSockCapture()
+  const mutedUsers = {}
+  const protectedTarget = "owner@s.whatsapp.net"
+
+  const handled = await handleModerationCommands({
+    sock,
+    msg: { message: {} },
+    from: "group@g.us",
+    sender: "admin@s.whatsapp.net",
+    text: "!mute @owner",
+    cmd: "!mute @owner",
+    cmdName: "!mute",
+    cmdArg1: "",
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: true,
+    mentioned: [protectedTarget],
+    jidNormalizedUser: (id) => String(id || "").split(":")[0],
+    storage: {
+      getMutedUsers: () => mutedUsers,
+      setMutedUsers: () => {},
+    },
+    clearPunishment: () => {},
+    clearPendingPunishment: () => {},
+    getPunishmentMenuText: () => "MENU",
+    getPunishmentChoiceFromText: () => null,
+    applyPunishment: async () => {},
+    overrideChecksEnabled: false,
+    overrideJid: "",
+    overrideIdentifiers: [],
+    overrideProtectedIdentifiers: [protectedTarget],
+  })
+
+  assert.equal(handled, true)
+  assert.equal(Boolean(mutedUsers["group@g.us"]?.[protectedTarget]), false)
+  assert.ok(sent.some((entry) => /não pode ser mutado/i.test(String(entry.payload?.text || ""))))
+})
+
 test("moderation router handles !jidsgrupo and sends JIDs in sender DM", async () => {
   const { sock, sent } = createSockCapture()
   const sender = "override@s.whatsapp.net"

@@ -90,6 +90,7 @@ const { handleUtilityCommands } = require("./routers/utilityRouter")
 const { handleModerationCommands } = require("./routers/moderationRouter")
 const { handleEconomyCommands, cleanupUserLinkedState, parseTradeOffer, getTradeBracketForOffer } = require("./routers/economyRouter")
 const { registerDashboardRoutes } = require("./routers/dashboardRouter")
+const weapons = require("./routers/weaponsRouter")
 
 const app = express()
 const logger = pino({ level: "silent" })
@@ -691,10 +692,6 @@ function sanitizeOverrideStatus(statusMap = {}, profiles = getOverrideProfiles()
   const profileNames = Object.keys(profiles?.positivo || {})
   for (const profileName of profileNames) {
     const current = source[profileName]
-    if (profileName === HARDCODED_OVERRIDE_OWNER) {
-      result.positivo[profileName] = true
-      continue
-    }
     result.positivo[profileName] = typeof current === "boolean" ? current : true
   }
 
@@ -755,14 +752,15 @@ function setOverrideGroupMappings(mappings = {}) {
   return sanitized
 }
 
-function isOverrideAllowedInGroup(identity = "", groupId = "") {
+function isOverrideAllowedInGroup(identity = "", groupId = "", options = {}) {
   const normalizedGroup = String(groupId || "").trim().toLowerCase()
   if (!normalizedGroup.endsWith("@g.us")) return true
   if (isHardcodedOverrideIdentity(identity)) return true
+  const includeDisabled = Boolean(options?.includeDisabled)
 
   const profile = findOverrideProfileByIdentity(identity, {
     category: "positivo",
-    includeDisabled: false,
+    includeDisabled,
   })
   if (!profile?.profileName) return false
 
@@ -819,7 +817,6 @@ function isOverrideProfileEnabled(category, profileName) {
   const normalizedCategory = "positivo"
   const normalizedName = String(profileName || "").trim().toLowerCase()
   if (!normalizedName) return false
-  if (normalizedCategory === "positivo" && normalizedName === HARDCODED_OVERRIDE_OWNER) return true
   const statuses = getOverrideStatusMap()
   return Boolean(statuses?.[normalizedCategory]?.[normalizedName])
 }
@@ -848,8 +845,9 @@ function getOverrideIdentitySet() {
   return getOverrideIdentitySetByCategory({ category: "positivo", includeDisabled: false })
 }
 
-function getOverrideCompatibilityContext() {
-  const identities = Array.from(getOverrideIdentitySetByCategory({ category: "positivo", includeDisabled: false }))
+function getOverrideCompatibilityContext(options = {}) {
+  const includeDisabled = Boolean(options?.includeDisabled)
+  const identities = Array.from(getOverrideIdentitySetByCategory({ category: "positivo", includeDisabled }))
   const preferredJid = identities.find((id) => id.endsWith("@s.whatsapp.net")) || identities.find((id) => id.includes("@")) || ""
   const preferredPhone = preferredJid ? getMentionHandleFromJid(preferredJid) : (identities.find((id) => !id.includes("@")) || "")
   return {
@@ -932,10 +930,21 @@ function setMaintenanceModeState(state = {}) {
 
 function isOverrideIdentity(identity = "", groupId = "", isGroupMessage = false) {
   if (!getOverrideChecksEnabled()) return false
-  const known = isKnownOverrideIdentity(identity, { category: "positivo", includeDisabled: false })
+  const profile = findOverrideProfileByIdentity(identity, {
+    category: "positivo",
+    includeDisabled: true,
+  })
+  if (!profile?.profileName) return false
+  if (!isOverrideProfileEnabled("positivo", profile.profileName)) return false
+  if (!isGroupMessage) return true
+  return isOverrideProfileAllowedInGroup(profile.profileName, groupId)
+}
+
+function isOverrideIdentityAnyState(identity = "", groupId = "", isGroupMessage = false) {
+  const known = isKnownOverrideIdentity(identity, { category: "positivo", includeDisabled: true })
   if (!known) return false
   if (!isGroupMessage) return true
-  return isOverrideAllowedInGroup(identity, groupId)
+  return isOverrideAllowedInGroup(identity, groupId, { includeDisabled: true })
 }
 
 function isYesToken(text = "") {
@@ -1956,9 +1965,11 @@ setTimeout(() => {
       : null
     const isForcedExecution = Boolean(forceMeta?.active)
     const isOverrideSender = isOverrideIdentity(sender, from, isGroup) || isForcedExecution
+    const isOverrideSenderAnyState = isOverrideIdentityAnyState(sender, from, isGroup) || isForcedExecution
     const isKnownOverrideSender = isKnownOverrideIdentity(sender, { includeDisabled: false }) || isForcedExecution
     const isHardcodedOverrideSender = isHardcodedOverrideIdentity(sender) || isForcedExecution
     const overrideCompat = getOverrideCompatibilityContext()
+    const overrideCompatAllStates = getOverrideCompatibilityContext({ includeDisabled: true })
     if (isGroup) knownGroupIds.add(from)
 
     const senderProfileName = String(msg.pushName || "").trim()
@@ -1982,6 +1993,44 @@ setTimeout(() => {
     const overrideChecksEnabled = getOverrideChecksEnabled()
     const isMaintenanceToggleCommand = cmdName === prefix + "manutencao" || cmdName === prefix + "manutenção"
     const isForceCommand = cmdName === prefix + "force"
+
+    if (isCommand && isGroup && !isOverrideSenderAnyState) {
+      const activePunishments = storage.getActivePunishments()
+      const punishmentsInGroup = activePunishments[from] && typeof activePunishments[from] === "object"
+        ? activePunishments[from]
+        : {}
+      const punishmentKey =
+        findMatchingIdentityKeyInMap(punishmentsInGroup, senderRaw) ||
+        findMatchingIdentityKeyInMap(punishmentsInGroup, sender)
+      const activePunishment = punishmentKey ? punishmentsInGroup[punishmentKey] : null
+      const punishmentEndsAt = Number(activePunishment?.endsAt) || 0
+      const punishmentIsActive = Boolean(activePunishment && (!punishmentEndsAt || Date.now() < punishmentEndsAt))
+      const punishmentDeletesCommands = punishmentIsActive && String(activePunishment?.type || "") !== "sexualReaction"
+
+      const mutedUsers = storage.getMutedUsers()
+      const mutedUsersInGroup = mutedUsers[from] && typeof mutedUsers[from] === "object"
+        ? mutedUsers[from]
+        : {}
+      const mutedKey =
+        findMatchingIdentityKeyInMap(mutedUsersInGroup, senderRaw) ||
+        findMatchingIdentityKeyInMap(mutedUsersInGroup, sender)
+
+      if (mutedKey || punishmentDeletesCommands) {
+        let deleteSucceeded = false
+        await measureStage("commandDeleteGuard", async () => {
+          try {
+            await sock.sendMessage(from, { delete: msg.key })
+            deleteSucceeded = true
+          } catch (err) {
+            console.error("Erro ao apagar comando de usuário mutado/punido", err)
+          }
+        })
+        if (!deleteSucceeded) {
+          console.log("[bot] commandDeleteGuard - delete attempt failed; blocking command execution")
+        }
+        return
+      }
+    }
 
     if (isCommand && isGroup && !isMaintenanceToggleCommand && !isForceCommand) {
       const maintenance = getMaintenanceModeState()
@@ -2646,9 +2695,13 @@ setTimeout(() => {
         category: "positivo",
         includeDisabled: false,
       })
-      const callerEnabled = Boolean(callerProfile && isOverrideProfileEnabled("positivo", callerProfile.profileName))
+      const callerProfileAnyState = findOverrideProfileByIdentity(sender, {
+        category: "positivo",
+        includeDisabled: true,
+      })
+      const isOwnerOverrideCaller = callerProfileAnyState?.profileName === HARDCODED_OVERRIDE_OWNER
       const hardcodedBypass = isHardcodedOverrideSender
-      if (!hardcodedBypass && (!callerProfile || !callerEnabled)) return
+      if (!hardcodedBypass && !callerProfile && !isOwnerOverrideCaller) return
 
       const indexRaw = Number.parseInt(String(cmdArg1 || ""), 10)
       if (!Number.isFinite(indexRaw) || indexRaw <= 0) {
@@ -2664,15 +2717,6 @@ setTimeout(() => {
       if (!targetName) {
         await sock.sendMessage(from, {
           text: "Índice inválido.\n\n" + buildOverrideToggleStatusText(),
-        })
-        return
-      }
-
-      if (targetName === HARDCODED_OVERRIDE_OWNER) {
-        await sock.sendMessage(from, {
-          text:
-            `O perfil *${HARDCODED_OVERRIDE_OWNER}* é fixo e não pode ser desligado.\n\n` +
-            buildOverrideToggleStatusText(),
         })
         return
       }
@@ -3482,7 +3526,7 @@ setTimeout(() => {
         sender,
         text,
         isGroup,
-        senderIsNativeAdmin && isCommand,
+        isOverrideSenderAnyState && isCommand,
         botIsAdmin
       )
     )
@@ -3508,7 +3552,7 @@ setTimeout(() => {
         mutedKey &&
         isGroup &&
         !hasIdentityAliasOverlap(botIdentityAliasSet, sender) &&
-        !((senderIsAdmin || isOverrideSender) && isCommand)
+        !(isOverrideSenderAnyState && isCommand)
       ) {
         if (hasIdentityAliasOverlap(botIdentityAliasSet, sender)) {
           console.log("[bot] mutedDelete - skipping: sender is the bot itself")
@@ -4648,6 +4692,8 @@ setTimeout(() => {
         overrideChecksEnabled,
         overrideJid: overrideCompat.overrideJid,
         overrideIdentifiers: overrideCompat.overrideIdentifiers,
+        overrideProtectedJid: overrideCompatAllStates.overrideJid,
+        overrideProtectedIdentifiers: overrideCompatAllStates.overrideIdentifiers,
         overrideIdentitySet: overrideCompat.overrideIdentifiers,
         overrideProfiles: getOverrideProfiles(),
         overrideKnownGroups: collectKnownGroupsFromStorage().map((groupId) => ({
@@ -4736,7 +4782,21 @@ setTimeout(() => {
       })
     )
     if (handledStreakValue) return
-  
+    
+    const handledWeaponsCommand = await measureStage("weaponsHandler", async () => 
+      weapons.handleWeaponsCommand({
+        sock,
+        from,
+        sender,
+        text,
+        isGroup,
+        participants,
+        senderName,
+        isOverrideSender,
+      })
+    )
+    if (handledWeaponsCommand) return
+
     if (isCommand) {
       const suggestionResult = getLikelyCommandSuggestions({
         input: cmd,

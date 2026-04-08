@@ -25,6 +25,8 @@ async function handleModerationCommands(ctx) {
     overrideChecksEnabled,
     overrideJid,
     overrideIdentifiers,
+    overrideProtectedJid,
+    overrideProtectedIdentifiers,
     senderName,
   } = ctx
 
@@ -63,19 +65,39 @@ async function handleModerationCommands(ctx) {
   }
 
   const botJid = jidNormalizedUser(sock.user?.id || "")
-  const overrideIdentitySet = new Set(
-    [overrideJid, ...(overrideIdentifiers || [])]
+  const buildOverrideIdentitySet = (values = []) => new Set(
+    (values || [])
       .map((value) => String(value || "").trim().toLowerCase().split(":")[0])
       .filter(Boolean)
   )
-  const isOverrideJid = (jid) => {
-    if (!overrideChecksEnabled) return false
+
+  const overrideIdentitySet = buildOverrideIdentitySet([
+    overrideJid,
+    ...(overrideIdentifiers || []),
+  ])
+
+  const overrideProtectedIdentitySet = buildOverrideIdentitySet([
+    overrideProtectedJid,
+    ...(overrideProtectedIdentifiers || []),
+    overrideJid,
+    ...(overrideIdentifiers || []),
+  ])
+
+  const matchesOverrideSet = (jid, identitySet) => {
     const normalized = String(jidNormalizedUser(jid || "") || "").trim().toLowerCase().split(":")[0]
     if (!normalized) return false
-    if (overrideIdentitySet.has(normalized)) return true
+    if (identitySet.has(normalized)) return true
     const userPart = getMentionHandleFromJid(normalized)
-    return Boolean(userPart && overrideIdentitySet.has(userPart))
+    return Boolean(userPart && identitySet.has(userPart))
   }
+
+  const isOverrideJid = (jid) => {
+    if (!overrideChecksEnabled) return false
+    return matchesOverrideSet(jid, overrideIdentitySet)
+  }
+
+  const isProtectedOverrideJid = (jid) => matchesOverrideSet(jid, overrideProtectedIdentitySet)
+
   const isOverrideSender = isOverrideJid(sender)
   const resolveAdminTarget = () => {
     if (mentioned[0]) return mentioned[0]
@@ -197,7 +219,7 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
-    if (isOverrideJid(alvo)) {
+    if (isProtectedOverrideJid(alvo)) {
       trackModeration("block", "rejected", { reason: "target-override" })
       await sock.sendMessage(from, { text: "Esse usuário não pode ser bloqueado por comando." })
       return true
@@ -351,7 +373,7 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
-    if (isOverrideJid(target)) {
+    if (isProtectedOverrideJid(target)) {
       await sock.sendMessage(from, { text: "Esse usuário não pode ser alvo de votação." })
       trackModeration("vote", "rejected", { reason: "target-override" })
       return true
@@ -456,7 +478,7 @@ async function handleModerationCommands(ctx) {
       await sock.sendMessage(from, { text: "Marque alguém para mutar!" })
       return true
     }
-    if (isOverrideJid(alvo)) {
+    if (isProtectedOverrideJid(alvo)) {
       trackModeration("mute", "rejected", { reason: "target-override" })
       await sock.sendMessage(from, { text: "Esse usuário não pode ser mutado." })
       return true
@@ -515,7 +537,7 @@ async function handleModerationCommands(ctx) {
       await sock.sendMessage(from, { text: "Marque alguém para banir!" })
       return true
     }
-    if (isOverrideJid(alvo)) {
+    if (isProtectedOverrideJid(alvo)) {
       trackModeration("ban", "rejected", { reason: "target-override" })
       await sock.sendMessage(from, { text: "Esse usuário não pode ser banido." })
       return true
@@ -810,7 +832,7 @@ async function handleModerationCommands(ctx) {
       await sock.sendMessage(from, { text: "🤖 O bot não pode receber punições administrativas." })
       return true
     }
-    if (isOverrideJid(alvo)) {
+    if (isProtectedOverrideJid(alvo)) {
       trackModeration("punicoesadd", "rejected", { reason: "target-override" })
       await sock.sendMessage(from, { text: "Este usuário não podem receber punições administrativas." })
       return true
