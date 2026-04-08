@@ -1733,32 +1733,48 @@ async function videoToSticker(buffer){
   const input = "./input.mp4"
   const output = "./output.webp"
 
-  fs.writeFileSync(input, buffer)
+  try {
+    console.log("[videoToSticker] Iniciando conversão, tamanho do buffer:", buffer.length)
+    fs.writeFileSync(input, buffer)
+    console.log("[videoToSticker] Arquivo salvo em:", input)
 
-  await new Promise((resolve, reject) => {
-    ffmpeg(input)
-      .outputOptions([
-        "-t 10",                          // Limita a 10 segundos
-        "-vcodec libwebp",
-        "-vf scale=512:512:flags=lanczos", 
-        "-loop 0",                         
-        "-preset default",
-        "-an",                             
-        "-vsync 0",
-        "-delay 10"                       
-      ])
-      .toFormat("webp")
-      .save(output)
-      .on("end", resolve)
-      .on("error", reject)
-  })
+    await new Promise((resolve, reject) => {
+      ffmpeg(input)
+        .outputOptions([
+          "-t 10",
+          "-vcodec libwebp",
+          "-vf scale=512:512:flags=lanczos",
+          "-loop 0",
+          "-preset default",
+          "-an",
+          "-vsync 0"
+        ])
+        .toFormat("webp")
+        .save(output)
+        .on("end", () => {
+          console.log("[videoToSticker] Conversão concluída")
+          resolve()
+        })
+        .on("error", (err) => {
+          console.error("[videoToSticker] Erro do FFmpeg:", err)
+          reject(err)
+        })
+    })
 
-  const sticker = fs.readFileSync(output)
-  fs.unlinkSync(input)
-  fs.unlinkSync(output)
-  return sticker
+    console.log("[videoToSticker] Lendo arquivo de saída:", output)
+    const sticker = fs.readFileSync(output)
+    console.log("[videoToSticker] Sticker criado com sucesso, tamanho:", sticker.length)
+    
+    fs.unlinkSync(input)
+    fs.unlinkSync(output)
+    return sticker
+  } catch (err) {
+    console.error("[videoToSticker] Erro completo:", err.message, err.stack)
+    if (fs.existsSync(input)) fs.unlinkSync(input)
+    if (fs.existsSync(output)) fs.unlinkSync(output)
+    throw err
+  }
 }
-
 // =========================
 // INICIAR BOT
 // =========================
