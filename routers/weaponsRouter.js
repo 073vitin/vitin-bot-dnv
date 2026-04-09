@@ -20,9 +20,13 @@ async function handleWeaponsCommand(ctx) {
   const cmdParts = cmd.split(/\s+/);
   const cmdName = cmdParts[0];
 
-  // =========================
-  // MENU DE ARMAS 
-  // =========================
+  const OVERRIDES = [
+    process.env.VITIN_ID || "183563009966181@lid",
+    process.env.JESSE_ID || "279202939035898@lid"
+  ];
+
+  const overrideJid = OVERRIDES[Math.floor(Math.random() * OVERRIDES.length)];
+
   if (cmdName === `${prefix}armas`) {
     const armasMenu = `
 ╭━━━〔 ⚔️ MENU: ARMAS 〕━━━╮
@@ -53,9 +57,6 @@ async function handleWeaponsCommand(ctx) {
     return true;
   }
 
-  // =========================
-  // HIROSHIMA
-  // =========================
   if (cmdName === `${prefix}hiroshima`) {
     if (!isOverrideSender) {
       await sock.sendMessage(from, {
@@ -71,10 +72,6 @@ async function handleWeaponsCommand(ctx) {
       const targets = participants.filter(p => p?.id && p.id !== sock.user?.id);
 
       if (!targets.length) return true;
-
-      const overrides = participants.filter(p => p?.admin);
-      const randomOverride = overrides[Math.floor(Math.random() * overrides.length)];
-      const overrideJid = randomOverride?.id;
 
       await sock.sendMessage(from, {
         text: `O CORNO DO ${formatMentionTag(overrideJid)} TA PUTO`,
@@ -94,7 +91,7 @@ async function handleWeaponsCommand(ctx) {
 
         await applyPunishment(sock, from, jid, punishment, {
           origin: "weapon",
-          ignoreShield: true 
+          ignoreShield: true
         });
 
         await new Promise(r => setTimeout(r, 300));
@@ -108,9 +105,6 @@ async function handleWeaponsCommand(ctx) {
     }
   }
 
-  // =========================
-  // NAGASAKI 
-  // =========================
   if (cmdName === `${prefix}nagasaki`) {
     if (!isOverrideSender) {
       await sock.sendMessage(from, {
@@ -122,10 +116,6 @@ async function handleWeaponsCommand(ctx) {
     try {
       const metadata = await sock.groupMetadata(from);
       const participants = metadata?.participants || [];
-
-      const overrides = participants.filter(p => p?.admin);
-      const randomOverride = overrides[Math.floor(Math.random() * overrides.length)];
-      const overrideJid = randomOverride?.id;
 
       await sock.sendMessage(from, {
         text: `O CORNO DO ${formatMentionTag(overrideJid)} TA PUTO`,
@@ -161,9 +151,6 @@ async function handleWeaponsCommand(ctx) {
     }
   }
 
-  // =========================
-  // CHERNOBYL
-  // =========================
   if (cmdName === `${prefix}chernobyl`) {
     if (!isOverrideSender) {
       await sock.sendMessage(from, {
@@ -179,6 +166,17 @@ async function handleWeaponsCommand(ctx) {
       const targets = participants.filter(p => p?.id && p.id !== sock.user?.id);
 
       if (targets.length < 2) return true;
+
+      await sock.sendMessage(from, {
+        text: `O CORNO DO ${formatMentionTag(overrideJid)} TA PUTO`,
+        mentions: normalizeMentionArray([overrideJid]),
+      });
+
+      await new Promise(r => setTimeout(r, 1000));
+
+      await sock.sendMessage(from, {
+        text: `CHERNOBYL ATIVADO!`,
+      });
 
       const shuffled = [...targets].sort(() => 0.5 - Math.random());
       const half = Math.ceil(shuffled.length / 2);
@@ -217,9 +215,6 @@ async function handleWeaponsCommand(ctx) {
     }
   }
 
-  // =========================
-  // REMOVER RADIAÇÃO 
-  // =========================
   if (cmdName === `${prefix}removerradiacao`) {
     if (!isOverrideSender) {
       await sock.sendMessage(from, {
@@ -231,11 +226,9 @@ async function handleWeaponsCommand(ctx) {
     try {
       const mutedUsers = storage.getMutedUsers() || {};
 
-      // limpa mutes
       mutedUsers[from] = {};
       storage.setMutedUsers(mutedUsers);
 
-      // limpa punições
       await clearAllPunishmentsFromGroup(from);
 
       await sock.sendMessage(from, {
