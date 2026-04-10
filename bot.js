@@ -1741,9 +1741,9 @@ async function videoToSticker(buffer){
     await new Promise((resolve, reject) => {
       ffmpeg(input)
         .outputOptions([
-          "-t 10",
+          "-t 15",
           "-vcodec libwebp",
-          "-vf fps=10,scale=512:512:flags=lanczos",
+          "-vf fps=60,scale=512:512:flags=lanczos",
           "-loop 0",
           "-preset default",
           "-an",
@@ -3705,7 +3705,7 @@ setTimeout(() => {
           incrementUserStat(loserId, "gameDobroLoss", 1)
         }
         await sock.sendMessage(from, {
-          text: `💸 ${formatMentionTag(loserId)} perdeu o buy-in de *25* Epsteincoins (Cara ou Coroa).`,
+          text: `💸 ${formatMentionTag(loserId)} perdeu o buy-in de *50* Epsteincoins (Cara ou Coroa).`,
           mentions: normalizeMentionArray([loserId]),
         })
         },

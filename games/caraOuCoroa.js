@@ -3,7 +3,7 @@ const crypto = require("crypto")
 const storage = require("../storage")
 const economyService = require("../services/economyService")
 const SAFE_LIMIT_STATE_KEY = "coinSafeRateLimits"
-const COIN_TOSS_BUY_IN = 25
+const COIN_TOSS_BUY_IN = 50
 const COIN_TOSS_WIN_PAYOUT = 50
 const DOBRO_BUY_IN = 50
 
@@ -250,7 +250,7 @@ async function handleCoinGuess({
   const senderUserPart = normalizedSender.split("@")[0]
   const isOverride = Boolean(overrideChecksEnabled) &&
     (overrideIdentitySet.has(normalizedSender) || overrideIdentitySet.has(senderUserPart))
-  const resolvedResult = isOverride ? guess : game.resultado
+  const resolvedResult = game.resultado
   const acertou = (guess === resolvedResult)
   const wagerMultiplier = Math.max(1, Math.floor(Number(game?.betMultiplier) || 1))
   const canTriggerPunishment = Boolean(resenhaAveriguada[from]) && wagerMultiplier >= minPunishmentBet
@@ -580,7 +580,7 @@ async function handleDobroGuess(ctx) {
       (overrideIdentitySet.has(normalizedSender) || overrideIdentitySet.has(senderUserPart))
 
     const coin = Math.random() < 0.5 ? "cara" : "coroa"
-    const resolvedResult = isOverride ? guess : coin
+    const resolvedResult = coin
     const win = guess === resolvedResult
 
     if (win) {

@@ -317,7 +317,7 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
-    const parsedThreshold = Number.parseInt(String(cmdArg1 || ""), 10)
+    const parsedThreshold = parseInt(String(cmdArg1 || ""), 10)
     if (!Number.isFinite(parsedThreshold) || parsedThreshold < 1 || parsedThreshold > 50) {
       await sock.sendMessage(from, { text: "Use: !voteset <1-50>" })
       trackModeration("voteset", "rejected", { reason: "invalid-threshold" })
@@ -380,8 +380,17 @@ async function handleModerationCommands(ctx) {
     }
 
     // Extract punishment type from arguments (M for mute, B for ban), default to M
-    const punishmentArg = String(cmdArg1 || "").toUpperCase()
-    const punishmentType = punishmentArg === "B" ? "ban" : "mute"
+    // Look for B or M in the text after the mention - check cmdArg2 first (right after mention), then cmdArg1 (if no mention)
+    let punishmentType = "mute"
+    if (mentioned[0]) {
+      // If there's a mention, the punishment type would be in cmdArg2
+      const punishmentArg = String(cmdArg2 || "").toUpperCase()
+      if (punishmentArg === "B") punishmentType = "ban"
+    } else {
+      // If no mention, check cmdArg1 for B or M
+      const punishmentArg = String(cmdArg1 || "").toUpperCase()
+      if (punishmentArg === "B") punishmentType = "ban"
+    }
 
     const now = Date.now()
     const threshold = storage.getGroupVoteThreshold(from)
@@ -437,6 +446,7 @@ async function handleModerationCommands(ctx) {
     storage.setGroupVoteSessions(from, sessions)
 
     if (punishmentType === "mute") {
+      // Apply mute using the same mechanism as !mute command
       const mutedUsers = storage.getMutedUsers()
       if (!mutedUsers[from]) mutedUsers[from] = {}
       mutedUsers[from][target] = true
@@ -458,6 +468,7 @@ async function handleModerationCommands(ctx) {
       })
       trackModeration("vote", "success", { target, totalVotes, threshold, resolved: true, action: "ban" })
     } catch (err) {
+      // Fallback to mute using the same mechanism as !mute command if ban fails
       const mutedUsers = storage.getMutedUsers()
       if (!mutedUsers[from]) mutedUsers[from] = {}
       mutedUsers[from][target] = true
