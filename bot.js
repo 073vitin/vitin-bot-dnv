@@ -125,6 +125,8 @@ let _lastGeneratedQrAt = 0
 const METRIC_SAMPLE_LIMIT = 200
 const COMMAND_HISTORY_LIMIT = 10
 const TERMINAL_MIRROR_LIMIT = 500
+const TERMINAL_LOG_FILE_LIMIT = 5
+const TERMINAL_LOG_FILE_PATH = path.join(__dirname, ".data", "latest-terminal.log")
 const OVERRIDE_DATA_PASSWORD_COMMAND = prefix + "vaultkey"
 const OVERRIDE_BROADCAST_COMMAND = prefix + "msg"
 const LINK_DM_COMMAND = prefix + "linkdm"
@@ -145,6 +147,7 @@ const groupNameCache = {}
 const userNameCache = {}
 const botAdminFlagWarningByGroup = new Map()
 const terminalMirrorLines = []
+const terminalMirrorPendingBySource = { stdout: "", stderr: "" }
 const messageQueueByChat = new Map()
 const processedMessageCacheByChat = new Map()
 const MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000
@@ -335,7 +338,11 @@ function enqueueMessageByKey(queueKey = "global", task = async () => {}) {
 
 function recordTerminalOutput(source, chunk) {
   const raw = typeof chunk === "string" ? chunk : Buffer.from(chunk || "").toString("utf8")
-  const lines = raw.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean)
+  const combined = String(terminalMirrorPendingBySource[source] || "") + raw
+  const parts = combined.split(/\r?\n/)
+  const pending = parts.pop()
+  terminalMirrorPendingBySource[source] = pending === undefined ? "" : pending
+  const lines = parts
   if (lines.length === 0) return
   const now = Date.now()
   for (const line of lines) {
@@ -343,6 +350,20 @@ function recordTerminalOutput(source, chunk) {
   }
   while (terminalMirrorLines.length > TERMINAL_MIRROR_LIMIT) {
     terminalMirrorLines.shift()
+  }
+  persistLatestTerminalLinesToFile()
+}
+
+function persistLatestTerminalLinesToFile() {
+  try {
+    fs.mkdirSync(path.dirname(TERMINAL_LOG_FILE_PATH), { recursive: true })
+    const latestLines = terminalMirrorLines
+      .slice(-TERMINAL_LOG_FILE_LIMIT)
+      .map((entry) => String(entry?.line || ""))
+    const content = latestLines.length > 0 ? `${latestLines.join("\n")}\n` : ""
+    fs.writeFileSync(TERMINAL_LOG_FILE_PATH, content, "utf8")
+  } catch {
+    // intentionally silent: logging failures should never crash the bot
   }
 }
 
@@ -364,6 +385,8 @@ process.stderr.write = function patchedStderrWrite(chunk, encoding, callback) {
   recordTerminalOutput("stderr", chunk)
   return stderrWriteOriginal(chunk, encoding, callback)
 }
+
+persistLatestTerminalLinesToFile()
 
 function createMetricBucket() {
   return {
