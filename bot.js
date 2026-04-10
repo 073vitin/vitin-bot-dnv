@@ -1738,8 +1738,28 @@ async function videoToSticker(buffer){
     fs.writeFileSync(input, buffer)
     console.log("[videoToSticker] Arquivo salvo em:", input)
 
+    const tempMp4 = "./temp.mp4"
     await new Promise((resolve, reject) => {
       ffmpeg(input)
+        .outputOptions([
+          "-c:v libx264",
+          "-c:a aac",
+          "-movflags +faststart"
+        ])
+        .toFormat("mp4")
+        .save(tempMp4)
+        .on("end", () => {
+          console.log("[videoToSticker] Vídeo convertido para MP4")
+          resolve()
+        })
+        .on("error", (err) => {
+          console.error("[videoToSticker] Erro na conversão MP4:", err)
+          reject(err)
+        })
+    })
+
+    await new Promise((resolve, reject) => {
+      ffmpeg(tempMp4)
         .outputOptions([
           "-t 15",
           "-vcodec libwebp",
@@ -1766,11 +1786,13 @@ async function videoToSticker(buffer){
     console.log("[videoToSticker] Sticker criado com sucesso, tamanho:", sticker.length)
     
     fs.unlinkSync(input)
+    fs.unlinkSync(tempMp4)
     fs.unlinkSync(output)
     return sticker
   } catch (err) {
     console.error("[videoToSticker] Erro completo:", err.message, err.stack)
     if (fs.existsSync(input)) fs.unlinkSync(input)
+    if (fs.existsSync(tempMp4)) fs.unlinkSync(tempMp4)
     if (fs.existsSync(output)) fs.unlinkSync(output)
     throw err
   }
