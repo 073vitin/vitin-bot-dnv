@@ -1727,7 +1727,7 @@ app.get("/health", (req, res) => {
 server = app.listen(PORT, ()=>console.log("Servidor rodando na porta " + PORT))
 
 // =========================
-// VIDEO PARA STICKER
+// VIDEO1 PARA STICKER
 // =========================
 async function videoToSticker(buffer){
   const input = "./input.mp4"
@@ -1739,7 +1739,6 @@ async function videoToSticker(buffer){
     fs.writeFileSync(input, buffer)
     console.log("[videoToSticker] Arquivo salvo em:", input)
 
-    // Tentar APNG primeiro
     let sticker;
     let success = false;
 
@@ -1748,7 +1747,7 @@ async function videoToSticker(buffer){
         ffmpeg(input)
           .outputOptions([
             "-t 10",
-            "-vf fps=30,scale=512:512:flags=lanczos",
+            "-vf fps=30,scale=512:512:flags=lanczos,format=yuva420p,setsar=1:1",
             "-plays 0",
             "-f apng"
           ])
@@ -1768,12 +1767,11 @@ async function videoToSticker(buffer){
       success = true
     } catch (apngErr) {
       console.warn("[videoToSticker] Falha ao gerar APNG, tentando WebP estático...")
-      // Fallback
       await new Promise((resolve, reject) => {
         ffmpeg(input)
           .outputOptions([
             "-vframes 1",
-            "-vf scale=512:512:flags=lanczos",
+            "-vf scale=512:512:flags=lanczos,format=yuva420p",
             "-f image2"
           ])
           .toFormat("webp")
