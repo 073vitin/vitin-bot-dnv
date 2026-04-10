@@ -1731,8 +1731,7 @@ server = app.listen(PORT, ()=>console.log("Servidor rodando na porta " + PORT))
 // =========================
 async function videoToSticker(buffer){
   const input = "./input.mp4"
-  const tempMp4 = "./temp.mp4"
-  const outputApng = "./output.apng"
+  const outputGif = "./output.gif"
 
   try {
     console.log("[videoToSticker] Iniciando conversão, tamanho do buffer:", buffer.length)
@@ -1742,56 +1741,35 @@ async function videoToSticker(buffer){
     await new Promise((resolve, reject) => {
       ffmpeg(input)
         .outputOptions([
-          "-c:v libx264",
-          "-c:a aac",
-          "-movflags +faststart"
+          "-t 10",  
+          "-vf fps=30,scale=512:512:flags=lanczos",  
+          "-loop 0",  
+          "-f gif"   
         ])
-        .toFormat("mp4")
-        .save(tempMp4)
+        .toFormat("gif")
+        .save(outputGif)
         .on("end", () => {
-          console.log("[videoToSticker] Vídeo convertido para MP4")
+          console.log("[videoToSticker] GIF gerado com sucesso")
           resolve()
         })
         .on("error", (err) => {
-          console.error("[videoToSticker] Erro na conversão MP4:", err)
+          console.error("[videoToSticker] Erro ao gerar GIF:", err)
           reject(err)
         })
     })
 
-    await new Promise((resolve, reject) => {
-      ffmpeg(tempMp4)
-        .outputOptions([
-          "-t 10",
-          "-vf fps=30,scale=512:512:flags=lanczos,format=yuv420p",
-          "-plays 0",
-          "-f apng"
-        ])
-        .toFormat("apng")
-        .save(outputApng)
-        .on("end", () => {
-          console.log("[videoToSticker] APNG gerado com sucesso")
-          resolve()
-        })
-        .on("error", (err) => {
-          console.error("[videoToSticker] Erro ao gerar APNG:", err)
-          reject(err)
-        })
-    })
-
-    console.log("[videoToSticker] Lendo arquivo de saída:", outputApng)
-    const sticker = fs.readFileSync(outputApng)
-    console.log("[videoToSticker] Sticker animado criado com sucesso, tamanho:", sticker.length)
+    console.log("[videoToSticker] Lendo arquivo de saída:", outputGif)
+    const sticker = fs.readFileSync(outputGif)
+    console.log("[videoToSticker] Sticker animado (GIF) criado com sucesso, tamanho:", sticker.length)
     
     fs.unlinkSync(input)
-    fs.unlinkSync(tempMp4)
-    fs.unlinkSync(outputApng)
+    fs.unlinkSync(outputGif)
     return sticker
 
   } catch (err) {
     console.error("[videoToSticker] Erro completo:", err.message, err.stack)
     if (fs.existsSync(input)) fs.unlinkSync(input)
-    if (fs.existsSync(tempMp4)) fs.unlinkSync(tempMp4)
-    if (fs.existsSync(outputApng)) fs.unlinkSync(outputApng)
+    if (fs.existsSync(outputGif)) fs.unlinkSync(outputGif)
     throw err
   }
 }
