@@ -1731,76 +1731,67 @@ server = app.listen(PORT, ()=>console.log("Servidor rodando na porta " + PORT))
 // =========================
 async function videoToSticker(buffer){
   const input = "./input.mp4"
+  const tempMp4 = "./temp.mp4"
   const outputApng = "./output.apng"
-  const outputWebp = "./output.webp"
 
   try {
     console.log("[videoToSticker] Iniciando conversão, tamanho do buffer:", buffer.length)
     fs.writeFileSync(input, buffer)
     console.log("[videoToSticker] Arquivo salvo em:", input)
 
-    let sticker;
-    let success = false;
+    await new Promise((resolve, reject) => {
+      ffmpeg(input)
+        .outputOptions([
+          "-c:v libx264",
+          "-c:a aac",
+          "-movflags +faststart"
+        ])
+        .toFormat("mp4")
+        .save(tempMp4)
+        .on("end", () => {
+          console.log("[videoToSticker] Vídeo convertido para MP4")
+          resolve()
+        })
+        .on("error", (err) => {
+          console.error("[videoToSticker] Erro na conversão MP4:", err)
+          reject(err)
+        })
+    })
 
-    try {
-      await new Promise((resolve, reject) => {
-        ffmpeg(input)
-          .outputOptions([
-            "-t 10",
-            "-vf fps=30,scale=512:512:flags=lanczos,format=yuva420p,setsar=1:1",
-            "-plays 0",
-            "-f apng"
-          ])
-          .toFormat("apng")
-          .save(outputApng)
-          .on("end", () => {
-            console.log("[videoToSticker] APNG gerado com sucesso")
-            resolve()
-          })
-          .on("error", (err) => {
-            console.error("[videoToSticker] Erro ao gerar APNG:", err)
-            reject(err)
-          })
-      })
+    await new Promise((resolve, reject) => {
+      ffmpeg(tempMp4)
+        .outputOptions([
+          "-t 10",
+          "-vf fps=30,scale=512:512:flags=lanczos,format=yuv420p",
+          "-plays 0",
+          "-f apng"
+        ])
+        .toFormat("apng")
+        .save(outputApng)
+        .on("end", () => {
+          console.log("[videoToSticker] APNG gerado com sucesso")
+          resolve()
+        })
+        .on("error", (err) => {
+          console.error("[videoToSticker] Erro ao gerar APNG:", err)
+          reject(err)
+        })
+    })
 
-      sticker = fs.readFileSync(outputApng)
-      success = true
-    } catch (apngErr) {
-      console.warn("[videoToSticker] Falha ao gerar APNG, tentando WebP estático...")
-      await new Promise((resolve, reject) => {
-        ffmpeg(input)
-          .outputOptions([
-            "-vframes 1",
-            "-vf scale=512:512:flags=lanczos,format=yuva420p",
-            "-f image2"
-          ])
-          .toFormat("webp")
-          .save(outputWebp)
-          .on("end", () => {
-            console.log("[videoToSticker] WebP estático gerado")
-            resolve()
-          })
-          .on("error", (err) => {
-            console.error("[videoToSticker] Erro ao gerar WebP estático:", err)
-            reject(err)
-          })
-      })
-
-      sticker = fs.readFileSync(outputWebp)
-    }
-
-    console.log("[videoToSticker] Sticker criado com sucesso, tamanho:", sticker.length)
+    console.log("[videoToSticker] Lendo arquivo de saída:", outputApng)
+    const sticker = fs.readFileSync(outputApng)
+    console.log("[videoToSticker] Sticker animado criado com sucesso, tamanho:", sticker.length)
     
     fs.unlinkSync(input)
-    if (fs.existsSync(outputApng)) fs.unlinkSync(outputApng)
-    if (fs.existsSync(outputWebp)) fs.unlinkSync(outputWebp)
+    fs.unlinkSync(tempMp4)
+    fs.unlinkSync(outputApng)
     return sticker
 
   } catch (err) {
     console.error("[videoToSticker] Erro completo:", err.message, err.stack)
     if (fs.existsSync(input)) fs.unlinkSync(input)
+    if (fs.existsSync(tempMp4)) fs.unlinkSync(tempMp4)
     if (fs.existsSync(outputApng)) fs.unlinkSync(outputApng)
-    if (fs.existsSync(outputWebp)) fs.unlinkSync(outputWebp)
     throw err
   }
 }
