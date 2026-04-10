@@ -1731,7 +1731,7 @@ server = app.listen(PORT, ()=>console.log("Servidor rodando na porta " + PORT))
 // =========================
 async function videoToSticker(buffer){
   const input = "./input.mp4"
-  const output = "./output.apng"
+  const output = "./output.webp"
 
   try {
     console.log("[videoToSticker] Iniciando conversão, tamanho do buffer:", buffer.length)
@@ -1741,12 +1741,16 @@ async function videoToSticker(buffer){
     await new Promise((resolve, reject) => {
       ffmpeg(input)
         .outputOptions([
-          "-t 10",  
-          "-vf fps=30,scale=512:512:flags=lanczos",  
-          "-plays 0",  
-          "-f apng"   
+          "-t 10",   
+          "-vcodec libwebp",  
+          "-vf fps=30,scale=512:512:flags=lanczos",   
+          "-loop 0",  
+          "-preset default",
+          "-an",  
+          "-vsync 1",   
+          "-pix_fmt yuva420p"   
         ])
-        .toFormat("apng")
+        .toFormat("webp")
         .save(output)
         .on("end", () => {
           console.log("[videoToSticker] Conversão concluída")
