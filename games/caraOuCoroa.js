@@ -1,4 +1,9 @@
-const { normalizeMentionArray, getMentionHandleFromJid, formatMentionTag } = require("../services/mentionService")
+const {
+  normalizeMentionArray,
+  getMentionHandleFromJid,
+  formatMentionTag,
+  resolveSingleTargetFromMentionOrReply,
+} = require("../services/mentionService")
 const crypto = require("crypto")
 const storage = require("../storage")
 const economyService = require("../services/economyService")
@@ -683,11 +688,29 @@ async function sendStreakRanking({ sock, from, cmd, prefix, isGroup }) {
   return true
 }
 
-async function sendStreakValue({ sock, from, sender, mentioned, cmd, prefix, isGroup }) {
+async function sendStreakValue({ sock, from, sender, mentioned, contextInfo, jidNormalizedUser, cmd, prefix, isGroup }) {
   if (!((cmd === prefix + "streak" || cmd.startsWith(prefix + "streak ")) && isGroup)) return false
 
   const coinStreaks = storage.getCoinStreaks()
-  const alvo = mentioned[0] || sender
+  const targetResolution = resolveSingleTargetFromMentionOrReply({
+    mentioned,
+    contextInfo: contextInfo || {},
+    sender,
+    normalizeJid: typeof jidNormalizedUser === "function" ? jidNormalizedUser : undefined,
+    requireSingleMention: true,
+    allowSelf: true,
+    allowBot: true,
+  })
+  if (!targetResolution.ok && targetResolution.reason === "multiple-mentions") {
+    await sock.sendMessage(from, { text: "Mencione apenas 1 usuário ou responda a mensagem dele." })
+    return true
+  }
+  if (!targetResolution.ok && targetResolution.reason === "quoted-target-missing") {
+    await sock.sendMessage(from, { text: "Usuário não encontrado." })
+    return true
+  }
+
+  const alvo = targetResolution.ok ? targetResolution.target : sender
   const valor = coinStreaks[from]?.[alvo] || 0
   await sock.sendMessage(from, {
     text: `Streak de ${formatMentionTag(alvo)}: *${valor}*`,

@@ -4,7 +4,14 @@ const fs = require("fs")
 const os = require("os")
 const child_process = require("child_process")
 const { normalizeUserId } = require("../services/registrationService")
-const { normalizeMentionJid, getFirstMentionedJid, normalizeMentionArray, getMentionHandleFromJid, formatMentionTag } = require("../services/mentionService")
+const {
+  normalizeMentionJid,
+  getFirstMentionedJid,
+  normalizeMentionArray,
+  getMentionHandleFromJid,
+  formatMentionTag,
+  resolveSingleTargetFromMentionOrReply,
+} = require("../services/mentionService")
 
 const pendingPrivateFeedbackBySender = new Map()
 const pendingQuestionBySender = new Map()
@@ -557,6 +564,18 @@ async function handleUtilityCommands(ctx) {
     isQuitToken,
     collectKnownGroupsFromStorage,
   } = ctx
+
+  const commandContextInfo = msg?.message?.extendedTextMessage?.contextInfo || {}
+  const resolveUtilityTarget = (options = {}) => resolveSingleTargetFromMentionOrReply({
+    mentioned,
+    contextInfo: commandContextInfo,
+    sender,
+    botJid: jidNormalizedUser(sock.user?.id || ""),
+    normalizeJid: jidNormalizedUser,
+    requireSingleMention: true,
+    allowSelf: options.allowSelf !== undefined ? options.allowSelf : true,
+    allowBot: options.allowBot !== undefined ? options.allowBot : true,
+  })
 
   const buildCommandManualPages = ({ section = "todos", detailed = false } = {}) => {
     const SECTION_LABELS = {
@@ -2034,14 +2053,40 @@ ${feedbackText}`,
   }
 
   if (cmd === prefix + "teste" || cmd.startsWith(prefix + "teste ")) {
-    const rawMentioned = getFirstMentionedJid(msg?.message?.extendedTextMessage?.contextInfo || {})
+    const targetResolution = resolveUtilityTarget({
+      allowSelf: true,
+      allowBot: true,
+    })
+
+    if (!targetResolution.ok) {
+      if (targetResolution.reason === "multiple-mentions") {
+        trackUtility("teste", "rejected", { reason: "multiple-mentions" })
+        await sock.sendMessage(from, {
+          text: `Use: ${prefix}teste @usuario (ou responda a mensagem do usuário).`,
+        })
+        return true
+      }
+      if (targetResolution.reason === "quoted-target-missing") {
+        trackUtility("teste", "rejected", { reason: "quoted-target-missing" })
+        await sock.sendMessage(from, { text: "Usuário não encontrado." })
+        return true
+      }
+      trackUtility("teste", "rejected", { reason: "missing-mention" })
+      await sock.sendMessage(from, {
+        text: `Use: ${prefix}teste @usuario (ou responda a mensagem do usuário).`,
+      })
+      return true
+    }
+
+    const rawMentioned = getFirstMentionedJid(commandContextInfo || {})
     const targetMentioned = normalizeMentionJid(mentioned[0] || "")
-    const baseIdentity = rawMentioned || targetMentioned
+    const replyTarget = normalizeMentionJid(commandContextInfo?.participant || "")
+    const baseIdentity = targetResolution.target
 
     if (!baseIdentity) {
       trackUtility("teste", "rejected", { reason: "missing-mention" })
       await sock.sendMessage(from, {
-        text: `Use: ${prefix}teste @usuario (com uma menção).`,
+        text: `Use: ${prefix}teste @usuario (ou responda a mensagem do usuário).`,
       })
       return true
     }
@@ -2065,6 +2110,7 @@ ${feedbackText}`,
 
     addVariant("RAW_MENTIONED_JID", rawMentioned)
     addVariant("CTX_MENTIONED_NORMALIZED", targetMentioned)
+    addVariant("CTX_REPLY_PARTICIPANT", replyTarget)
     addVariant("BAILEYS_NORMALIZED", baileysNormalized)
     addVariant("REGISTRATION_CANONICAL", registrationCanonical)
 
@@ -2298,8 +2344,21 @@ ${feedbackText}`,
     return true
   }
 
-  if (cmd.startsWith(prefix + "bombardeio") && mentioned.length > 0 && isGroup) {
-    const alvo = mentioned[0]
+  if (cmd.startsWith(prefix + "bombardeio") && isGroup) {
+    const targetResolution = resolveUtilityTarget({
+      allowSelf: true,
+      allowBot: true,
+    })
+    if (!targetResolution.ok) {
+      if (targetResolution.reason === "quoted-target-missing") {
+        await sock.sendMessage(from, { text: "Usuário não encontrado." })
+      } else {
+        await sock.sendMessage(from, { text: `Use: ${prefix}bombardeio @usuario (ou responda a mensagem do usuário).` })
+      }
+      return true
+    }
+
+    const alvo = targetResolution.target
     const ip = `${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}`
 
     const provedores = ["Claro", "Vivo", "Tim", "Oi", "Copel", "NET"]
@@ -2332,8 +2391,20 @@ ${feedbackText}`,
     return true
   }
 
-  if (cmd.startsWith(prefix + "gay") && mentioned[0]) {
-    const alvo = mentioned[0]
+  if (cmd.startsWith(prefix + "gay")) {
+    const targetResolution = resolveUtilityTarget({
+      allowSelf: true,
+      allowBot: true,
+    })
+    if (!targetResolution.ok) {
+      if (targetResolution.reason === "quoted-target-missing") {
+        await sock.sendMessage(from, { text: "Usuário não encontrado." })
+      } else {
+        await sock.sendMessage(from, { text: `Use: ${prefix}gay @usuario (ou responda a mensagem do usuário).` })
+      }
+      return true
+    }
+    const alvo = targetResolution.target
     const numero = getMentionHandleFromJid(alvo)
     const p = Math.floor(Math.random() * 101)
     await sock.sendMessage(from, { text: `@${numero} é ${p}% gay 🌈`, mentions: normalizeMentionArray([alvo]) })
@@ -2341,8 +2412,20 @@ ${feedbackText}`,
     return true
   }
 
-  if (cmd.startsWith(prefix + "gado") && mentioned[0]) {
-    const alvo = mentioned[0]
+  if (cmd.startsWith(prefix + "gado")) {
+    const targetResolution = resolveUtilityTarget({
+      allowSelf: true,
+      allowBot: true,
+    })
+    if (!targetResolution.ok) {
+      if (targetResolution.reason === "quoted-target-missing") {
+        await sock.sendMessage(from, { text: "Usuário não encontrado." })
+      } else {
+        await sock.sendMessage(from, { text: `Use: ${prefix}gado @usuario (ou responda a mensagem do usuário).` })
+      }
+      return true
+    }
+    const alvo = targetResolution.target
     const numero = getMentionHandleFromJid(alvo)
     const p = Math.floor(Math.random() * 101)
     await sock.sendMessage(from, { text: `@${numero} é ${p}% gado 🐂`, mentions: normalizeMentionArray([alvo]) })
@@ -2350,9 +2433,24 @@ ${feedbackText}`,
     return true
   }
 
-  if (cmd.startsWith(prefix + "ship") && mentioned.length >= 2) {
-    const p1 = mentioned[0]
-    const p2 = mentioned[1]
+  if (cmd.startsWith(prefix + "ship")) {
+    let p1 = normalizeMentionJid(mentioned[0] || "")
+    let p2 = normalizeMentionJid(mentioned[1] || "")
+    const replyTarget = normalizeMentionJid(commandContextInfo?.participant || "")
+
+    if (!p1 && replyTarget) {
+      p1 = replyTarget
+    } else if (!p2 && replyTarget && replyTarget !== p1) {
+      p2 = replyTarget
+    }
+
+    if (!p1 || !p2 || p1 === p2) {
+      await sock.sendMessage(from, {
+        text: `Use: ${prefix}ship @usuario1 @usuario2 (ou mencione 1 e responda o outro).`,
+      })
+      return true
+    }
+
     const n1 = getMentionHandleFromJid(p1)
     const n2 = getMentionHandleFromJid(p2)
     const chance = Math.floor(Math.random() * 101)

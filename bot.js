@@ -92,7 +92,13 @@ const comando = require("./games/comando")
 const memoriaGame = require("./games/memoria")
 const economyService = require("./services/economyService")
 const registrationService = require("./services/registrationService")
-const { normalizeMentionArray, applyMentionSafetyToMessage, getMentionHandleFromJid, formatMentionTag } = require("./services/mentionService")
+const {
+  normalizeMentionArray,
+  applyMentionSafetyToMessage,
+  getMentionHandleFromJid,
+  formatMentionTag,
+  resolveSingleTargetFromMentionOrReply,
+} = require("./services/mentionService")
 const telemetry = require("./services/telemetryService")
 const { COMMAND_HELP } = require("./commandHelp")
 const { getLikelyCommandSuggestions } = require("./services/commandSuggestionService")
@@ -3061,11 +3067,29 @@ setTimeout(() => {
       }
       if (!isKnownOverrideSender) return
 
-      const targetMention = mentioned[0]
-      const targetToken = targetMention || cmdArg1
+      const targetResolution = resolveSingleTargetFromMentionOrReply({
+        mentioned,
+        contextInfo,
+        sender,
+        botJid: jidNormalizedUser(sock.user?.id || ""),
+        normalizeJid: jidNormalizedUser,
+        requireSingleMention: true,
+        allowSelf: true,
+        allowBot: true,
+      })
+      if (!targetResolution.ok && targetResolution.reason === "multiple-mentions") {
+        await sock.sendMessage(from, { text: "Mencione apenas 1 usuário ou responda a mensagem dele." })
+        return
+      }
+      if (!targetResolution.ok && targetResolution.reason === "quoted-target-missing") {
+        await sock.sendMessage(from, { text: "Usuário não encontrado." })
+        return
+      }
+
+      const targetToken = targetResolution.ok ? targetResolution.target : cmdArg1
       const variants = expandOverrideIdentityVariants(targetToken)
       if (variants.length === 0) {
-        await sock.sendMessage(from, { text: `Use: ${prefix}addoverride @usuario (ou jid).` })
+        await sock.sendMessage(from, { text: `Use: ${prefix}addoverride @usuario (ou responda a mensagem do usuário, ou jid).` })
         return
       }
 
@@ -3092,11 +3116,29 @@ setTimeout(() => {
       }
       if (!isKnownOverrideSender) return
 
-      const targetMention = mentioned[0]
-      const targetToken = targetMention || cmdArg1
+      const targetResolution = resolveSingleTargetFromMentionOrReply({
+        mentioned,
+        contextInfo,
+        sender,
+        botJid: jidNormalizedUser(sock.user?.id || ""),
+        normalizeJid: jidNormalizedUser,
+        requireSingleMention: true,
+        allowSelf: true,
+        allowBot: true,
+      })
+      if (!targetResolution.ok && targetResolution.reason === "multiple-mentions") {
+        await sock.sendMessage(from, { text: "Mencione apenas 1 usuário ou responda a mensagem dele." })
+        return
+      }
+      if (!targetResolution.ok && targetResolution.reason === "quoted-target-missing") {
+        await sock.sendMessage(from, { text: "Usuário não encontrado." })
+        return
+      }
+
+      const targetToken = targetResolution.ok ? targetResolution.target : cmdArg1
       const variants = new Set(expandOverrideIdentityVariants(targetToken))
       if (variants.size === 0) {
-        await sock.sendMessage(from, { text: `Use: ${prefix}removeoverride @usuario (ou jid).` })
+        await sock.sendMessage(from, { text: `Use: ${prefix}removeoverride @usuario (ou responda a mensagem do usuário, ou jid).` })
         return
       }
 
@@ -3660,6 +3702,7 @@ setTimeout(() => {
         sender,
         text,
         mentioned,
+        contextInfo,
         isGroup,
         senderIsAdmin: senderIsNativeAdmin,
         isCommand,
@@ -4534,20 +4577,48 @@ setTimeout(() => {
         return
       }
 
-      const mentionedTarget = mentioned[0] || ""
-      const rawTokens = String(text || "").trim().split(/\s+/).filter(Boolean)
-      const explicitTargetToken = rawTokens[1] || ""
-      const explicitTarget = normalizeMentionArray([explicitTargetToken])[0] || ""
-      const target = mentionedTarget || explicitTarget
-      if (!target) {
-        await sock.sendMessage(from, { text: "Use: !force @user <comando|args>." })
+      const forceTargetResolution = resolveSingleTargetFromMentionOrReply({
+        mentioned,
+        contextInfo,
+        sender,
+        botJid: jidNormalizedUser(sock.user?.id || ""),
+        normalizeJid: jidNormalizedUser,
+        requireSingleMention: true,
+        allowSelf: true,
+        allowBot: true,
+      })
+      if (!forceTargetResolution.ok && forceTargetResolution.reason === "multiple-mentions") {
+        await sock.sendMessage(from, { text: "Mencione apenas 1 usuário ou responda a mensagem dele." })
+        return
+      }
+      if (!forceTargetResolution.ok && forceTargetResolution.reason === "quoted-target-missing") {
+        await sock.sendMessage(from, { text: "Usuário não encontrado." })
         return
       }
 
-      const argOffset = 2
+      const rawTokens = String(text || "").trim().split(/\s+/).filter(Boolean)
+      const explicitTargetToken = rawTokens[1] || ""
+      const explicitTarget = normalizeMentionArray([explicitTargetToken])[0] || jidNormalizedUser(explicitTargetToken || "")
+
+      let target = ""
+      let targetSource = "none"
+      if (forceTargetResolution.ok) {
+        target = forceTargetResolution.target
+        targetSource = forceTargetResolution.source
+      } else if (String(explicitTarget || "").includes("@")) {
+        target = explicitTarget
+        targetSource = "token"
+      }
+
+      if (!target) {
+        await sock.sendMessage(from, { text: "Use: !force @user <comando|args> (ou responda a mensagem do usuário)." })
+        return
+      }
+
+      const argOffset = (targetSource === "mention" || targetSource === "token") ? 2 : 1
       const forcedInputRaw = rawTokens.slice(argOffset).join(" ").trim()
       if (!forcedInputRaw) {
-        await sock.sendMessage(from, { text: "Use: !force @user <comando|args>." })
+        await sock.sendMessage(from, { text: "Use: !force @user <comando|args> (ou responda a mensagem do usuário)." })
         return
       }
 
@@ -4559,7 +4630,7 @@ setTimeout(() => {
       const verb = String(forcedCmdParts[0] || "").replace(/^!+/, "").toLowerCase()
 
       if (!verb) {
-        await sock.sendMessage(from, { text: "Use: !force @user <comando|args>." })
+        await sock.sendMessage(from, { text: "Use: !force @user <comando|args> (ou responda a mensagem do usuário)." })
         return
       }
 
@@ -4623,7 +4694,7 @@ setTimeout(() => {
           }
         }
 
-        const forcedMentioned = mentionedTarget ? (mentioned || []).slice(1) : (mentioned || [])
+        const forcedMentioned = targetSource === "mention" ? (mentioned || []).slice(1) : (mentioned || [])
         const forcedContextInfo = {}
         if (forcedMentioned.length > 0) {
           forcedContextInfo.mentionedJid = normalizeMentionArray(forcedMentioned)
@@ -4948,6 +5019,8 @@ if (handledWeaponsCommand) return;
         from,
         sender,
         mentioned,
+        contextInfo,
+        jidNormalizedUser,
         cmd,
         prefix,
         isGroup,

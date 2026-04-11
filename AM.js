@@ -1797,12 +1797,33 @@ async function removeAlvoAM(sock, from, message, sender, botJid){
     allowBot: false,
   })
 
-  if (!mentionedJid) {
+  if (!targetResolution.ok) {
+    if (targetResolution.reason === "multiple-mentions") {
+      sock.sendMessage(from, {
+        text: "❌ Mencione apenas 1 usuário ou responda a mensagem dele."
+      })
+      return true
+    }
+    if (targetResolution.reason === "quoted-target-missing") {
+      sock.sendMessage(from, {
+        text: "❌ Usuário não encontrado."
+      })
+      return true
+    }
+    if (targetResolution.reason === "bot-target") {
+      sock.sendMessage(from, {
+        text: "❌ O bot não pode ser alvo."
+      })
+      return true
+    }
+
     sock.sendMessage(from, {
-      text: "❌ Mencione um usuário! Exemplo: *!amremovealvo @user*"
+      text: "❌ Mencione ou responda um usuário! Exemplo: *!amremovealvo @user*"
     })
     return true
   }
+
+  const mentionedJid = targetResolution.target
 
   const index = alvosAM[from].findIndex(a => a.id === mentionedJid)
 

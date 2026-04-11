@@ -1,4 +1,9 @@
-const { normalizeMentionArray, getMentionHandleFromJid, formatMentionTag } = require("../services/mentionService")
+const {
+  normalizeMentionArray,
+  getMentionHandleFromJid,
+  formatMentionTag,
+  resolveSingleTargetFromMentionOrReply,
+} = require("../services/mentionService")
 const telemetry = require("../services/telemetryService")
 
 async function handleModerationCommands(ctx) {
@@ -100,13 +105,52 @@ async function handleModerationCommands(ctx) {
   const isProtectedOverrideJid = (jid) => matchesOverrideSet(jid, overrideProtectedIdentitySet)
 
   const isOverrideSender = isOverrideJid(sender)
-  const resolveAdminTarget = () => {
-    if (mentioned[0]) return mentioned[0]
-    const quotedParticipant = jidNormalizedUser(
-      msg?.message?.extendedTextMessage?.contextInfo?.participant || ""
-    )
-    if (quotedParticipant) return quotedParticipant
-    return ""
+  const commandContextInfo = msg?.message?.extendedTextMessage?.contextInfo || {}
+  const resolveAdminTarget = (options = {}) => resolveSingleTargetFromMentionOrReply({
+    mentioned,
+    contextInfo: commandContextInfo,
+    sender,
+    botJid,
+    normalizeJid: jidNormalizedUser,
+    requireSingleMention: true,
+    allowSelf: options.allowSelf !== undefined ? options.allowSelf : true,
+    allowBot: options.allowBot !== undefined ? options.allowBot : true,
+  })
+
+  const sendAdminTargetError = async (resolution, usageText = "", options = {}) => {
+    if (resolution?.ok) return false
+
+    const selfText = String(options?.selfText || "Você não pode usar esse comando em você mesmo.")
+    const botText = String(options?.botText || "🤖 Esse comando não pode ser usado no bot.")
+    const reason = String(resolution?.reason || "")
+
+    if (reason === "multiple-mentions") {
+      await sock.sendMessage(from, { text: "Mencione apenas 1 usuário ou responda a mensagem dele." })
+      return true
+    }
+
+    if (reason === "quoted-target-missing") {
+      await sock.sendMessage(from, { text: "Usuário não encontrado." })
+      return true
+    }
+
+    if (reason === "self-target") {
+      await sock.sendMessage(from, { text: selfText })
+      return true
+    }
+
+    if (reason === "bot-target") {
+      await sock.sendMessage(from, { text: botText })
+      return true
+    }
+
+    if (usageText) {
+      await sock.sendMessage(from, { text: usageText })
+      return true
+    }
+
+    await sock.sendMessage(from, { text: "Usuário não encontrado." })
+    return true
   }
 
   const expandKnownUserIdentities = (jid = "") => {
@@ -213,12 +257,12 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
-    const alvo = resolveAdminTarget()
-    if (!alvo) {
+    const targetResolution = resolveAdminTarget()
+    if (await sendAdminTargetError(targetResolution, "Use: !block @user (ou responda a mensagem do usuário)")) {
       trackModeration("block", "rejected", { reason: "missing-target" })
-      await sock.sendMessage(from, { text: "Use: !block @user" })
       return true
     }
+    const alvo = targetResolution.target
 
     if (isProtectedOverrideJid(alvo)) {
       trackModeration("block", "rejected", { reason: "target-override" })
@@ -249,12 +293,12 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
-    const alvo = resolveAdminTarget()
-    if (!alvo) {
+    const targetResolution = resolveAdminTarget()
+    if (await sendAdminTargetError(targetResolution, "Use: !unblock @user (ou responda a mensagem do usuário)")) {
       trackModeration("unblock", "rejected", { reason: "missing-target" })
-      await sock.sendMessage(from, { text: "Use: !unblock @user" })
       return true
     }
+    const alvo = targetResolution.target
 
     const identities = expandKnownUserIdentities(alvo)
     const removed = storage.removeGlobalBlockedUsers(identities)
@@ -361,18 +405,14 @@ async function handleModerationCommands(ctx) {
   }
 
   if (cmdName === prefix + "vote") {
-    const target = mentioned[0]
-    if (!target) {
-      await sock.sendMessage(from, { text: "Use: !vote @user [M|B]" })
+    const targetResolution = resolveAdminTarget({ allowBot: false })
+    if (await sendAdminTargetError(targetResolution, "Use: !vote @user [M|B] (ou responda a mensagem do usuário)", {
+      botText: "Não é possível votar contra o bot.",
+    })) {
       trackModeration("vote", "rejected", { reason: "missing-target" })
       return true
     }
-
-    if (jidNormalizedUser(target) === botJid) {
-      await sock.sendMessage(from, { text: "Não é possível votar contra o bot." })
-      trackModeration("vote", "rejected", { reason: "target-bot" })
-      return true
-    }
+    const target = targetResolution.target
 
     if (isProtectedOverrideJid(target)) {
       await sock.sendMessage(from, { text: "Esse usuário não pode ser alvo de votação." })
@@ -380,10 +420,11 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
-    // Extract punishment type from arguments (M for mute, B for ban), default to M
-    // Look for B or M in cmdArg2 (comes after the mention)
+    // Extract punishment type from arguments (M for mute, B for ban), default to M.
     let punishmentType = "mute"
-    const punishmentArg = String(cmdArg2 || "").toUpperCase()
+    const voteTokens = String(text || "").trim().split(/\s+/).filter(Boolean)
+    const punishmentTokenIndex = targetResolution.source === "mention" ? 2 : 1
+    const punishmentArg = String(voteTokens[punishmentTokenIndex] || cmdArg2 || "").toUpperCase()
     if (punishmentArg === "B") punishmentType = "ban"
 
     const now = Date.now()
@@ -477,20 +518,17 @@ async function handleModerationCommands(ctx) {
   }
 
   if (cmdName === prefix + "mute") {
-    const alvo = resolveAdminTarget()
-    if (!alvo) {
+    const targetResolution = resolveAdminTarget({ allowBot: false })
+    if (await sendAdminTargetError(targetResolution, "Marque alguém para mutar!", {
+      botText: "Não posso me mutar!",
+    })) {
       trackModeration("mute", "rejected", { reason: "missing-target" })
-      await sock.sendMessage(from, { text: "Marque alguém para mutar!" })
       return true
     }
+    const alvo = targetResolution.target
     if (isProtectedOverrideJid(alvo)) {
       trackModeration("mute", "rejected", { reason: "target-override" })
       await sock.sendMessage(from, { text: "Esse usuário não pode ser mutado." })
-      return true
-    }
-    if (jidNormalizedUser(alvo) === botJid) {
-      trackModeration("mute", "rejected", { reason: "target-bot" })
-      await sock.sendMessage(from, { text: "Não posso me mutar!" })
       return true
     }
     if (!senderIsAdmin) {
@@ -508,17 +546,14 @@ async function handleModerationCommands(ctx) {
   }
 
   if (cmdName === prefix + "unmute") {
-    const alvo = resolveAdminTarget()
-    if (!alvo) {
+    const targetResolution = resolveAdminTarget({ allowBot: false })
+    if (await sendAdminTargetError(targetResolution, "Marque alguém para desmutar!", {
+      botText: "Não posso me desmutar!",
+    })) {
       trackModeration("unmute", "rejected", { reason: "missing-target" })
-      await sock.sendMessage(from, { text: "Marque alguém para desmutar!" })
       return true
     }
-    if (jidNormalizedUser(alvo) === botJid) {
-      trackModeration("unmute", "rejected", { reason: "target-bot" })
-      await sock.sendMessage(from, { text: "Não posso me desmutar!" })
-      return true
-    }
+    const alvo = targetResolution.target
     if (!senderIsAdmin) {
       trackModeration("unmute", "rejected", { reason: "not-admin" })
       await sock.sendMessage(from, { text: "Apenas admins podem desmutar!" })
@@ -536,20 +571,17 @@ async function handleModerationCommands(ctx) {
   }
 
   if (cmdName === prefix + "ban") {
-    const alvo = resolveAdminTarget()
-    if (!alvo) {
+    const targetResolution = resolveAdminTarget({ allowBot: false })
+    if (await sendAdminTargetError(targetResolution, "Marque alguém para banir!", {
+      botText: "Não posso me banir!",
+    })) {
       trackModeration("ban", "rejected", { reason: "missing-target" })
-      await sock.sendMessage(from, { text: "Marque alguém para banir!" })
       return true
     }
+    const alvo = targetResolution.target
     if (isProtectedOverrideJid(alvo)) {
       trackModeration("ban", "rejected", { reason: "target-override" })
       await sock.sendMessage(from, { text: "Esse usuário não pode ser banido." })
-      return true
-    }
-    if (jidNormalizedUser(alvo) === botJid) {
-      trackModeration("ban", "rejected", { reason: "target-bot" })
-      await sock.sendMessage(from, { text: "Não posso me banir!" })
       return true
     }
     if (!senderIsAdmin) {
@@ -569,17 +601,14 @@ async function handleModerationCommands(ctx) {
       await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
       return true
     }
-    const alvo = mentioned[0]
-    if (!alvo) {
+    const targetResolution = resolveAdminTarget({ allowBot: false })
+    if (await sendAdminTargetError(targetResolution, "Marque alguém para promover a admin do grupo.", {
+      botText: "O bot já possui privilégios administrativos.",
+    })) {
       trackModeration("adminadd", "rejected", { reason: "missing-target" })
-      await sock.sendMessage(from, { text: "Marque alguém para promover a admin do grupo." })
       return true
     }
-    if (jidNormalizedUser(alvo) === botJid) {
-      trackModeration("adminadd", "rejected", { reason: "target-bot" })
-      await sock.sendMessage(from, { text: "O bot já possui privilégios administrativos." })
-      return true
-    }
+    const alvo = targetResolution.target
 
     await sock.groupParticipantsUpdate(from, [alvo], "promote")
     trackModeration("adminadd", "success", { target: alvo })
@@ -597,12 +626,12 @@ async function handleModerationCommands(ctx) {
       await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
       return true
     }
-    const alvo = mentioned[0]
-    if (!alvo) {
+    const targetResolution = resolveAdminTarget()
+    if (await sendAdminTargetError(targetResolution, "Marque alguém para remover de admin do grupo.")) {
       trackModeration("adminrm", "rejected", { reason: "missing-target" })
-      await sock.sendMessage(from, { text: "Marque alguém para remover de admin do grupo." })
       return true
     }
+    const alvo = targetResolution.target
 
     await sock.groupParticipantsUpdate(from, [alvo], "demote")
     trackModeration("adminrm", "success", { target: alvo })
@@ -732,12 +761,12 @@ async function handleModerationCommands(ctx) {
       await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
       return true
     }
-    const alvo = resolveAdminTarget()
-    if (!alvo) {
+    const targetResolution = resolveAdminTarget()
+    if (await sendAdminTargetError(targetResolution, "Marque alguém para listar as punições.")) {
       trackModeration("punicoes", "rejected", { reason: "missing-target" })
-      await sock.sendMessage(from, { text: "Marque alguém para listar as punições." })
       return true
     }
+    const alvo = targetResolution.target
 
     const lines = []
     const mutedUsers = storage.getMutedUsers()
@@ -786,12 +815,12 @@ async function handleModerationCommands(ctx) {
       await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
       return true
     }
-    const alvo = resolveAdminTarget()
-    if (!alvo) {
+    const targetResolution = resolveAdminTarget()
+    if (await sendAdminTargetError(targetResolution, "Marque alguém para limpar as punições.")) {
       trackModeration("punicoesclr", "rejected", { reason: "missing-target" })
-      await sock.sendMessage(from, { text: "Marque alguém para limpar as punições." })
       return true
     }
+    const alvo = targetResolution.target
 
     clearPunishment(from, alvo)
     const mutedUsers = storage.getMutedUsers()
@@ -826,17 +855,14 @@ async function handleModerationCommands(ctx) {
       await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
       return true
     }
-    const alvo = resolveAdminTarget()
-    if (!alvo) {
+    const targetResolution = resolveAdminTarget({ allowBot: false })
+    if (await sendAdminTargetError(targetResolution, "Marque alguém para aplicar punição.", {
+      botText: "🤖 O bot não pode receber punições administrativas.",
+    })) {
       trackModeration("punicoesadd", "rejected", { reason: "missing-target" })
-      await sock.sendMessage(from, { text: "Marque alguém para aplicar punição." })
       return true
     }
-    if (jidNormalizedUser(alvo) === botJid) {
-      trackModeration("punicoesadd", "rejected", { reason: "target-bot" })
-      await sock.sendMessage(from, { text: "🤖 O bot não pode receber punições administrativas." })
-      return true
-    }
+    const alvo = targetResolution.target
     if (isProtectedOverrideJid(alvo)) {
       trackModeration("punicoesadd", "rejected", { reason: "target-override" })
       await sock.sendMessage(from, { text: "Este usuário não podem receber punições administrativas." })
@@ -1039,24 +1065,24 @@ async function handleModerationCommands(ctx) {
 
     const admMenu = `
 ╔═══ *Menu ADM* ═══
-│ !mute @user
-│ !unmute @user
-│ !ban @user
-│ !punições / !punicoes @user
+  │ !mute @user (ou responda)
+  │ !unmute @user (ou responda)
+  │ !ban @user (ou responda)
+  │ !punições / !punicoes @user (ou responda)
 │ !punicoeslista
-│ !puniçõesclr / !punicoesclr @user
-│ !puniçõesadd / !punicoesadd [@user] <1-13> [severidade]
+  │ !puniçõesclr / !punicoesclr @user (ou responda)
+  │ !puniçõesadd / !punicoesadd [@user|resposta] <1-13> [severidade]
 │ !filtros
 │ !filtroadd <texto com espaços>
 │ !filtroremove <índice>
 │ !resenha (ativa/desativa punições em jogos)
-│ !adminadd @user
-│ !adminrm @user
-│ !block @user
-│ !unblock @user
+  │ !adminadd @user (ou responda)
+  │ !adminrm @user (ou responda)
+  │ !block @user (ou responda)
+  │ !unblock @user (ou responda)
 │ !bloqueados
 │ !bloqueadosfones
-│ !vote @user (Inicia uma votação para mutar/banir o usuário mencionado. Punição escolhida aleatoriamente.)
+  │ !vote @user (ou responda) [M|B]
 │ !voteset <1-50>
 │ !votos
 ╚═══════════════

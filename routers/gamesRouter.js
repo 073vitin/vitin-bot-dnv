@@ -1,4 +1,8 @@
-const { normalizeMentionArray, formatMentionTag } = require("../services/mentionService")
+const {
+  normalizeMentionArray,
+  formatMentionTag,
+  resolveSingleTargetFromMentionOrReply,
+} = require("../services/mentionService")
 const telemetry = require("../services/telemetryService")
 const storageModule = require("../storage.js")
 const RR_TURN_TIMEOUT_MS = 60_000
@@ -1199,11 +1203,37 @@ async function handleGameCommands(ctx) {
 
     const { lobbyId, stateKey, state } = resolved
 
-    const target = mentioned[0] || jidNormalizedUser(msg?.message?.extendedTextMessage?.contextInfo?.participant || "")
-    if (!target) {
-      await sock.sendMessage(from, { text: "Marque alguém para passar a batata!" })
+    const passTargetResolution = resolveSingleTargetFromMentionOrReply({
+      mentioned,
+      contextInfo: msg?.message?.extendedTextMessage?.contextInfo || {},
+      sender,
+      botJid: jidNormalizedUser(sock.user?.id || ""),
+      normalizeJid: jidNormalizedUser,
+      requireSingleMention: true,
+      allowSelf: false,
+      allowBot: false,
+    })
+    if (!passTargetResolution.ok) {
+      if (passTargetResolution.reason === "multiple-mentions") {
+        await sock.sendMessage(from, { text: "Mencione apenas 1 usuário ou responda a mensagem dele." })
+        return true
+      }
+      if (passTargetResolution.reason === "quoted-target-missing") {
+        await sock.sendMessage(from, { text: "Usuário não encontrado." })
+        return true
+      }
+      if (passTargetResolution.reason === "self-target") {
+        await sock.sendMessage(from, { text: "Você não pode passar a batata para você mesmo." })
+        return true
+      }
+      if (passTargetResolution.reason === "bot-target") {
+        await sock.sendMessage(from, { text: "🤖 O bot não pode participar como alvo nesse jogo." })
+        return true
+      }
+      await sock.sendMessage(from, { text: "Marque alguém para passar a batata! (ou responda a mensagem do usuário)" })
       return true
     }
+    const target = passTargetResolution.target
 
     const result = batataquente.recordPass(state, sender, target)
     if (!result.valid) {

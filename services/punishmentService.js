@@ -1,4 +1,9 @@
-const { normalizeMentionArray, getMentionHandleFromJid, formatMentionTag } = require("./mentionService")
+const {
+  normalizeMentionArray,
+  getMentionHandleFromJid,
+  formatMentionTag,
+  resolveSingleTargetFromMentionOrReply,
+} = require("./mentionService")
 const crypto = require("crypto")
 const { downloadMediaMessage } = require("@whiskeysockets/baileys")
 const storage = require("../storage")
@@ -912,7 +917,17 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
   return true
 }
 
-async function handlePendingPunishmentChoice({ sock, from, sender, text, mentioned, isGroup, senderIsAdmin, isCommand }) {
+async function handlePendingPunishmentChoice({
+  sock,
+  from,
+  sender,
+  text,
+  mentioned,
+  contextInfo,
+  isGroup,
+  senderIsAdmin,
+  isCommand,
+}) {
   console.log("[punishment] handlePendingPunishmentChoice START", { from, sender })
   if (!isGroup) {
     return false
@@ -955,8 +970,32 @@ async function handlePendingPunishmentChoice({ sock, from, sender, text, mention
   const punishmentChoice = getPunishmentChoiceFromText(text)
   let target = pending.target
 
-  if (pending.mode === "target" && mentioned.length > 0) {
-    target = mentioned[0]
+  if (pending.mode === "target") {
+    const targetResolution = resolveSingleTargetFromMentionOrReply({
+      mentioned,
+      contextInfo: contextInfo || {},
+      sender,
+      requireSingleMention: true,
+      allowSelf: true,
+      allowBot: true,
+    })
+
+    if (targetResolution.ok) {
+      target = targetResolution.target
+    } else if (targetResolution.reason === "multiple-mentions") {
+      await sock.sendMessage(from, {
+        text: "Mencione apenas 1 usuário ou responda a mensagem dele.",
+      })
+      return true
+    } else if (targetResolution.reason === "quoted-target-missing") {
+      await sock.sendMessage(from, {
+        text: "Usuário não encontrado.",
+      })
+      return true
+    }
+  }
+
+  if (pending.mode === "target" && target && target !== pending.target) {
 
     if (Array.isArray(pending.allowedTargets) && pending.allowedTargets.length > 0 && !pending.allowedTargets.includes(target)) {
       await sock.sendMessage(from, {

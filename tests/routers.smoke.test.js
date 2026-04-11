@@ -71,7 +71,13 @@ test("economy router handles !economia command", async () => {
       setMutedUsers: () => {},
     },
     economyService: {
-      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "LoteriaAdmin" },
+      }),
       getStatement: () => [],
       getGroupRanking: () => [],
       getShopIndexText: () => "shop",
@@ -113,7 +119,13 @@ test("economy router handles !extrato for mentioned user", async () => {
       setMutedUsers: () => {},
     },
     economyService: {
-      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "LoteriaAdmin" },
+      }),
       getStatement: (userId) => {
         statementUser = userId
         return [{ at: Date.now(), type: "test", deltaCoins: 10, balanceAfter: 20, details: "ok" }]
@@ -169,7 +181,13 @@ test("economy router handles !extrato for replied user", async () => {
       setMutedUsers: () => {},
     },
     economyService: {
-      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "LoteriaUser" },
+      }),
       getStatement: (userId) => {
         statementUser = userId
         return [{ at: Date.now(), type: "test", deltaCoins: 5, balanceAfter: 25, details: "ok" }]
@@ -216,7 +234,13 @@ test("economy router resolves !doarcoins via reply and prioritizes explicit ment
         transferCalls.push({ fromUser, toUser, amount })
         return { ok: true, amount }
       },
-      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "LoteriaUser" },
+      }),
       getStatement: () => [],
       getGroupRanking: () => [],
       getShopIndexText: () => "shop",
@@ -314,7 +338,13 @@ test("economy router rejects !doarcoins with multiple mentions", async () => {
         transferCalled = true
         return { ok: true, amount: 10 }
       },
-      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "LoteriaAdmin" },
+      }),
       getStatement: () => [],
       getGroupRanking: () => [],
       getShopIndexText: () => "shop",
@@ -361,7 +391,13 @@ test("economy router handles !xp command", async () => {
         xpToNextLevel: 220,
         seasonPoints: 1240,
       }),
-      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "LoteriaAdmin" },
+      }),
       getStatement: () => [],
       getGroupRanking: () => [],
       getShopIndexText: () => "shop",
@@ -446,157 +482,7 @@ test("economy router handles !xpranking command", async () => {
   assert.equal(sent.length, 1)
   assert.match(String(sent[0].payload?.text || ""), /Ranking de XP/)
   assert.match(String(sent[0].payload?.text || ""), /Nível 5/)
-  assert.match(String(sent[0].payload?.text || ""), /posição no grupo/i)
   assert.match(String(sent[0].payload?.text || ""), /posição global de XP/i)
-})
-
-test("economy router !xpranking prefers group ranking over global in groups", async () => {
-  const { sock, sent } = createSockCapture()
-  sock.groupMetadata = async () => ({
-    participants: [
-      { id: "caller@s.whatsapp.net" },
-      { id: "groupxp@s.whatsapp.net" },
-    ],
-  })
-
-  let globalCalls = 0
-  let groupCalls = 0
-
-  const handled = await handleEconomyCommands({
-    sock,
-    from: "group@g.us",
-    sender: "caller@s.whatsapp.net",
-    cmd: "!xpranking",
-    cmdName: "!xpranking",
-    cmdArg1: "",
-    cmdArg2: "",
-    cmdParts: ["!xpranking"],
-    mentioned: [],
-    prefix: "!",
-    isGroup: true,
-    senderIsAdmin: false,
-    jidNormalizedUser: (id) => id,
-    storage: {
-      getMutedUsers: () => ({}),
-      setMutedUsers: () => {},
-    },
-    registrationService: {
-      isRegistered: () => true,
-      getRegisteredEntry: () => ({ lastKnownName: "Caller" }),
-    },
-    economyService: {
-      getGlobalXpRanking: () => {
-        globalCalls += 1
-        return [{ userId: "globalxp@s.whatsapp.net", level: 99, xp: 9999, xpToNextLevel: 10000 }]
-      },
-      getGroupXpRanking: () => {
-        groupCalls += 1
-        return [{ userId: "groupxp@s.whatsapp.net", level: 4, xp: 75, xpToNextLevel: 120 }]
-      },
-      getUserGlobalXpPosition: () => 7,
-      isMentionOptIn: () => true,
-      getProfile: (userId) => ({
-        preferences: {
-          publicLabel: userId === "caller@s.whatsapp.net" ? "CallerNick" : "",
-        },
-      }),
-      getStatement: () => [],
-      getGroupRanking: () => [],
-      getShopIndexText: () => "shop",
-    },
-    parseQuantity: () => 0,
-    formatDuration: () => "0m",
-    buildGameStatsText: () => "",
-    buildEconomyStatsText: () => "",
-    buildInventoryText: () => "",
-    incrementUserStat: () => {},
-  })
-
-  assert.equal(handled, true)
-  assert.equal(groupCalls, 2)
-  assert.equal(globalCalls, 0)
-  const text = String(sent[0].payload?.text || "")
-  assert.match(text, /Ranking de XP \(grupo\)/i)
-  assert.match(text, /@groupxp/i)
-  assert.match(text, /posição no grupo/i)
-  assert.ok(!/@globalxp/i.test(text))
-})
-
-test("economy router !xpranking global shows global list and both positions", async () => {
-  const { sock, sent } = createSockCapture()
-  sock.groupMetadata = async () => ({
-    participants: [
-      { id: "caller@s.whatsapp.net" },
-      { id: "groupxp@s.whatsapp.net" },
-      { id: "globalxp@s.whatsapp.net" },
-    ],
-  })
-
-  let globalCalls = 0
-  let groupCalls = 0
-
-  const handled = await handleEconomyCommands({
-    sock,
-    from: "group@g.us",
-    sender: "caller@s.whatsapp.net",
-    cmd: "!xpranking global",
-    cmdName: "!xpranking",
-    cmdArg1: "global",
-    cmdArg2: "",
-    cmdParts: ["!xpranking", "global"],
-    mentioned: [],
-    prefix: "!",
-    isGroup: true,
-    senderIsAdmin: false,
-    jidNormalizedUser: (id) => id,
-    storage: {
-      getMutedUsers: () => ({}),
-      setMutedUsers: () => {},
-    },
-    registrationService: {
-      isRegistered: () => true,
-      getRegisteredEntry: () => ({ lastKnownName: "Caller" }),
-    },
-    economyService: {
-      getGlobalXpRanking: () => {
-        globalCalls += 1
-        return [{ userId: "globalxp@s.whatsapp.net", level: 99, xp: 9999, xpToNextLevel: 10000 }]
-      },
-      getGroupXpRanking: () => {
-        groupCalls += 1
-        return [
-          { userId: "caller@s.whatsapp.net", level: 10, xp: 100, xpToNextLevel: 300 },
-          { userId: "groupxp@s.whatsapp.net", level: 8, xp: 50, xpToNextLevel: 280 },
-        ]
-      },
-      getUserGlobalXpPosition: () => 42,
-      isMentionOptIn: () => true,
-      getProfile: (userId) => ({
-        preferences: {
-          publicLabel: userId === "caller@s.whatsapp.net" ? "CallerNick" : "",
-        },
-      }),
-      getStatement: () => [],
-      getGroupRanking: () => [],
-      getShopIndexText: () => "shop",
-    },
-    parseQuantity: () => 0,
-    formatDuration: () => "0m",
-    buildGameStatsText: () => "",
-    buildEconomyStatsText: () => "",
-    buildInventoryText: () => "",
-    incrementUserStat: () => {},
-  })
-
-  assert.equal(handled, true)
-  assert.equal(globalCalls, 1)
-  assert.equal(groupCalls, 1)
-  const text = String(sent[0].payload?.text || "")
-  assert.match(text, /Ranking de XP \(global\)/i)
-  assert.match(text, /@globalxp/i)
-  assert.ok(!/@groupxp/i.test(text))
-  assert.match(text, /posição no grupo \(XP\): \*1\*/i)
-  assert.match(text, /posição global de XP: \*42\*/i)
 })
 
 test("economy router !coinsranking hides unregistered/non-visible users and avoids placeholder labels", async () => {
@@ -667,155 +553,7 @@ test("economy router !coinsranking hides unregistered/non-visible users and avoi
   assert.ok(!/hidden@s\.whatsapp\.net/i.test(text))
   assert.ok(!/unreg@s\.whatsapp\.net/i.test(text))
   assert.ok(!/USR-/i.test(text))
-  assert.match(text, /posição no grupo/i)
   assert.deepEqual(sent[0].payload?.mentions || [], ["mention@s.whatsapp.net"])
-})
-
-test("economy router !coinsranking prefers group ranking over global in groups", async () => {
-  const { sock, sent } = createSockCapture()
-  sock.groupMetadata = async () => ({
-    participants: [
-      { id: "caller@s.whatsapp.net" },
-      { id: "grouptop@s.whatsapp.net" },
-    ],
-  })
-
-  let globalCalls = 0
-  let groupCalls = 0
-
-  const handled = await handleEconomyCommands({
-    sock,
-    from: "group@g.us",
-    sender: "caller@s.whatsapp.net",
-    cmd: "!coinsranking",
-    cmdName: "!coinsranking",
-    cmdArg1: "",
-    cmdArg2: "",
-    cmdParts: ["!coinsranking"],
-    mentioned: [],
-    prefix: "!",
-    isGroup: true,
-    senderIsAdmin: false,
-    jidNormalizedUser: (id) => id,
-    storage: {
-      getMutedUsers: () => ({}),
-      setMutedUsers: () => {},
-    },
-    registrationService: {
-      isRegistered: () => true,
-      getRegisteredEntry: () => ({ lastKnownName: "Caller" }),
-    },
-    economyService: {
-      getGlobalRanking: () => {
-        globalCalls += 1
-        return [{ userId: "globaltop@s.whatsapp.net", coins: 999999 }]
-      },
-      getGroupRanking: () => {
-        groupCalls += 1
-        return [{ userId: "grouptop@s.whatsapp.net", coins: 500 }]
-      },
-      getUserGlobalPosition: () => 11,
-      isMentionOptIn: () => true,
-      getProfile: (userId) => ({
-        preferences: {
-          publicLabel: userId === "caller@s.whatsapp.net" ? "CallerNick" : "",
-        },
-      }),
-      getStatement: () => [],
-      getShopIndexText: () => "shop",
-    },
-    parseQuantity: () => 0,
-    formatDuration: () => "0m",
-    buildGameStatsText: () => "",
-    buildEconomyStatsText: () => "",
-    buildInventoryText: () => "",
-    incrementUserStat: () => {},
-  })
-
-  assert.equal(handled, true)
-  assert.equal(groupCalls, 2)
-  assert.equal(globalCalls, 0)
-  const text = String(sent[0].payload?.text || "")
-  assert.match(text, /Ranking de .*\(grupo\)/i)
-  assert.match(text, /@grouptop/i)
-  assert.match(text, /posição no grupo/i)
-  assert.ok(!/@globaltop/i.test(text))
-})
-
-test("economy router !coinsranking global shows global list and both positions", async () => {
-  const { sock, sent } = createSockCapture()
-  sock.groupMetadata = async () => ({
-    participants: [
-      { id: "caller@s.whatsapp.net" },
-      { id: "grouptop@s.whatsapp.net" },
-      { id: "globaltop@s.whatsapp.net" },
-    ],
-  })
-
-  let globalCalls = 0
-  let groupCalls = 0
-
-  const handled = await handleEconomyCommands({
-    sock,
-    from: "group@g.us",
-    sender: "caller@s.whatsapp.net",
-    cmd: "!coinsranking global",
-    cmdName: "!coinsranking",
-    cmdArg1: "global",
-    cmdArg2: "",
-    cmdParts: ["!coinsranking", "global"],
-    mentioned: [],
-    prefix: "!",
-    isGroup: true,
-    senderIsAdmin: false,
-    jidNormalizedUser: (id) => id,
-    storage: {
-      getMutedUsers: () => ({}),
-      setMutedUsers: () => {},
-    },
-    registrationService: {
-      isRegistered: () => true,
-      getRegisteredEntry: () => ({ lastKnownName: "Caller" }),
-    },
-    economyService: {
-      getGlobalRanking: () => {
-        globalCalls += 1
-        return [{ userId: "globaltop@s.whatsapp.net", coins: 999999 }]
-      },
-      getGroupRanking: () => {
-        groupCalls += 1
-        return [
-          { userId: "caller@s.whatsapp.net", coins: 1234 },
-          { userId: "grouptop@s.whatsapp.net", coins: 1200 },
-        ]
-      },
-      getUserGlobalPosition: () => 17,
-      isMentionOptIn: () => true,
-      getProfile: (userId) => ({
-        preferences: {
-          publicLabel: userId === "caller@s.whatsapp.net" ? "CallerNick" : "",
-        },
-      }),
-      getStatement: () => [],
-      getShopIndexText: () => "shop",
-    },
-    parseQuantity: () => 0,
-    formatDuration: () => "0m",
-    buildGameStatsText: () => "",
-    buildEconomyStatsText: () => "",
-    buildInventoryText: () => "",
-    incrementUserStat: () => {},
-  })
-
-  assert.equal(handled, true)
-  assert.equal(globalCalls, 1)
-  assert.equal(groupCalls, 1)
-  const text = String(sent[0].payload?.text || "")
-  assert.match(text, /Ranking de .*\(global\)/i)
-  assert.match(text, /@globaltop/i)
-  assert.ok(!/@grouptop/i.test(text))
-  assert.match(text, /posição no grupo: \*1\*/i)
-  assert.match(text, /posição global: \*17\*/i)
 })
 
 test("economy router !coinsranking falls back to nickname when mention jid is not in current group", async () => {
@@ -881,69 +619,6 @@ test("economy router !coinsranking falls back to nickname when mention jid is no
   assert.ok(!/@out1/i.test(text))
   assert.ok(!/@out2/i.test(text))
   assert.deepEqual(sent[0].payload?.mentions || [], [])
-})
-
-test("economy router !coinsranking shows top unregistered participant in group list", async () => {
-  const { sock, sent } = createSockCapture()
-  sock.groupMetadata = async () => ({
-    participants: [
-      { id: "caller@s.whatsapp.net" },
-      { id: "toprich@s.whatsapp.net" },
-    ],
-  })
-
-  const handled = await handleEconomyCommands({
-    sock,
-    from: "group@g.us",
-    sender: "caller@s.whatsapp.net",
-    cmd: "!coinsranking",
-    cmdName: "!coinsranking",
-    cmdArg1: "",
-    cmdArg2: "",
-    cmdParts: ["!coinsranking"],
-    mentioned: [],
-    prefix: "!",
-    isGroup: true,
-    senderIsAdmin: false,
-    jidNormalizedUser: (id) => id,
-    storage: {
-      getMutedUsers: () => ({}),
-      setMutedUsers: () => {},
-    },
-    registrationService: {
-      isRegistered: (userId) => userId === "caller@s.whatsapp.net",
-      getRegisteredEntry: (userId) => {
-        if (userId === "caller@s.whatsapp.net") return { lastKnownName: "Caller" }
-        return null
-      },
-    },
-    economyService: {
-      getGroupRanking: () => ([
-        { userId: "toprich@s.whatsapp.net", coins: 30000 },
-        { userId: "caller@s.whatsapp.net", coins: 1200 },
-      ]),
-      getUserGlobalPosition: () => 2,
-      isMentionOptIn: (userId) => userId === "caller@s.whatsapp.net",
-      getProfile: (userId) => ({
-        preferences: {
-          publicLabel: userId === "caller@s.whatsapp.net" ? "CallerNick" : "",
-        },
-      }),
-    },
-    parseQuantity: () => 0,
-    formatDuration: () => "0m",
-    buildGameStatsText: () => "",
-    buildEconomyStatsText: () => "",
-    buildInventoryText: () => "",
-    incrementUserStat: () => {},
-  })
-
-  assert.equal(handled, true)
-  assert.equal(sent.length, 1)
-  const text = String(sent[0].payload?.text || "")
-  assert.match(text, /30000/)
-  assert.match(text, /toprich/i)
-  assert.match(text, /posição no grupo: \*2\*/i)
 })
 
 test("economy router handles !guia command and sends three DM sections", async () => {
@@ -1911,7 +1586,13 @@ test("economy router runs !loteria and applies mixed rewards", async () => {
       setMutedUsers: () => {},
     },
     economyService: {
-      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "LoteriaAdmin" },
+      }),
       getStatement: () => [],
       getGroupRanking: () => [],
       getShopIndexText: () => "shop",
@@ -1948,6 +1629,10 @@ test("economy router runs !loteria and applies mixed rewards", async () => {
     buildInventoryText: () => "",
     incrementUserStat: () => {},
     raffleRevealDelayMs: 0,
+    registrationService: {
+      isRegistered: () => true,
+      normalizeUserId: (id) => id,
+    },
   })
 
   assert.equal(handled, true)
@@ -1956,7 +1641,87 @@ test("economy router runs !loteria and applies mixed rewards", async () => {
   assert.ok(Array.isArray(sent[0].payload.mentions))
   assert.deepEqual(sent[0].payload.mentions, ["winner@s.whatsapp.net"])
 
-  await new Promise((resolve) => setTimeout(resolve, 5))
+  const raffleIdMatch = String(sent[0].payload?.text || "").match(/ID:\s*\*(\d{2})\*/i)
+  assert.ok(raffleIdMatch)
+  const raffleId = raffleIdMatch[1]
+
+  const handledDraw = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "admin@s.whatsapp.net",
+    rawText: `!loteria ${raffleId} sortear`,
+    cmd: `!loteria ${raffleId} sortear`,
+    cmdName: "!loteria",
+    cmdArg1: raffleId,
+    cmdArg2: "sortear",
+    cmdParts: ["!loteria", raffleId, "sortear"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: true,
+    isOverrideSender: true,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    economyService: {
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "LoteriaAdmin" },
+      }),
+      getStatement: () => [],
+      getGroupRanking: () => [],
+      getShopIndexText: () => "shop",
+      getOperationLimits: () => ({
+        maxCoinsBalance: 1_000_000,
+        maxCoinOperation: 10_000,
+        maxItemStack: 1_000,
+        maxItemOperation: 100,
+        maxLootboxOpenPerCall: 100,
+        maxForgeQuantity: 100,
+      }),
+      getItemDefinition: (itemKey) => {
+        if (String(itemKey).toLowerCase() === "escudo") {
+          return { key: "escudo", name: "Escudo" }
+        }
+        return null
+      },
+      creditCoins: (userId, amount, transaction) => {
+        credits.push({ userId, amount, transaction })
+        return amount
+      },
+      addItem: (userId, itemKey, quantity) => {
+        items.push({ userId, itemKey, quantity })
+        return quantity
+      },
+      pushTransaction: (userId, transaction) => {
+        txs.push({ userId, transaction })
+      },
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+    raffleRevealDelayMs: 0,
+    registrationService: {
+      isRegistered: () => true,
+      normalizeUserId: (id) => id,
+    },
+  })
+  assert.equal(handledDraw, true)
+
+  const waitResultDeadline = Date.now() + 7_000
+  while (!sent.some((entry) => /Resultado da loteria/i.test(String(entry.payload?.text || ""))) && Date.now() < waitResultDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+
+  assert.ok(sent.some((entry) => /Resultado da loteria/i.test(String(entry.payload?.text || ""))))
 
   assert.equal(credits.length, 1)
   assert.equal(credits[0].userId, "winner@s.whatsapp.net")
@@ -2278,7 +2043,13 @@ test("economy router allows !loteria entrar when opt-in is enabled", async () =>
       setMutedUsers: () => {},
     },
     economyService: {
-      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "LoteriaAdmin" },
+      }),
       getStatement: () => [],
       getGroupRanking: () => [],
       getShopIndexText: () => "shop",
@@ -2302,7 +2073,17 @@ test("economy router allows !loteria entrar when opt-in is enabled", async () =>
     incrementUserStat: () => {},
     raffleRevealDelayMs: 25,
     raffleOptInWindowMs: 120_000,
+    registrationService: {
+      isRegistered: () => true,
+      normalizeUserId: (id) => id,
+    },
   })
+
+  const createdMessage = sent.find((entry) => /Loteria iniciada/i.test(String(entry.payload?.text || "")))
+  assert.ok(createdMessage)
+  const raffleIdMatch = String(createdMessage.payload?.text || "").match(/ID:\s*\*(\d{2})\*/i)
+  assert.ok(raffleIdMatch)
+  const raffleId = raffleIdMatch[1]
 
   const handledJoin = await handleEconomyCommands({
     sock,
@@ -2324,7 +2105,13 @@ test("economy router allows !loteria entrar when opt-in is enabled", async () =>
       setMutedUsers: () => {},
     },
     economyService: {
-      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "LoteriaJoiner" },
+      }),
       getStatement: () => [],
       getGroupRanking: () => [],
       getShopIndexText: () => "shop",
@@ -2348,6 +2135,10 @@ test("economy router allows !loteria entrar when opt-in is enabled", async () =>
     incrementUserStat: () => {},
     raffleRevealDelayMs: 25,
     raffleOptInWindowMs: 120_000,
+    registrationService: {
+      isRegistered: () => true,
+      normalizeUserId: (id) => id,
+    },
   })
 
   assert.equal(handledJoin, true)
@@ -2361,7 +2152,7 @@ test("economy router allows !loteria entrar when opt-in is enabled", async () =>
   const handledClose = await handleEconomyCommands({
     sock,
     from: "group@g.us",
-    sender: "closer@s.whatsapp.net",
+    sender: "admin@s.whatsapp.net",
     rawText: "!loteria fechar",
     cmd: "!loteria fechar",
     cmdName: "!loteria",
@@ -2371,14 +2162,21 @@ test("economy router allows !loteria entrar when opt-in is enabled", async () =>
     mentioned: [],
     prefix: "!",
     isGroup: true,
-    senderIsAdmin: false,
+    senderIsAdmin: true,
+    isOverrideSender: true,
     jidNormalizedUser: (id) => id,
     storage: {
       getMutedUsers: () => ({}),
       setMutedUsers: () => {},
     },
     economyService: {
-      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "LoteriaAdmin" },
+      }),
       getStatement: () => [],
       getGroupRanking: () => [],
       getShopIndexText: () => "shop",
@@ -2402,10 +2200,78 @@ test("economy router allows !loteria entrar when opt-in is enabled", async () =>
     incrementUserStat: () => {},
     raffleRevealDelayMs: 25,
     raffleOptInWindowMs: 120_000,
+    registrationService: {
+      isRegistered: () => true,
+      normalizeUserId: (id) => id,
+    },
+  })
+
+  const handledDraw = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "admin@s.whatsapp.net",
+    rawText: `!loteria ${raffleId} sortear`,
+    cmd: `!loteria ${raffleId} sortear`,
+    cmdName: "!loteria",
+    cmdArg1: raffleId,
+    cmdArg2: "sortear",
+    cmdParts: ["!loteria", raffleId, "sortear"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: true,
+    isOverrideSender: true,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    economyService: {
+      getProfile: () => ({
+        coins: 0,
+        shields: 0,
+        buffs: {},
+        inventory: {},
+        preferences: { publicLabel: "LoteriaAdmin" },
+      }),
+      getStatement: () => [],
+      getGroupRanking: () => [],
+      getShopIndexText: () => "shop",
+      getOperationLimits: () => ({
+        maxCoinsBalance: 1_000_000,
+        maxCoinOperation: 10_000,
+        maxItemStack: 1_000,
+        maxItemOperation: 100,
+        maxLootboxOpenPerCall: 100,
+        maxForgeQuantity: 100,
+      }),
+      getItemDefinition: () => null,
+      creditCoins: () => 0,
+      addItem: () => 0,
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+    raffleRevealDelayMs: 25,
+    raffleOptInWindowMs: 120_000,
+    registrationService: {
+      isRegistered: () => true,
+      normalizeUserId: (id) => id,
+    },
   })
 
   assert.equal(handledClose, true)
-  assert.ok(sent.some((entry) => /foi fechada\. Sorteando/i.test(String(entry.payload?.text || ""))))
+  assert.equal(handledDraw, true)
+  assert.ok(sent.some((entry) => /foi fechada para participações/i.test(String(entry.payload?.text || ""))))
+
+  const waitResultDeadline = Date.now() + 7_000
+  while (!sent.some((entry) => /Resultado da loteria/i.test(String(entry.payload?.text || ""))) && Date.now() < waitResultDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+
   assert.ok(sent.some((entry) => /Resultado da loteria/i.test(String(entry.payload?.text || ""))))
 })
 
@@ -4445,7 +4311,7 @@ test("utility router handles !pergunta ask and override answer flow", async () =
   assert.equal(reusedProtocol, true)
   assert.ok(delivered)
   assert.match(String(delivered.payload?.text || ""), /daily, trabalho e missao/i)
-  assert.match(String(sent[sent.length - 1].payload?.text || ""), /Nao encontrei pergunta com protocolo/i)
+  assert.match(String(sent[sent.length - 1].payload?.text || ""), /N[aã]o encontrei pergunta com protocolo/i)
 })
 
 test("utility router persists enquete IDs and responses via storage", async () => {
@@ -4811,6 +4677,49 @@ test("utility router handles !teste and expands mention identity variants", asyn
   assert.ok(sent[0].payload.mentions.includes("5511999999999@s.whatsapp.net"))
   assert.ok(sent[0].payload.mentions.includes("5511999999999@lid"))
 })
+test("utility router resolves !teste target from replied message", async () => {
+  const { sock, sent } = createSockCapture()
+  const replyTarget = "replytarget@s.whatsapp.net"
+
+  const handled = await handleUtilityCommands({
+    sock,
+    from: "group@g.us",
+    sender: "autor@s.whatsapp.net",
+    text: "!teste",
+    rawText: "!teste",
+    isCommand: true,
+    cmd: "!teste",
+    prefix: "!",
+    isGroup: true,
+    msg: {
+      message: {
+        extendedTextMessage: {
+          contextInfo: {
+            participant: replyTarget,
+            quotedMessage: { conversation: "oi" },
+          },
+        },
+      },
+    },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+    jidNormalizedUser: (id) => String(id || "").split(":")[0],
+    registrationService: {
+      getUserIdAliases: () => [],
+    },
+  })
+
+  assert.equal(handled, true)
+  assert.equal(sent.length, 1)
+  const outputText = String(sent[0].payload?.text || "")
+  assert.match(outputText, /CTX_REPLY_PARTICIPANT|BAILEYS_NORMALIZED/)
+  assert.match(outputText, /@replytarget/)
+})
 
 test("utility router handles !perf command", async () => {
   const { sock, sent } = createSockCapture()
@@ -5091,6 +5000,61 @@ test("moderation router resolves !vote at threshold", async () => {
     Math.random = randomOriginal
   }
 })
+test("moderation router resolves !vote target from replied message", async () => {
+  const { sock, sent } = createSockCapture()
+  const sessions = {}
+  const mutedUsers = {}
+  const target = "replyvote@s.whatsapp.net"
+
+  const handled = await handleModerationCommands({
+    sock,
+    msg: {
+      message: {
+        extendedTextMessage: {
+          contextInfo: {
+            participant: target,
+            quotedMessage: { conversation: "msg" },
+          },
+        },
+      },
+    },
+    from: "group@g.us",
+    sender: "voter@s.whatsapp.net",
+    text: "!vote",
+    cmd: "!vote",
+    cmdName: "!vote",
+    cmdArg1: "",
+    cmdArg2: "",
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    mentioned: [],
+    jidNormalizedUser: (id) => String(id || "").split(":")[0],
+    storage: {
+      getGroupVoteThreshold: () => 1,
+      getGroupVoteSessions: () => ({ ...sessions }),
+      setGroupVoteSessions: (_groupId, next) => {
+        Object.keys(sessions).forEach((key) => delete sessions[key])
+        Object.assign(sessions, next || {})
+      },
+      getMutedUsers: () => mutedUsers,
+      setMutedUsers: () => {},
+    },
+    clearPunishment: () => {},
+    clearPendingPunishment: () => {},
+    getPunishmentMenuText: () => "MENU",
+    getPunishmentChoiceFromText: () => null,
+    applyPunishment: async () => {},
+    overrideChecksEnabled: false,
+    overrideJid: "",
+    overrideIdentifiers: [],
+    overrideProtectedIdentifiers: [],
+  })
+
+  assert.equal(handled, true)
+  assert.equal(Boolean(mutedUsers["group@g.us"]?.[target]), true)
+  assert.ok(sent.some((entry) => /Votação encerrada/i.test(String(entry.payload?.text || ""))))
+})
 
 test("moderation router protects override target even with priorities disabled", async () => {
   const { sock, sent } = createSockCapture()
@@ -5320,6 +5284,130 @@ test("utility router ignores !comandosfull for non-override sender", async () =>
   assert.equal(sent.length, 0)
 })
 
+test("games router resolves !passa target from replied message", async () => {
+  const { sock, sent } = createSockCapture()
+  const sender = "jogador@s.whatsapp.net"
+  const target = "alvo@s.whatsapp.net"
+  const passTargets = []
+  const state = {
+    players: [sender, target],
+  }
+
+  const handled = await handleGameCommands({
+    sock,
+    from: "group@g.us",
+    sender,
+    cmd: "!passa",
+    cmdName: "!passa",
+    cmdArg1: "",
+    cmdArg2: "",
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    text: "!passa",
+    msg: {
+      message: {
+        extendedTextMessage: {
+          contextInfo: {
+            participant: target,
+            quotedMessage: { conversation: "batata" },
+          },
+        },
+      },
+    },
+    storage: {
+      getGameState: () => null,
+      getGameStates: () => ({}),
+      setGameState: () => {},
+      clearGameState: () => {},
+    },
+    gameManager: {
+      createOptInSession: () => "ABCD",
+      getOptInSession: () => null,
+      addPlayerToOptIn: () => false,
+      clearOptInSession: () => {},
+      optInSessions: {},
+    },
+    economyService: {
+      getProfile: () => ({ stats: {} }),
+      debitCoinsFlexible: () => 0,
+    },
+    caraOuCoroa: {
+      toggleDobroOuNada: () => ({ enabled: false }),
+      formatDobroStatus: () => "",
+    },
+    adivinhacao: {
+      start: () => ({}),
+      recordGuess: () => ({ valid: false, error: "" }),
+      getResults: () => ({}),
+      formatResults: () => "",
+    },
+    batataquente: {
+      start: () => ({}),
+      formatStatus: () => "",
+      getLoser: () => "",
+      recordPass: (_state, _sender, passTarget) => {
+        passTargets.push(passTarget)
+        return { valid: true }
+      },
+    },
+    dueloDados: {
+      start: () => ({}),
+      recordRoll: () => ({ valid: false, error: "" }),
+      getResults: () => ({}),
+      formatResults: () => "",
+    },
+    roletaRussa: {
+      start: () => ({}),
+      getCurrentPlayer: () => "",
+      takeShotAt: () => ({ hit: false }),
+      formatStatus: () => "",
+    },
+    startPeriodicGame: async () => ({ ok: true }),
+    GAME_REWARDS: {
+      ADIVINHACAO_EXACT: 60,
+      ADIVINHACAO_CLOSEST: 30,
+      DADOS_WIN: 35,
+      BATATA_WIN: 20,
+      ROLETA_WIN: 45,
+      ROLETA_WIN_GUARANTEED: 30,
+    },
+    BASE_GAME_REWARD: 30,
+    normalizeUnifiedGameType: () => null,
+    normalizeLobbyId: () => "",
+    activeGameKey: () => "",
+    resolveActiveLobbyForPlayer: () => ({
+      ok: true,
+      foundExplicit: false,
+      reason: null,
+      lobbyId: "ABCD",
+      stateKey: "batataActive:ABCD",
+      state,
+    }),
+    getLobbyCreateBlockMessage: () => null,
+    getGameBuyIn: () => 0,
+    collectLobbyBuyIn: () => ({ ok: true, pool: 0 }),
+    distributeLobbyBuyInPool: async () => {},
+    parsePositiveInt: (value, fallback = 1) => {
+      const n = Number.parseInt(String(value ?? ""), 10)
+      return Number.isFinite(n) && n > 0 ? n : fallback
+    },
+    isResenhaModeEnabled: () => false,
+    rewardPlayer: async () => {},
+    rewardPlayers: async () => {},
+    incrementUserStat: () => {},
+    applyRandomGamePunishment: async () => {},
+    createPendingTargetForWinner: async () => {},
+    jidNormalizedUser: (id) => id,
+    createLobbyWarningCallback: () => {},
+    buildGameStatsText: () => "",
+  })
+
+  assert.equal(handled, true)
+  assert.equal(passTargets.length, 1)
+  assert.equal(passTargets[0], target)
+  assert.ok(sent.some((entry) => /passou a batata/i.test(String(entry.payload?.text || ""))))
+})
 test("utility router renders only requested !comandosfull section", async () => {
   const { sock, sent } = createSockCapture()
   const sender = "override@s.whatsapp.net"

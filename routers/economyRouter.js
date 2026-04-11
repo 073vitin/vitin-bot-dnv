@@ -761,67 +761,38 @@ async function handleEconomyCommands(ctx) {
   }
 
   const getRankingIdentity = (userId = "", options = {}) => {
-    const normalizedRankingUserId = normalizeRankingUserId(userId)
     const isRegistered = typeof registrationService?.isRegistered === "function"
-      ? (
-        registrationService.isRegistered(userId) ||
-        (normalizedRankingUserId && normalizedRankingUserId !== userId && registrationService.isRegistered(normalizedRankingUserId))
-      )
+      ? registrationService.isRegistered(userId)
       : true
+    if (!isRegistered) return { visible: false, label: "", mentionId: null }
+
+    const mentionOptIn = typeof economyService.isMentionOptIn === "function"
+      ? economyService.isMentionOptIn(userId)
+      : true
+
+    const profile = typeof economyService.getProfile === "function"
+      ? economyService.getProfile(userId)
+      : null
+    const publicLabel = String(profile?.preferences?.publicLabel || "").trim()
+    const registeredEntry = typeof registrationService?.getRegisteredEntry === "function"
+      ? registrationService.getRegisteredEntry(userId)
+      : null
+    const knownName = String(registeredEntry?.lastKnownName || "").trim()
+    const stableLabel = typeof economyService.getStablePublicLabel === "function"
+      ? economyService.getStablePublicLabel(userId)
+      : (getMentionHandleFromJid(String(userId || "")) || "Jogador")
+    const publicIdentityLabel = publicLabel || knownName || stableLabel
+    const requirePublicIdentity = Boolean(options?.requirePublicIdentity)
 
     const mentionJidByNormalized = options?.mentionJidByNormalized instanceof Map
       ? options.mentionJidByNormalized
       : null
-    const mentionJid = mentionJidByNormalized
-      ? mentionJidByNormalized.get(normalizedRankingUserId) || mentionJidByNormalized.get(jidNormalizedUser(userId)) || null
-      : userId
-
-    const mentionOptIn = (() => {
-      if (!isRegistered) return false
-      if (typeof economyService.isMentionOptIn !== "function") return true
-      const direct = economyService.isMentionOptIn(userId)
-      if (direct) return true
-      if (normalizedRankingUserId && normalizedRankingUserId !== userId) {
-        return Boolean(economyService.isMentionOptIn(normalizedRankingUserId))
-      }
-      return Boolean(direct)
-    })()
-
-    const directProfile = typeof economyService.getProfile === "function"
-      ? economyService.getProfile(userId)
-      : null
-    const normalizedProfile = typeof economyService.getProfile === "function" && normalizedRankingUserId && normalizedRankingUserId !== userId
-      ? economyService.getProfile(normalizedRankingUserId)
-      : null
-    const profile = String(directProfile?.preferences?.publicLabel || "").trim()
-      ? directProfile
-      : (String(normalizedProfile?.preferences?.publicLabel || "").trim() ? normalizedProfile : (directProfile || normalizedProfile))
-    const publicLabel = String(profile?.preferences?.publicLabel || "").trim()
-    const directRegisteredEntry = typeof registrationService?.getRegisteredEntry === "function"
-      ? registrationService.getRegisteredEntry(userId)
-      : null
-    const normalizedRegisteredEntry = typeof registrationService?.getRegisteredEntry === "function" && normalizedRankingUserId && normalizedRankingUserId !== userId
-      ? registrationService.getRegisteredEntry(normalizedRankingUserId)
-      : null
-    const registeredEntry = String(directRegisteredEntry?.lastKnownName || "").trim()
-      ? directRegisteredEntry
-      : (String(normalizedRegisteredEntry?.lastKnownName || "").trim() ? normalizedRegisteredEntry : (directRegisteredEntry || normalizedRegisteredEntry))
-    const knownName = String(registeredEntry?.lastKnownName || "").trim()
-    let stableLabel = ""
-    if (isRegistered && typeof economyService.getStablePublicLabel === "function") {
-      stableLabel = String(economyService.getStablePublicLabel(normalizedRankingUserId || userId) || "").trim()
-    }
-    if (!stableLabel) {
-      const fallbackJid = mentionJid || normalizedRankingUserId || userId
-      stableLabel = String(getMentionHandleFromJid(String(fallbackJid || "")) || "").split(":")[0].trim()
-    }
-    if (!stableLabel) {
-      stableLabel = "Jogador"
-    }
-    const publicIdentityLabel = publicLabel || knownName || stableLabel
-    const requirePublicIdentity = Boolean(options?.requirePublicIdentity)
 
     if (mentionOptIn) {
+      const normalizedRankingUserId = normalizeRankingUserId(userId)
+      const mentionJid = mentionJidByNormalized
+        ? mentionJidByNormalized.get(normalizedRankingUserId) || mentionJidByNormalized.get(jidNormalizedUser(userId)) || null
+        : userId
       if (mentionJid) {
         const tag = getMentionHandleFromJid(String(mentionJid)).split(":")[0]
         if (!tag) return { visible: false, label: "", mentionId: null }
@@ -1422,10 +1393,22 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         return true
       }
 
-      const inviteTargets = mentioned && mentioned.length > 0 ? mentioned : []
+      let inviteTargets = mentioned && mentioned.length > 0 ? [...mentioned] : []
+      if (inviteTargets.length === 0) {
+        const replyTargetResolution = resolveSingleCommandTarget({
+          allowSelf: true,
+          allowBot: false,
+        })
+        if (replyTargetResolution.ok) {
+          inviteTargets = [replyTargetResolution.target]
+        } else if (replyTargetResolution.reason === "quoted-target-missing") {
+          await sock.sendMessage(from, { text: "Usuário não encontrado." })
+          return true
+        }
+      }
       if (inviteTargets.length === 0) {
         await sock.sendMessage(from, {
-          text: `Use: ${prefix}${cmdName} convidar @usuario(s)`,
+          text: `Use: ${prefix}${cmdName} convidar @usuario(s) (ou responda a mensagem do usuário)`,
         })
         return true
       }
@@ -3334,7 +3317,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  if (cmdName === prefix + "coinsranking") {
+  if (cmd === prefix + "coinsranking") {
     let mentionJidByNormalized = null
     let members = []
     if (isGroup) {
@@ -3353,26 +3336,11 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       })
     }
 
-    const rankingScopeArg = String(cmdArg1 || "").trim().toLowerCase()
-    const forceGlobalRanking = ["global", "g", "mundo", "geral"].includes(rankingScopeArg)
-
     let ranking = []
-    let rankingScopeLabel = "global"
-    if (forceGlobalRanking) {
-      if (typeof economyService.getGlobalRanking === "function") {
-        ranking = economyService.getGlobalRanking(10)
-      } else if (typeof economyService.getGroupRanking === "function") {
-        ranking = economyService.getGroupRanking(members, 10)
-        rankingScopeLabel = isGroup ? "grupo" : "global"
-      }
+    if (typeof economyService.getGlobalRanking === "function") {
+      ranking = economyService.getGlobalRanking(10)
     } else if (isGroup && typeof economyService.getGroupRanking === "function") {
       ranking = economyService.getGroupRanking(members, 10)
-      rankingScopeLabel = "grupo"
-    } else if (typeof economyService.getGlobalRanking === "function") {
-      ranking = economyService.getGlobalRanking(10)
-    } else if (typeof economyService.getGroupRanking === "function") {
-      ranking = economyService.getGroupRanking(members, 10)
-      rankingScopeLabel = isGroup ? "grupo" : "global"
     }
     const visibleRanking = ranking
       .map((entry) => ({
@@ -3392,32 +3360,21 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const label = entry.rankingIdentity.label
       return `${index + 1}. ${label} - *${entry.coins}*`
     })
-    const localPos = (() => {
-      if (!isGroup || typeof economyService.getGroupRanking !== "function") return null
-      const groupRankingLimit = Math.max(1, members.length || 0)
-      const fullGroupRanking = economyService.getGroupRanking(members, groupRankingLimit)
-      const normalizedSenderId = normalizeRankingUserId(sender)
-      const index = fullGroupRanking.findIndex((entry) => normalizeRankingUserId(entry?.userId || "") === normalizedSenderId)
-      return index >= 0 ? index + 1 : null
-    })()
-    const globalPos = typeof economyService.getUserGlobalPosition === "function"
-      ? economyService.getUserGlobalPosition(sender)
-      : null
+    const globalPos = economyService.getUserGlobalPosition(sender)
     const mentions = [...new Set(visibleRanking
       .map((entry) => entry.rankingIdentity.mentionId)
       .filter(Boolean))]
     await sock.sendMessage(from, {
       text:
-        `🏦 Ranking de ${CURRENCY_LABEL} (${rankingScopeLabel})\n` +
+        `🏦 Ranking de ${CURRENCY_LABEL} (global)\n` +
         `${lines.join("\n")}\n\n` +
-        `Sua posição no grupo: *${localPos || "N/A"}*\n` +
         `Sua posição global: *${globalPos || "N/A"}*`,
       mentions,
     })
     return true
   }
 
-  if (cmdName === prefix + "xpranking") {
+  if (cmd === prefix + "xpranking") {
     let mentionJidByNormalized = null
     let members = []
     if (isGroup) {
@@ -3436,26 +3393,11 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       })
     }
 
-    const rankingScopeArg = String(cmdArg1 || "").trim().toLowerCase()
-    const forceGlobalRanking = ["global", "g", "mundo", "geral"].includes(rankingScopeArg)
-
     let ranking = []
-    let rankingScopeLabel = "global"
-    if (forceGlobalRanking) {
-      if (typeof economyService.getGlobalXpRanking === "function") {
-        ranking = economyService.getGlobalXpRanking(10)
-      } else if (typeof economyService.getGroupXpRanking === "function") {
-        ranking = economyService.getGroupXpRanking(members, 10)
-        rankingScopeLabel = isGroup ? "grupo" : "global"
-      }
+    if (typeof economyService.getGlobalXpRanking === "function") {
+      ranking = economyService.getGlobalXpRanking(10)
     } else if (isGroup && typeof economyService.getGroupXpRanking === "function") {
       ranking = economyService.getGroupXpRanking(members, 10)
-      rankingScopeLabel = "grupo"
-    } else if (typeof economyService.getGlobalXpRanking === "function") {
-      ranking = economyService.getGlobalXpRanking(10)
-    } else if (typeof economyService.getGroupXpRanking === "function") {
-      ranking = economyService.getGroupXpRanking(members, 10)
-      rankingScopeLabel = isGroup ? "grupo" : "global"
     }
     const visibleRanking = ranking
       .map((entry) => ({
@@ -3478,14 +3420,6 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const xpToNext = Math.max(1, Math.floor(Number(entry?.xpToNextLevel) || 1))
       return `${index + 1}. ${label} - *Nível ${level}* (${xpNow}/${xpToNext} XP)`
     })
-    const localPos = (() => {
-      if (!isGroup || typeof economyService.getGroupXpRanking !== "function") return null
-      const groupRankingLimit = Math.max(1, members.length || 0)
-      const fullGroupRanking = economyService.getGroupXpRanking(members, groupRankingLimit)
-      const normalizedSenderId = normalizeRankingUserId(sender)
-      const index = fullGroupRanking.findIndex((entry) => normalizeRankingUserId(entry?.userId || "") === normalizedSenderId)
-      return index >= 0 ? index + 1 : null
-    })()
     const globalPos = typeof economyService.getUserGlobalXpPosition === "function"
       ? economyService.getUserGlobalXpPosition(sender)
       : null
@@ -3494,9 +3428,8 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       .filter(Boolean))]
     await sock.sendMessage(from, {
       text:
-        `⭐ Ranking de XP (${rankingScopeLabel})\n` +
+        `⭐ Ranking de XP (global)\n` +
         `${lines.join("\n")}\n\n` +
-        `Sua posição no grupo (XP): *${localPos || "N/A"}*\n` +
         `Sua posição global de XP: *${globalPos || "N/A"}*`,
       mentions,
     })
@@ -5008,9 +4941,19 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       return true
     }
 
-    const mentionedTarget = mentioned[0] || null
-    const target = mentionedTarget || sender
-    const argOffset = mentionedTarget ? 2 : 1
+    const targetResolution = resolveSingleCommandTarget({
+      allowSelf: true,
+      allowBot: true,
+    })
+    if (!targetResolution.ok && targetResolution.reason !== "target-not-found") {
+      await sendTargetResolutionError(targetResolution)
+      return true
+    }
+
+    const hasExplicitTarget = targetResolution.ok
+    const target = hasExplicitTarget ? targetResolution.target : sender
+    const usesMentionToken = hasExplicitTarget && targetResolution.source === "mention"
+    const argOffset = usesMentionToken ? 2 : 1
     const targetMentions = [target]
 
     if (cmdName === prefix + "setcoins") {
@@ -5134,8 +5077,8 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     
 
     if (cmdName === prefix + "mudarapelido") {
-      if (!mentionedTarget) {
-        return sock.sendMessage(from, { text: "Use: !mudarapelido @user <apelido-novo>" })
+      if (!hasExplicitTarget) {
+        return sock.sendMessage(from, { text: "Use: !mudarapelido @user <apelido-novo> (ou responda a mensagem do usuário)" })
       }
 
       let label = ""
@@ -5146,17 +5089,21 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         const afterCommand = startsWithCommand
           ? rawInput.slice(commandToken.length).trimStart()
           : rawInput
-        const mentionAndLabelMatch = afterCommand.match(/^@\S+\s+([\s\S]+)$/)
-        if (mentionAndLabelMatch?.[1]) {
-          label = String(mentionAndLabelMatch[1]).trim()
+        if (usesMentionToken) {
+          const mentionAndLabelMatch = afterCommand.match(/^@\S+\s+([\s\S]+)$/)
+          if (mentionAndLabelMatch?.[1]) {
+            label = String(mentionAndLabelMatch[1]).trim()
+          }
+        } else {
+          label = String(afterCommand || "").trim()
         }
       }
       if (!label) {
-        label = String(cmdParts.slice(2).join(" ") || "").trim()
+        label = String(cmdParts.slice(argOffset).join(" ") || "").trim()
       }
       label = label.slice(0, 30)
       if (!label) {
-        return sock.sendMessage(from, { text: "Use: !mudarapelido @user <apelido-novo>" })
+        return sock.sendMessage(from, { text: "Use: !mudarapelido @user <apelido-novo> (ou responda a mensagem do usuário)" })
       }
 
       if (typeof economyService.setPublicLabel !== "function") {
@@ -5179,8 +5126,16 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       return true
     }
 
-    const mentionedTarget = mentioned[0] || null
-    const target = mentionedTarget || sender
+    const targetResolution = resolveSingleCommandTarget({
+      allowSelf: true,
+      allowBot: true,
+    })
+    if (!targetResolution.ok && targetResolution.reason !== "target-not-found") {
+      await sendTargetResolutionError(targetResolution)
+      return true
+    }
+
+    const target = targetResolution.ok ? targetResolution.target : sender
     const args = (cmdParts || [])
       .slice(1)
       .map((part) => String(part || "").trim())
