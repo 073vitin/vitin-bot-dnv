@@ -2078,15 +2078,12 @@ ${feedbackText}`,
     }
 
     const disk = getDiskInfo()
-    let totalStorageText = "N/A"
-    let storageUsageText = "N/A"
-    if (disk && Number.isFinite(disk.size)) {
-      const totalMB = Math.round(disk.size / 1024 / 1024)
-      const freeMB = disk.free ? Math.round(disk.free / 1024 / 1024) : 0
-      const usedMB = totalMB - freeMB
-      totalStorageText = `${totalMB}MB`
-      storageUsageText = `${usedMB}MB / ${freeMB}MB`
-    }
+    const totalStorageText = disk && Number.isFinite(disk.size)
+      ? `${Math.round(disk.size / 1024 / 1024)}MB`
+      : "N/A"
+    const storageUsageText = disk && Number.isFinite(disk.size)
+      ? `${Math.round((disk.size - (disk.free || 0)) / 1024 / 1024)}MB / ${Math.round((disk.free || 0) / 1024 / 1024)}MB`
+      : "N/A"
 
     const usedRamMB = Math.round(process.memoryUsage().rss / 1024 / 1024)
     const totalRamMB = Math.round(os.totalmem() / 1024 / 1024)
@@ -2107,8 +2104,8 @@ ${feedbackText}`,
 ║ └ ⏳ Uptime: ${uptimeText}
 ║
 ║ 💻 SISTEMA  
-║ ├ 🖥️ Implementado via Railway
-║ └ 📊 Uso de RAM: ${usedRamMB}MB / 1000MB
+║ ├ 🖥️ Self-Hosted 🔥🔥
+║ └ 📊 Uso de RAM: ${usedRamMB}MBs / ${totalRamMB}MBs
 ║
 ║ 🧠 MEMÓRIA
 ║ ├ 📈 Total: ${totalStorageText}
