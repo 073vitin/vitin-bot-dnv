@@ -6,16 +6,27 @@ process.on("unhandledRejection", console.error)
 // runtime refs used for graceful shutdown and health checks
 let activeSock = null
 let server = null
+let shutdownInProgress = false
 
 async function _gracefulShutdown(signal) {
+  if (shutdownInProgress) return
+  shutdownInProgress = true
+
   try {
-    console.log(`Received ${signal}, shutting down...`)
-    if (activeSock && typeof activeSock.logout === "function") {
+    console.log(`Received ${signal}, shutting down without logout to preserve auth session...`)
+    if (activeSock && typeof activeSock === "object") {
       try {
-        await activeSock.logout()
-        console.log("Baileys socket logged out")
+        if (typeof activeSock.ev?.removeAllListeners === "function") {
+          activeSock.ev.removeAllListeners("connection.update")
+        }
+        if (typeof activeSock.ws?.close === "function") {
+          activeSock.ws.close()
+          console.log("Baileys WebSocket closed (session preserved)")
+        }
       } catch (err) {
-        console.error("Error while logging out socket:", err)
+        console.error("Error while closing socket:", err)
+      } finally {
+        activeSock = null
       }
     }
   } catch (err) {
@@ -1800,7 +1811,7 @@ async function videoToSticker(buffer){
 // INICIAR BOT
 // =========================
 async function startBot(){
-  if (botIniciado) return
+  if (botIniciado || shutdownInProgress) return
   botIniciado = true
   const authDir = process.env.BOT_AUTH_DIR
     ? path.resolve(process.env.BOT_AUTH_DIR)
@@ -2008,6 +2019,10 @@ async function startBot(){
     }
 
     if(connection === "close"){
+      if (shutdownInProgress) {
+        console.log("[connection.update] Connection closed during shutdown; reconnect skipped.")
+        return
+      }
       perfStats.reconnects += 1
       lifetimeStats.reconnects += 1
       if (lifetimeStats.authSessionStartedAt) {
@@ -5012,9 +5027,15 @@ if (handledWeaponsCommand) return;
   } catch (err) {
     console.error("[startBot] Fatal error during socket initialization:", err?.message || err)
     console.error("[startBot] Stack:", err?.stack)
+    if (shutdownInProgress) {
+      botIniciado = false
+      console.log("[startBot] Shutdown in progress; restart skipped.")
+      return
+    }
     botIniciado = false
     // Attempt restart after delay
     setTimeout(() => {
+      if (shutdownInProgress) return
       console.log("[startBot] Attempting restart after error...")
       startBot()
     }, 5000)

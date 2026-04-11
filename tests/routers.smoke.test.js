@@ -446,7 +446,157 @@ test("economy router handles !xpranking command", async () => {
   assert.equal(sent.length, 1)
   assert.match(String(sent[0].payload?.text || ""), /Ranking de XP/)
   assert.match(String(sent[0].payload?.text || ""), /Nível 5/)
+  assert.match(String(sent[0].payload?.text || ""), /posição no grupo/i)
   assert.match(String(sent[0].payload?.text || ""), /posição global de XP/i)
+})
+
+test("economy router !xpranking prefers group ranking over global in groups", async () => {
+  const { sock, sent } = createSockCapture()
+  sock.groupMetadata = async () => ({
+    participants: [
+      { id: "caller@s.whatsapp.net" },
+      { id: "groupxp@s.whatsapp.net" },
+    ],
+  })
+
+  let globalCalls = 0
+  let groupCalls = 0
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "caller@s.whatsapp.net",
+    cmd: "!xpranking",
+    cmdName: "!xpranking",
+    cmdArg1: "",
+    cmdArg2: "",
+    cmdParts: ["!xpranking"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    registrationService: {
+      isRegistered: () => true,
+      getRegisteredEntry: () => ({ lastKnownName: "Caller" }),
+    },
+    economyService: {
+      getGlobalXpRanking: () => {
+        globalCalls += 1
+        return [{ userId: "globalxp@s.whatsapp.net", level: 99, xp: 9999, xpToNextLevel: 10000 }]
+      },
+      getGroupXpRanking: () => {
+        groupCalls += 1
+        return [{ userId: "groupxp@s.whatsapp.net", level: 4, xp: 75, xpToNextLevel: 120 }]
+      },
+      getUserGlobalXpPosition: () => 7,
+      isMentionOptIn: () => true,
+      getProfile: (userId) => ({
+        preferences: {
+          publicLabel: userId === "caller@s.whatsapp.net" ? "CallerNick" : "",
+        },
+      }),
+      getStatement: () => [],
+      getGroupRanking: () => [],
+      getShopIndexText: () => "shop",
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(groupCalls, 2)
+  assert.equal(globalCalls, 0)
+  const text = String(sent[0].payload?.text || "")
+  assert.match(text, /Ranking de XP \(grupo\)/i)
+  assert.match(text, /@groupxp/i)
+  assert.match(text, /posição no grupo/i)
+  assert.ok(!/@globalxp/i.test(text))
+})
+
+test("economy router !xpranking global shows global list and both positions", async () => {
+  const { sock, sent } = createSockCapture()
+  sock.groupMetadata = async () => ({
+    participants: [
+      { id: "caller@s.whatsapp.net" },
+      { id: "groupxp@s.whatsapp.net" },
+      { id: "globalxp@s.whatsapp.net" },
+    ],
+  })
+
+  let globalCalls = 0
+  let groupCalls = 0
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "caller@s.whatsapp.net",
+    cmd: "!xpranking global",
+    cmdName: "!xpranking",
+    cmdArg1: "global",
+    cmdArg2: "",
+    cmdParts: ["!xpranking", "global"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    registrationService: {
+      isRegistered: () => true,
+      getRegisteredEntry: () => ({ lastKnownName: "Caller" }),
+    },
+    economyService: {
+      getGlobalXpRanking: () => {
+        globalCalls += 1
+        return [{ userId: "globalxp@s.whatsapp.net", level: 99, xp: 9999, xpToNextLevel: 10000 }]
+      },
+      getGroupXpRanking: () => {
+        groupCalls += 1
+        return [
+          { userId: "caller@s.whatsapp.net", level: 10, xp: 100, xpToNextLevel: 300 },
+          { userId: "groupxp@s.whatsapp.net", level: 8, xp: 50, xpToNextLevel: 280 },
+        ]
+      },
+      getUserGlobalXpPosition: () => 42,
+      isMentionOptIn: () => true,
+      getProfile: (userId) => ({
+        preferences: {
+          publicLabel: userId === "caller@s.whatsapp.net" ? "CallerNick" : "",
+        },
+      }),
+      getStatement: () => [],
+      getGroupRanking: () => [],
+      getShopIndexText: () => "shop",
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(globalCalls, 1)
+  assert.equal(groupCalls, 1)
+  const text = String(sent[0].payload?.text || "")
+  assert.match(text, /Ranking de XP \(global\)/i)
+  assert.match(text, /@globalxp/i)
+  assert.ok(!/@groupxp/i.test(text))
+  assert.match(text, /posição no grupo \(XP\): \*1\*/i)
+  assert.match(text, /posição global de XP: \*42\*/i)
 })
 
 test("economy router !coinsranking hides unregistered/non-visible users and avoids placeholder labels", async () => {
@@ -517,7 +667,155 @@ test("economy router !coinsranking hides unregistered/non-visible users and avoi
   assert.ok(!/hidden@s\.whatsapp\.net/i.test(text))
   assert.ok(!/unreg@s\.whatsapp\.net/i.test(text))
   assert.ok(!/USR-/i.test(text))
+  assert.match(text, /posição no grupo/i)
   assert.deepEqual(sent[0].payload?.mentions || [], ["mention@s.whatsapp.net"])
+})
+
+test("economy router !coinsranking prefers group ranking over global in groups", async () => {
+  const { sock, sent } = createSockCapture()
+  sock.groupMetadata = async () => ({
+    participants: [
+      { id: "caller@s.whatsapp.net" },
+      { id: "grouptop@s.whatsapp.net" },
+    ],
+  })
+
+  let globalCalls = 0
+  let groupCalls = 0
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "caller@s.whatsapp.net",
+    cmd: "!coinsranking",
+    cmdName: "!coinsranking",
+    cmdArg1: "",
+    cmdArg2: "",
+    cmdParts: ["!coinsranking"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    registrationService: {
+      isRegistered: () => true,
+      getRegisteredEntry: () => ({ lastKnownName: "Caller" }),
+    },
+    economyService: {
+      getGlobalRanking: () => {
+        globalCalls += 1
+        return [{ userId: "globaltop@s.whatsapp.net", coins: 999999 }]
+      },
+      getGroupRanking: () => {
+        groupCalls += 1
+        return [{ userId: "grouptop@s.whatsapp.net", coins: 500 }]
+      },
+      getUserGlobalPosition: () => 11,
+      isMentionOptIn: () => true,
+      getProfile: (userId) => ({
+        preferences: {
+          publicLabel: userId === "caller@s.whatsapp.net" ? "CallerNick" : "",
+        },
+      }),
+      getStatement: () => [],
+      getShopIndexText: () => "shop",
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(groupCalls, 2)
+  assert.equal(globalCalls, 0)
+  const text = String(sent[0].payload?.text || "")
+  assert.match(text, /Ranking de .*\(grupo\)/i)
+  assert.match(text, /@grouptop/i)
+  assert.match(text, /posição no grupo/i)
+  assert.ok(!/@globaltop/i.test(text))
+})
+
+test("economy router !coinsranking global shows global list and both positions", async () => {
+  const { sock, sent } = createSockCapture()
+  sock.groupMetadata = async () => ({
+    participants: [
+      { id: "caller@s.whatsapp.net" },
+      { id: "grouptop@s.whatsapp.net" },
+      { id: "globaltop@s.whatsapp.net" },
+    ],
+  })
+
+  let globalCalls = 0
+  let groupCalls = 0
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "caller@s.whatsapp.net",
+    cmd: "!coinsranking global",
+    cmdName: "!coinsranking",
+    cmdArg1: "global",
+    cmdArg2: "",
+    cmdParts: ["!coinsranking", "global"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    registrationService: {
+      isRegistered: () => true,
+      getRegisteredEntry: () => ({ lastKnownName: "Caller" }),
+    },
+    economyService: {
+      getGlobalRanking: () => {
+        globalCalls += 1
+        return [{ userId: "globaltop@s.whatsapp.net", coins: 999999 }]
+      },
+      getGroupRanking: () => {
+        groupCalls += 1
+        return [
+          { userId: "caller@s.whatsapp.net", coins: 1234 },
+          { userId: "grouptop@s.whatsapp.net", coins: 1200 },
+        ]
+      },
+      getUserGlobalPosition: () => 17,
+      isMentionOptIn: () => true,
+      getProfile: (userId) => ({
+        preferences: {
+          publicLabel: userId === "caller@s.whatsapp.net" ? "CallerNick" : "",
+        },
+      }),
+      getStatement: () => [],
+      getShopIndexText: () => "shop",
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(globalCalls, 1)
+  assert.equal(groupCalls, 1)
+  const text = String(sent[0].payload?.text || "")
+  assert.match(text, /Ranking de .*\(global\)/i)
+  assert.match(text, /@globaltop/i)
+  assert.ok(!/@grouptop/i.test(text))
+  assert.match(text, /posição no grupo: \*1\*/i)
+  assert.match(text, /posição global: \*17\*/i)
 })
 
 test("economy router !coinsranking falls back to nickname when mention jid is not in current group", async () => {

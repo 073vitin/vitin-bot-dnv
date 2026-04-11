@@ -3305,7 +3305,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  if (cmd === prefix + "coinsranking") {
+  if (cmdName === prefix + "coinsranking") {
     let mentionJidByNormalized = null
     let members = []
     if (isGroup) {
@@ -3324,11 +3324,26 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       })
     }
 
+    const rankingScopeArg = String(cmdArg1 || "").trim().toLowerCase()
+    const forceGlobalRanking = ["global", "g", "mundo", "geral"].includes(rankingScopeArg)
+
     let ranking = []
-    if (typeof economyService.getGlobalRanking === "function") {
-      ranking = economyService.getGlobalRanking(10)
+    let rankingScopeLabel = "global"
+    if (forceGlobalRanking) {
+      if (typeof economyService.getGlobalRanking === "function") {
+        ranking = economyService.getGlobalRanking(10)
+      } else if (typeof economyService.getGroupRanking === "function") {
+        ranking = economyService.getGroupRanking(members, 10)
+        rankingScopeLabel = isGroup ? "grupo" : "global"
+      }
     } else if (isGroup && typeof economyService.getGroupRanking === "function") {
       ranking = economyService.getGroupRanking(members, 10)
+      rankingScopeLabel = "grupo"
+    } else if (typeof economyService.getGlobalRanking === "function") {
+      ranking = economyService.getGlobalRanking(10)
+    } else if (typeof economyService.getGroupRanking === "function") {
+      ranking = economyService.getGroupRanking(members, 10)
+      rankingScopeLabel = isGroup ? "grupo" : "global"
     }
     const visibleRanking = ranking
       .map((entry) => ({
@@ -3348,21 +3363,32 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const label = entry.rankingIdentity.label
       return `${index + 1}. ${label} - *${entry.coins}*`
     })
-    const globalPos = economyService.getUserGlobalPosition(sender)
+    const localPos = (() => {
+      if (!isGroup || typeof economyService.getGroupRanking !== "function") return null
+      const groupRankingLimit = Math.max(1, members.length || 0)
+      const fullGroupRanking = economyService.getGroupRanking(members, groupRankingLimit)
+      const normalizedSenderId = normalizeRankingUserId(sender)
+      const index = fullGroupRanking.findIndex((entry) => normalizeRankingUserId(entry?.userId || "") === normalizedSenderId)
+      return index >= 0 ? index + 1 : null
+    })()
+    const globalPos = typeof economyService.getUserGlobalPosition === "function"
+      ? economyService.getUserGlobalPosition(sender)
+      : null
     const mentions = [...new Set(visibleRanking
       .map((entry) => entry.rankingIdentity.mentionId)
       .filter(Boolean))]
     await sock.sendMessage(from, {
       text:
-        `🏦 Ranking de ${CURRENCY_LABEL} (global)\n` +
+        `🏦 Ranking de ${CURRENCY_LABEL} (${rankingScopeLabel})\n` +
         `${lines.join("\n")}\n\n` +
+        `Sua posição no grupo: *${localPos || "N/A"}*\n` +
         `Sua posição global: *${globalPos || "N/A"}*`,
       mentions,
     })
     return true
   }
 
-  if (cmd === prefix + "xpranking") {
+  if (cmdName === prefix + "xpranking") {
     let mentionJidByNormalized = null
     let members = []
     if (isGroup) {
@@ -3381,11 +3407,26 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       })
     }
 
+    const rankingScopeArg = String(cmdArg1 || "").trim().toLowerCase()
+    const forceGlobalRanking = ["global", "g", "mundo", "geral"].includes(rankingScopeArg)
+
     let ranking = []
-    if (typeof economyService.getGlobalXpRanking === "function") {
-      ranking = economyService.getGlobalXpRanking(10)
+    let rankingScopeLabel = "global"
+    if (forceGlobalRanking) {
+      if (typeof economyService.getGlobalXpRanking === "function") {
+        ranking = economyService.getGlobalXpRanking(10)
+      } else if (typeof economyService.getGroupXpRanking === "function") {
+        ranking = economyService.getGroupXpRanking(members, 10)
+        rankingScopeLabel = isGroup ? "grupo" : "global"
+      }
     } else if (isGroup && typeof economyService.getGroupXpRanking === "function") {
       ranking = economyService.getGroupXpRanking(members, 10)
+      rankingScopeLabel = "grupo"
+    } else if (typeof economyService.getGlobalXpRanking === "function") {
+      ranking = economyService.getGlobalXpRanking(10)
+    } else if (typeof economyService.getGroupXpRanking === "function") {
+      ranking = economyService.getGroupXpRanking(members, 10)
+      rankingScopeLabel = isGroup ? "grupo" : "global"
     }
     const visibleRanking = ranking
       .map((entry) => ({
@@ -3408,6 +3449,14 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const xpToNext = Math.max(1, Math.floor(Number(entry?.xpToNextLevel) || 1))
       return `${index + 1}. ${label} - *Nível ${level}* (${xpNow}/${xpToNext} XP)`
     })
+    const localPos = (() => {
+      if (!isGroup || typeof economyService.getGroupXpRanking !== "function") return null
+      const groupRankingLimit = Math.max(1, members.length || 0)
+      const fullGroupRanking = economyService.getGroupXpRanking(members, groupRankingLimit)
+      const normalizedSenderId = normalizeRankingUserId(sender)
+      const index = fullGroupRanking.findIndex((entry) => normalizeRankingUserId(entry?.userId || "") === normalizedSenderId)
+      return index >= 0 ? index + 1 : null
+    })()
     const globalPos = typeof economyService.getUserGlobalXpPosition === "function"
       ? economyService.getUserGlobalXpPosition(sender)
       : null
@@ -3416,8 +3465,9 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       .filter(Boolean))]
     await sock.sendMessage(from, {
       text:
-        `⭐ Ranking de XP (global)\n` +
+        `⭐ Ranking de XP (${rankingScopeLabel})\n` +
         `${lines.join("\n")}\n\n` +
+        `Sua posição no grupo (XP): *${localPos || "N/A"}*\n` +
         `Sua posição global de XP: *${globalPos || "N/A"}*`,
       mentions,
     })
