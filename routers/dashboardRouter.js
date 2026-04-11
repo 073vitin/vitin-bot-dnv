@@ -100,16 +100,8 @@ function registerDashboardRoutes(app, options = {}) {
   })
 
   app.get("/", (req, res) => {
-    const { isSimple, paramSimple, envToggle } = shouldServeSimpleDashboard(req)
-    console.log(`[Dashboard] Request for /, simple param: "${paramSimple}", env toggle: "${envToggle}", isSimple: ${isSimple}`)
-
-    if (isSimple) {
-      console.log("Serving simple dashboard page (simple mode active). paramSimple=", paramSimple, "env=", envToggle)
-      res.send(renderSimpleDashboardPage())
-      return
-    }
-
-    res.send(renderFullDashboardPage())
+    const { isSimple } = shouldServeSimpleDashboard(req)
+    res.send(isSimple ? renderSimpleDashboardPage() : renderFullDashboardPage())
   })
 }
 

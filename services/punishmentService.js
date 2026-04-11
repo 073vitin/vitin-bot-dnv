@@ -387,38 +387,25 @@ function findMatchingUserKey(map = {}, userId = "") {
 }
 
 function clearPendingPunishment(groupId, playerId) {
-  console.log("[punishment] clearPendingPunishment called", { groupId, playerId })
   const coinPunishmentPending = storage.getCoinPunishmentPending()
   if (!coinPunishmentPending[groupId]?.[playerId]) {
-    console.log("[punishment] clearPendingPunishment - no pending punishment found", { groupId, playerId })
     return
   }
-  console.log("[punishment] clearPendingPunishment - clearing", { groupId, playerId, pending: coinPunishmentPending[groupId][playerId] })
   delete coinPunishmentPending[groupId][playerId]
   if (Object.keys(coinPunishmentPending[groupId]).length === 0) delete coinPunishmentPending[groupId]
   storage.setCoinPunishmentPending(coinPunishmentPending)
-  console.log("[punishment] clearPendingPunishment - cleared successfully", { groupId, playerId })
 }
 
 function clearPunishment(groupId, userId) {
   const normalizedUser = normalizeUserId(userId) || String(userId || "")
-  console.log("[punishment] clearPunishment called", { groupId, userId, normalizedUser })
   const activePunishments = storage.getActivePunishments()
   const groupPunishments = activePunishments[groupId]
   const matchedKey = findMatchingUserKey(groupPunishments, normalizedUser)
   if (!matchedKey) {
-    console.log("[punishment] clearPunishment - no active punishment found", { groupId, normalizedUser })
     return
   }
-  console.log("[punishment] clearPunishment - found punishment to clear", {
-    groupId,
-    normalizedUser,
-    matchedKey,
-    punishment: groupPunishments[matchedKey],
-  })
   const timerId = groupPunishments[matchedKey]?.timerId
   if (timerId) {
-    console.log("[punishment] clearPunishment - clearing timeout", { timerId })
     clearTimeout(timerId)
   }
   delete groupPunishments[matchedKey]
@@ -426,7 +413,6 @@ function clearPunishment(groupId, userId) {
     delete activePunishments[groupId]
   }
   storage.setActivePunishments(activePunishments)
-  console.log("[punishment] clearPunishment - cleared successfully", { groupId, normalizedUser, matchedKey })
 }
 
 async function applyPunishment(sock, groupId, userId, punishmentId, options = {}) {
@@ -436,9 +422,8 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
   const targetUserId = normalizedTarget || String(userId || "")
   const normalizedPunishmentId = normalizePunishmentId(punishmentId)
   const normalizedBot = normalizeUserId(options?.botUserId || sock?.user?.id || "")
-  console.log("[punishment] applyPunishment - normalized values", { targetUserId, normalizedPunishmentId, normalizedBot })
   if (!targetUserId) {
-    console.log("[punishment] applyPunishment BLOCKED - invalid target", { userId, reason: "invalid-target" })
+    console.log("[punishment] applyPunishment BLOCKED - invalid target", { reason: "invalid-target" })
     telemetry.incrementCounter("punishment.blocked", 1, {
       origin,
       reason: "invalid-target",
@@ -454,7 +439,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     return { blocked: true, reason: "invalid-target" }
   }
   if (!normalizedPunishmentId) {
-    console.log("[punishment] applyPunishment BLOCKED - invalid punishment id", { punishmentId, reason: "invalid-id" })
+    console.log("[punishment] applyPunishment BLOCKED - invalid punishment id", { reason: "invalid-id" })
     telemetry.incrementCounter("punishment.blocked", 1, {
       origin,
       reason: "invalid-id",
@@ -470,7 +455,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     return { blocked: true, reason: "invalid-id" }
   }
   if (identitiesMatch(normalizedTarget, normalizedBot)) {
-    console.log("[punishment] applyPunishment BLOCKED - bot cannot be punished", { reason: "bot-target" })
+    console.log("[punishment] applyPunishment BLOCKED - bot cannot be punished")
     telemetry.incrementCounter("punishment.blocked", 1, {
       origin,
       reason: "bot-target",
@@ -490,11 +475,9 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
   }
 
   if (origin !== "admin") {
-    console.log("[punishment] applyPunishment - checking shield", { targetUserId, origin })
     const blocked = economyService.consumeShield(targetUserId)
-    console.log("[punishment] applyPunishment - shield check result", { blocked })
     if (blocked) {
-      console.log("[punishment] applyPunishment BLOCKED - shield active", { targetUserId, reason: "shield" })
+      console.log("[punishment] applyPunishment BLOCKED - shield active")
       telemetry.incrementCounter("punishment.blocked", 1, {
         origin,
         reason: "shield",
@@ -674,8 +657,6 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
   }
 
   storage.setActivePunishments(activePunishments)
-  console.log("[punishment] applyPunishment - punishment state stored", { targetUserId, punishmentType: punishmentState?.type, endsAt: punishmentState?.endsAt })
-
   telemetry.incrementCounter("punishment.applied", 1, {
     origin,
     punishmentId: normalizedPunishmentId,
@@ -695,29 +676,24 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     economyService.incrementStat(targetUserId, "punishmentsReceivedGame", 1)
   }
 
-  console.log("[punishment] applyPunishment - sending warning message", { groupId, targetUserId })
   await sock.sendMessage(groupId, {
     text: warningText,
     mentions: normalizeMentionArray([targetUserId])
   })
-  console.log("[punishment] applyPunishment COMPLETE", { groupId, targetUserId, normalizedPunishmentId })
+  console.log("[punishment] applyPunishment COMPLETE", { groupId, targetUserId, type: punishmentState?.type })
 }
 
 async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGroup, skipForCommand = false, botIsAdmin = true) {
-  console.log("[punishment] handlePunishmentEnforcement START", { from, sender, textLength: text?.length, skipForCommand, botIsAdmin })
   if (!isGroup) {
-    console.log("[punishment] handlePunishmentEnforcement - not a group, skipping")
     return false
   }
   if (skipForCommand) {
-    console.log("[punishment] handlePunishmentEnforcement - command skip active")
     return false
   }
 
   const botUserId = normalizeUserId(sock?.user?.id || "")
   const senderId = normalizeUserId(sender) || String(sender || "")
   if (botUserId && senderId && identitiesMatch(normalizeUserId(sender), botUserId)) {
-    console.log("[punishment] handlePunishmentEnforcement - skipping: sender is the bot itself")
     return false
   }
 
@@ -784,12 +760,10 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
   }
 
   const activePunishments = storage.getActivePunishments()
-  console.log("[punishment] handlePunishmentEnforcement - loaded active punishments", { groupId: from, punishedUserCount: Object.keys(activePunishments[from] || {}).length })
   const groupPunishments = activePunishments[from] || {}
   const matchedKey = findMatchingUserKey(groupPunishments, senderId)
   const punishment = matchedKey ? groupPunishments[matchedKey] : null
   if (!punishment) {
-    console.log("[punishment] handlePunishmentEnforcement - no active punishment for this user")
     return false
   }
 
@@ -800,15 +774,8 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
     storage.setActivePunishments(activePunishments)
   }
 
-  console.log("[punishment] handlePunishmentEnforcement - found active punishment", {
-    senderId,
-    matchedKey,
-    punishmentType: punishment.type,
-    endsAt: punishment.endsAt,
-  })
   const now = Date.now()
   if (punishment.endsAt && now >= punishment.endsAt) {
-    console.log("[punishment] handlePunishmentEnforcement - punishment expired", { senderId, endsAt: punishment.endsAt, now })
     clearPunishment(from, senderId)
     await sock.sendMessage(from, {
       text: `${formatMentionTag(senderId)}, sua punição expirou.`,
@@ -822,27 +789,20 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
   if (punishment.type === "max5chars") {
     const measured = stripWhitespaceExceptSpace(text)
     shouldDelete = measured.length > 5
-    console.log("[punishment] handlePunishmentEnforcement - max5chars check", { senderId, textLength: measured.length, shouldDelete })
   }
 
   if (punishment.type === "rate20s") {
-    console.log("[punishment] handlePunishmentEnforcement - rate20s check", { senderId, lastAllowed: punishment.lastAllowedAt, now, msSince: now - punishment.lastAllowedAt })
     if (punishment.lastAllowedAt && now - punishment.lastAllowedAt < 20_000) {
       shouldDelete = true
-      console.log("[punishment] handlePunishmentEnforcement - rate20s - TOO FAST, should delete")
     } else {
       punishment.lastAllowedAt = now
       storage.setActivePunishments(activePunishments)
-      console.log("[punishment] handlePunishmentEnforcement - rate20s - allowed, updated lastAllowedAt")
     }
   }
 
   if (punishment.type === "lettersBlock") {
     const letters = punishment.letters || []
-    console.log("[punishment] handlePunishmentEnforcement - lettersBlock check", { senderId, blockedLetters: letters })
     if (isUnlockLettersMessage(text, letters)) {
-      const lettersLabel = letters.length > 0 ? letters.join(" / ") : "(sem letras)"
-      console.log("[punishment] handlePunishmentEnforcement - lettersBlock - UNLOCK condition met!", { senderId, letters: lettersLabel })
       clearPunishment(from, senderId)
       await sock.sendMessage(from, {
         text: `${formatMentionTag(senderId)}, você cumpriu a condição e foi liberado da punição das letras (${lettersLabel}).`,
@@ -851,32 +811,27 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
       return false
     }
     shouldDelete = true
-    console.log("[punishment] handlePunishmentEnforcement - lettersBlock - invalid unlock message, deleting")
   }
 
   if (punishment.type === "emojiOnly") {
     const isEmoji = isEmojiOnlyMessage(text)
     const hasSticker = isStickerMessage(msg)
     shouldDelete = !isEmoji && !hasSticker
-    console.log("[punishment] handlePunishmentEnforcement - emojiOnly check", { senderId, isEmoji, hasSticker, shouldDelete })
   }
 
   if (punishment.type === "mute5m") {
     shouldDelete = true
-    console.log("[punishment] handlePunishmentEnforcement - mute5m - deleting all messages")
   }
 
   if (punishment.type === "noVowels") {
     const hasVowels = /[aeiouáàâãéèêíìîóòôõúùû]/i.test(String(text || ""))
     shouldDelete = hasVowels
-    console.log("[punishment] handlePunishmentEnforcement - noVowels check", { senderId, hasVowels, shouldDelete })
   }
 
   if (punishment.type === "urgentPrefix") {
     const prefix = String(punishment.requiredPrefix || "🚨URGENTE:")
     const matches = matchesUrgentPrefix(text, prefix)
     shouldDelete = !matches
-    console.log("[punishment] handlePunishmentEnforcement - urgentPrefix check", { senderId, requiredPrefix: prefix, matches, shouldDelete })
   }
 
   if (punishment.type === "wordListRequired") {
@@ -884,31 +839,23 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
     const minRequired = Math.max(1, Math.floor(Number(punishment.minRequiredWords) || 1))
     const hasWords = containsWordListTerms(text, words, minRequired)
     shouldDelete = !hasWords
-    console.log("[punishment] handlePunishmentEnforcement - wordListRequired check", { senderId, requiredWords: words, minRequired, hasWords, shouldDelete })
   }
 
   if (punishment.type === "allCaps") {
     const raw = String(text || "")
-    if (!raw.trim()) {
+    if (!raw.trim() || !hasLetters(raw)) {
       shouldDelete = false
-      console.log("[punishment] handlePunishmentEnforcement - allCaps - empty message, no delete")
-    } else if (!hasLetters(raw)) {
-      shouldDelete = false
-      console.log("[punishment] handlePunishmentEnforcement - allCaps - no letters, no delete")
     } else {
       shouldDelete = raw !== raw.toUpperCase()
-      console.log("[punishment] handlePunishmentEnforcement - allCaps check", { senderId, isAllCaps: raw === raw.toUpperCase(), shouldDelete })
     }
   }
 
   if (punishment.type === "deleteAndRepost") {
     shouldDelete = true
-    console.log("[punishment] handlePunishmentEnforcement - deleteAndRepost - marking for delete and repost")
   }
 
   if (punishment.type === "sexualReaction") {
     const emoji = REPOST_REACTION_EMOJIS[crypto.randomInt(0, REPOST_REACTION_EMOJIS.length)]
-    console.log("[punishment] handlePunishmentEnforcement - sexualReaction - adding reaction", { senderId, emoji })
     try {
       await sock.sendMessage(from, {
         react: {
@@ -916,9 +863,8 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
           key: msg.key,
         },
       })
-      console.log("[punishment] handlePunishmentEnforcement - sexualReaction - reaction added successfully")
     } catch (e) {
-      console.error("[punishment] Erro ao reagir mensagem por punição", e)
+      console.error("[punishment] Erro ao reagir", e)
     }
     return false
   }
@@ -927,24 +873,18 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
     const chance = Math.max(0, Math.min(1, Number(punishment.deleteChance) || 0.2))
     const roll = Math.random()
     shouldDelete = roll < chance
-    console.log("[punishment] handlePunishmentEnforcement - randomDeleteChance check", { senderId, chance, roll, shouldDelete })
   }
 
   if (punishment.type === "max3wordsStrict") {
     const wordCount = countWordTokensStrict(text)
     shouldDelete = wordCount > 3
-    console.log("[punishment] handlePunishmentEnforcement - max3wordsStrict check", { senderId, wordCount, shouldDelete })
   }
 
   if (!shouldDelete) {
-    console.log("[punishment] handlePunishmentEnforcement - no delete needed")
     return false
   }
 
-  if (!botIsAdmin) {    console.log("[punishment] handlePunishmentEnforcement - botIsAdmin flag is false; attempting delete anyway")
-  }
-
-  console.log("[punishment] handlePunishmentEnforcement - DELETING MESSAGE", { senderId, punishmentType: punishment.type })
+  console.log("[punishment] handlePunishmentEnforcement - DELETING", { senderId, type: punishment.type })
   telemetry.incrementCounter("punishment.enforcement", 1, {
     type: punishment.type,
     action: "delete",
@@ -958,36 +898,29 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
 
   let deleteSucceeded = false
   try {
-    console.log("[punishment] handlePunishmentEnforcement - attempting to delete message", { msgKey: msg.key })
     await sock.sendMessage(from, { delete: msg.key })
     deleteSucceeded = true
-    console.log("[punishment] handlePunishmentEnforcement - message deleted successfully")
     if (punishment.type === "deleteAndRepost") {
-      console.log("[punishment] handlePunishmentEnforcement - reposting content")
       await resendPunishedContent(sock, from, senderId, msg, text)
     }
   } catch (e) {
     console.error("[punishment] Erro ao apagar mensagem por punição", e)
   }
   if (!deleteSucceeded) {
-    console.log("[punishment] handlePunishmentEnforcement - delete attempt failed but punishment remains enforced")
     return true
   }
   return true
 }
 
 async function handlePendingPunishmentChoice({ sock, from, sender, text, mentioned, isGroup, senderIsAdmin, isCommand }) {
-  console.log("[punishment] handlePendingPunishmentChoice START", { from, sender, textLength: text?.length, isCommand })
+  console.log("[punishment] handlePendingPunishmentChoice START", { from, sender })
   if (!isGroup) {
-    console.log("[punishment] handlePendingPunishmentChoice - not a group")
     return false
   }
 
   if (!storage.isResenhaEnabled(from)) {
-    console.log("[punishment] handlePendingPunishmentChoice - resinha not enabled")
     const coinPunishmentPending = storage.getCoinPunishmentPending()
     if (coinPunishmentPending[from]?.[sender]) {
-      console.log("[punishment] handlePendingPunishmentChoice - clearing pending punishment since resinha disabled")
       clearPendingPunishment(from, sender)
       return false
     }
@@ -996,9 +929,7 @@ async function handlePendingPunishmentChoice({ sock, from, sender, text, mention
 
   const coinPunishmentPending = storage.getCoinPunishmentPending()
   const pending = coinPunishmentPending[from]?.[sender]
-  console.log("[punishment] handlePendingPunishmentChoice - checking pending", { hasPending: !!pending, senderIsAdmin, isCommand })
   if (!pending || (senderIsAdmin && isCommand)) {
-    console.log("[punishment] handlePendingPunishmentChoice - no pending or is admin command")
     return false
   }
 
@@ -1022,11 +953,9 @@ async function handlePendingPunishmentChoice({ sock, from, sender, text, mention
   }
 
   const punishmentChoice = getPunishmentChoiceFromText(text)
-  console.log("[punishment] handlePendingPunishmentChoice - extracted choice", { punishmentChoice, text })
   let target = pending.target
 
   if (pending.mode === "target" && mentioned.length > 0) {
-    console.log("[punishment] handlePendingPunishmentChoice - target mode with mentions")
     target = mentioned[0]
 
     if (Array.isArray(pending.allowedTargets) && pending.allowedTargets.length > 0 && !pending.allowedTargets.includes(target)) {
@@ -1068,11 +997,9 @@ async function rehydrateActivePunishments(sock) {
   const activePunishments = storage.getActivePunishments()
   const now = Date.now()
   let changed = false
-  console.log("[punishment] rehydrateActivePunishments - loaded punishments", { totalGroups: Object.keys(activePunishments || {}).length })
 
   for (const [groupId, users] of Object.entries(activePunishments || {})) {
     if (!users || typeof users !== "object") {
-      console.log("[punishment] rehydrateActivePunishments - invalid users object", { groupId })
       delete activePunishments[groupId]
       changed = true
       continue
@@ -1081,7 +1008,6 @@ async function rehydrateActivePunishments(sock) {
     for (const [userIdRaw, punishment] of Object.entries(users)) {
       const userId = normalizeUserId(userIdRaw) || String(userIdRaw || "")
       if (!userId || !punishment || typeof punishment !== "object") {
-        console.log("[punishment] rehydrateActivePunishments - invalid punishment", { groupId, userIdRaw })
         delete users[userIdRaw]
         changed = true
         continue
@@ -1094,7 +1020,6 @@ async function rehydrateActivePunishments(sock) {
       }
 
       if (punishment.timerId) {
-        console.log("[punishment] rehydrateActivePunishments - clearing old timer", { groupId, userId })
         clearTimeout(punishment.timerId)
         delete punishment.timerId
         changed = true
@@ -1102,21 +1027,17 @@ async function rehydrateActivePunishments(sock) {
 
       const endsAt = Number(punishment.endsAt) || 0
       if (!endsAt) {
-        console.log("[punishment] rehydrateActivePunishments - permanent punishment", { groupId, userId, type: punishment.type })
         continue
       }
 
       const remainingMs = endsAt - now
       if (remainingMs <= 0) {
-        console.log("[punishment] rehydrateActivePunishments - punishment already expired", { groupId, userId, endsAt, now })
         delete users[userIdRaw]
         changed = true
         continue
       }
 
-      console.log("[punishment] rehydrateActivePunishments - setting timer", { groupId, userId, type: punishment.type, remainingMs })
       punishment.timerId = setTimeout(() => {
-        console.log("[punishment] rehydrateActivePunishments - timeout fired, clearing punishment", { groupId, userId })
         clearPunishment(groupId, userId)
         if (sock && typeof sock.sendMessage === "function") {
           sock.sendMessage(groupId, {
@@ -1129,14 +1050,12 @@ async function rehydrateActivePunishments(sock) {
     }
 
     if (Object.keys(users).length === 0) {
-      console.log("[punishment] rehydrateActivePunishments - cleaning up empty group", { groupId })
       delete activePunishments[groupId]
       changed = true
     }
   }
 
   if (changed) {
-    console.log("[punishment] rehydrateActivePunishments - changes detected, saving")
     storage.setActivePunishments(activePunishments)
   }
   console.log("[punishment] rehydrateActivePunishments COMPLETE")

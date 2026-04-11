@@ -3571,7 +3571,6 @@ setTimeout(() => {
     // =========================
     // ESCOLHA PENDENTE DE PUNIÇÃO
     // =========================
-    console.log("[bot] attempting handlePendingPunishmentChoice", { from, sender, textLength: text?.length })
     const handledPendingPunishment = await measureStage("pendingPunishment", async () =>
       handlePendingPunishmentChoice({
         sock,
@@ -3584,16 +3583,13 @@ setTimeout(() => {
         isCommand,
       })
     )
-    console.log("[bot] handlePendingPunishmentChoice returned", { handledPendingPunishment })
     if (handledPendingPunishment) {
-      console.log("[bot] pending punishment choice was handled")
       return
     }
 
     // =========================
     // APLICAÇÃO DE PUNIÇÃO ATIVA
     // =========================
-    console.log("[bot] attempting handlePunishmentEnforcement", { from, sender, textLength: text?.length })
     const punishedMessageDeleted = await measureStage("punishmentEnforcement", async () =>
       handlePunishmentEnforcement(
         sock,
@@ -3606,9 +3602,7 @@ setTimeout(() => {
         botIsAdmin
       )
     )
-    console.log("[bot] handlePunishmentEnforcement returned", { punishedMessageDeleted })
     if (punishedMessageDeleted) {
-      console.log("[bot] message was deleted by punishment enforcement")
       return
     }
 

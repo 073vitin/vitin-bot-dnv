@@ -880,7 +880,6 @@ async function handleModerationCommands(ctx) {
     }
 
     if (!punishmentChoice) {
-      console.log("[router:moderation] punicoesadd - no punishment choice extracted", { alvo, text })
       trackModeration("punicoesadd", "rejected", { reason: "invalid-choice" })
       await sock.sendMessage(from, {
         text: "Use: !puniçõesadd [@user] <1-13> [severidade]\nEx.: !punicoesadd @user 7 3 | !punicoesadd @user 7x3\n" + getPunishmentMenuText(),
@@ -890,7 +889,6 @@ async function handleModerationCommands(ctx) {
     }
 
     if (hasExplicitSeverity && (!Number.isFinite(severityMultiplier) || severityMultiplier <= 0)) {
-      console.log("[router:moderation] punicoesadd - invalid severity", { alvo, severityMultiplier })
       trackModeration("punicoesadd", "rejected", { reason: "invalid-severity" })
       await sock.sendMessage(from, {
         text: "Severidade inválida. Use um número positivo.\nEx.: !puniçõesadd @user 7 3",
@@ -899,12 +897,10 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
-    console.log("[router:moderation] punicoesadd - applying punishment", { alvo, punishmentChoice, severityMultiplier, origin: "admin" })
     await applyPunishment(sock, from, alvo, punishmentChoice, {
       origin: "admin",
       severityMultiplier,
     })
-    console.log("[router:moderation] punicoesadd - punishment applied successfully", { alvo, punishmentChoice })
     trackModeration("punicoesadd", "success", { target: alvo, punishmentChoice })
     return true
   }
