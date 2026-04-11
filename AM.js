@@ -1,4 +1,10 @@
-const { normalizeMentionJid, normalizeMentionArray, getFirstMentionedJid, getMentionHandleFromJid } = require("./services/mentionService")// =========================
+const {
+  normalizeMentionJid,
+  normalizeMentionArray,
+  getMentionHandleFromJid,
+  resolveSingleTargetFromMentionOrReply,
+} = require("./services/mentionService")
+// =========================
 // DONOS
 // =========================
 const VITIN = process.env.VITIN_ID || "183563009966181@lid"
@@ -1683,7 +1689,7 @@ ${alvosTexto}
 // =========================
 // COMANDO: !AMaddalvo 
 // =========================
-async function addAlvoAM(sock, from, message){
+async function addAlvoAM(sock, from, message, sender, botJid){
   if (!AM_ATIVADO_EM_GRUPO[from]) {
     sock.sendMessage(from, {
       text: "❌ AM não está ativado! Use *!amativar* para ativar."
@@ -1700,14 +1706,43 @@ async function addAlvoAM(sock, from, message){
     return true
   }
 
-  const mentionedJid = getFirstMentionedJid(message?.extendedTextMessage?.contextInfo || {})
+  const targetResolution = resolveSingleTargetFromMentionOrReply({
+    contextInfo: message?.extendedTextMessage?.contextInfo || {},
+    sender,
+    botJid,
+    normalizeJid: normalizeMentionJid,
+    requireSingleMention: true,
+    allowSelf: false,
+    allowBot: false,
+  })
 
-  if (!mentionedJid) {
+  if (!targetResolution.ok) {
+    if (targetResolution.reason === "multiple-mentions") {
+      sock.sendMessage(from, {
+        text: "❌ Mencione apenas 1 usuário ou responda a mensagem dele."
+      })
+      return true
+    }
+    if (targetResolution.reason === "quoted-target-missing") {
+      sock.sendMessage(from, {
+        text: "❌ Usuário não encontrado."
+      })
+      return true
+    }
+    if (targetResolution.reason === "bot-target") {
+      sock.sendMessage(from, {
+        text: "❌ O bot não pode ser alvo."
+      })
+      return true
+    }
+
     sock.sendMessage(from, {
-      text: "❌ Mencione um usuário! Exemplo: *!amaddalvo @user*"
+      text: "❌ Mencione ou responda um usuário! Exemplo: *!amaddalvo @user*"
     })
     return true
   }
+
+  const mentionedJid = targetResolution.target
 
   const jaEstaNoAlvo = alvosAM[from].some(a => a.id === mentionedJid)
 
@@ -1737,7 +1772,7 @@ async function addAlvoAM(sock, from, message){
 // =========================
 // COMANDO: !AMremovealvo 
 // =========================
-async function removeAlvoAM(sock, from, message){
+async function removeAlvoAM(sock, from, message, sender, botJid){
   if (!AM_ATIVADO_EM_GRUPO[from]) {
     sock.sendMessage(from, {
       text: "❌ AM não está ativado! Use *!amativar* para ativar."
@@ -1752,7 +1787,15 @@ async function removeAlvoAM(sock, from, message){
     return true
   }
 
-  const mentionedJid = getFirstMentionedJid(message?.extendedTextMessage?.contextInfo || {})
+  const targetResolution = resolveSingleTargetFromMentionOrReply({
+    contextInfo: message?.extendedTextMessage?.contextInfo || {},
+    sender,
+    botJid,
+    normalizeJid: normalizeMentionJid,
+    requireSingleMention: true,
+    allowSelf: false,
+    allowBot: false,
+  })
 
   if (!mentionedJid) {
     sock.sendMessage(from, {
@@ -2033,11 +2076,11 @@ async function handleAM(ctx) {
       }
 
       if (cmdName === prefix + "amaddalvo") {
-        return await addAlvoAM(sock, from, message)
+        return await addAlvoAM(sock, from, message, sender, sock.user?.id)
       }
 
       if (cmdName === prefix + "amremovealvo") {
-        return await removeAlvoAM(sock, from, message)
+        return await removeAlvoAM(sock, from, message, sender, sock.user?.id)
       }
 
       if (cmdName === prefix + "desligaram") {

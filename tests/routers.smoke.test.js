@@ -135,6 +135,204 @@ test("economy router handles !extrato for mentioned user", async () => {
   assert.match(sent[0].payload.text, /Extrato de @alvo/)
 })
 
+test("economy router handles !extrato for replied user", async () => {
+  const { sock, sent } = createSockCapture()
+  const target = "replytarget@s.whatsapp.net"
+  let statementUser = null
+
+  const handled = await handleEconomyCommands({
+    sock,
+    msg: {
+      message: {
+        extendedTextMessage: {
+          contextInfo: {
+            participant: target,
+            quotedMessage: { conversation: "Oi" },
+          },
+        },
+      },
+    },
+    from: "group@g.us",
+    sender: "autor@s.whatsapp.net",
+    cmd: "!extrato",
+    cmdName: "!extrato",
+    cmdArg1: "",
+    cmdArg2: "",
+    cmdParts: ["!extrato"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    economyService: {
+      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getStatement: (userId) => {
+        statementUser = userId
+        return [{ at: Date.now(), type: "test", deltaCoins: 5, balanceAfter: 25, details: "ok" }]
+      },
+      getGroupRanking: () => [],
+      getShopIndexText: () => "shop",
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(statementUser, target)
+  assert.equal(sent.length, 1)
+  assert.match(String(sent[0].payload?.text || ""), /Extrato de @replytarget/)
+})
+
+test("economy router resolves !doarcoins via reply and prioritizes explicit mention", async () => {
+  const { sock } = createSockCapture()
+  const transferCalls = []
+  const parseQuantity = (value, fallback = 0) => {
+    const parsed = Number.parseInt(String(value || "").trim(), 10)
+    return Number.isFinite(parsed) ? parsed : fallback
+  }
+
+  const commonCtx = {
+    sock,
+    from: "group@g.us",
+    sender: "autor@s.whatsapp.net",
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    economyService: {
+      transferCoins: (fromUser, toUser, amount) => {
+        transferCalls.push({ fromUser, toUser, amount })
+        return { ok: true, amount }
+      },
+      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getStatement: () => [],
+      getGroupRanking: () => [],
+      getShopIndexText: () => "shop",
+    },
+    parseQuantity,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  }
+
+  const replyTarget = "reply@s.whatsapp.net"
+  const mentionTarget = "mention@s.whatsapp.net"
+
+  const handledReplyOnly = await handleEconomyCommands({
+    ...commonCtx,
+    msg: {
+      message: {
+        extendedTextMessage: {
+          contextInfo: {
+            participant: replyTarget,
+            quotedMessage: { conversation: "test" },
+          },
+        },
+      },
+    },
+    cmd: "!doarcoins 12",
+    cmdName: "!doarcoins",
+    cmdArg1: "12",
+    cmdArg2: "",
+    cmdParts: ["!doarcoins", "12"],
+    mentioned: [],
+  })
+
+  const handledMentionWins = await handleEconomyCommands({
+    ...commonCtx,
+    msg: {
+      message: {
+        extendedTextMessage: {
+          contextInfo: {
+            participant: replyTarget,
+            quotedMessage: { conversation: "test" },
+          },
+        },
+      },
+    },
+    cmd: "!doarcoins @mention 20",
+    cmdName: "!doarcoins",
+    cmdArg1: "@mention",
+    cmdArg2: "20",
+    cmdParts: ["!doarcoins", "@mention", "20"],
+    mentioned: [mentionTarget],
+  })
+
+  assert.equal(handledReplyOnly, true)
+  assert.equal(handledMentionWins, true)
+  assert.equal(transferCalls.length, 2)
+  assert.deepEqual(transferCalls[0], {
+    fromUser: "autor@s.whatsapp.net",
+    toUser: replyTarget,
+    amount: 12,
+  })
+  assert.deepEqual(transferCalls[1], {
+    fromUser: "autor@s.whatsapp.net",
+    toUser: mentionTarget,
+    amount: 20,
+  })
+})
+
+test("economy router rejects !doarcoins with multiple mentions", async () => {
+  const { sock, sent } = createSockCapture()
+  let transferCalled = false
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "autor@s.whatsapp.net",
+    cmd: "!doarcoins @a @b 10",
+    cmdName: "!doarcoins",
+    cmdArg1: "@a",
+    cmdArg2: "@b",
+    cmdParts: ["!doarcoins", "@a", "@b", "10"],
+    mentioned: ["a@s.whatsapp.net", "b@s.whatsapp.net"],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    economyService: {
+      transferCoins: () => {
+        transferCalled = true
+        return { ok: true, amount: 10 }
+      },
+      getProfile: () => ({ coins: 0, shields: 0, buffs: {}, inventory: {} }),
+      getStatement: () => [],
+      getGroupRanking: () => [],
+      getShopIndexText: () => "shop",
+    },
+    parseQuantity: () => 10,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(transferCalled, false)
+  assert.equal(sent.length, 1)
+  assert.match(String(sent[0].payload?.text || ""), /Mencione apenas 1 usuário/i)
+})
+
 test("economy router handles !xp command", async () => {
   const { sock, sent } = createSockCapture()
 
@@ -4570,6 +4768,94 @@ test("moderation router protects override target even with priorities disabled",
   assert.equal(handled, true)
   assert.equal(Boolean(mutedUsers["group@g.us"]?.[protectedTarget]), false)
   assert.ok(sent.some((entry) => /não pode ser mutado/i.test(String(entry.payload?.text || ""))))
+})
+
+test("moderation router resolves !mute target from replied message", async () => {
+  const { sock, sent } = createSockCapture()
+  const mutedUsers = {}
+  const target = "replymute@s.whatsapp.net"
+
+  const handled = await handleModerationCommands({
+    sock,
+    msg: {
+      message: {
+        extendedTextMessage: {
+          contextInfo: {
+            participant: target,
+            quotedMessage: { conversation: "teste" },
+          },
+        },
+      },
+    },
+    from: "group@g.us",
+    sender: "admin@s.whatsapp.net",
+    text: "!mute",
+    cmd: "!mute",
+    cmdName: "!mute",
+    cmdArg1: "",
+    cmdArg2: "",
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: true,
+    mentioned: [],
+    jidNormalizedUser: (id) => String(id || "").split(":")[0],
+    storage: {
+      getMutedUsers: () => mutedUsers,
+      setMutedUsers: () => {},
+    },
+    clearPunishment: () => {},
+    clearPendingPunishment: () => {},
+    getPunishmentMenuText: () => "MENU",
+    getPunishmentChoiceFromText: () => null,
+    applyPunishment: async () => {},
+    overrideChecksEnabled: false,
+    overrideJid: "",
+    overrideIdentifiers: [],
+    overrideProtectedIdentifiers: [],
+  })
+
+  assert.equal(handled, true)
+  assert.equal(Boolean(mutedUsers["group@g.us"]?.[target]), true)
+  assert.ok(sent.some((entry) => /foi mutado/i.test(String(entry.payload?.text || ""))))
+})
+
+test("moderation router rejects !mute with multiple mentions", async () => {
+  const { sock, sent } = createSockCapture()
+  const mutedUsers = {}
+
+  const handled = await handleModerationCommands({
+    sock,
+    msg: { message: {} },
+    from: "group@g.us",
+    sender: "admin@s.whatsapp.net",
+    text: "!mute @a @b",
+    cmd: "!mute @a @b",
+    cmdName: "!mute",
+    cmdArg1: "@a",
+    cmdArg2: "@b",
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: true,
+    mentioned: ["a@s.whatsapp.net", "b@s.whatsapp.net"],
+    jidNormalizedUser: (id) => String(id || "").split(":")[0],
+    storage: {
+      getMutedUsers: () => mutedUsers,
+      setMutedUsers: () => {},
+    },
+    clearPunishment: () => {},
+    clearPendingPunishment: () => {},
+    getPunishmentMenuText: () => "MENU",
+    getPunishmentChoiceFromText: () => null,
+    applyPunishment: async () => {},
+    overrideChecksEnabled: false,
+    overrideJid: "",
+    overrideIdentifiers: [],
+    overrideProtectedIdentifiers: [],
+  })
+
+  assert.equal(handled, true)
+  assert.equal(Boolean(mutedUsers["group@g.us"]), false)
+  assert.ok(sent.some((entry) => /Mencione apenas 1 usuário/i.test(String(entry.payload?.text || ""))))
 })
 
 test("moderation router handles !jidsgrupo and sends JIDs in sender DM", async () => {

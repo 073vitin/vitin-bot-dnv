@@ -2284,7 +2284,7 @@ setTimeout(() => {
               console.error("Falha ao enviar !msg para admin via DM", userId, err)
             }
           }
-        } else {
+        } else if (mentionMode === "T") {
           for (const userId of users) {
             try {
               const targetJid = await resolveSendableJid(userId)
@@ -2301,13 +2301,8 @@ setTimeout(() => {
               console.error("Falha ao enviar update para usuário registrado", userId, err)
             }
           }
-
-          const sendGroups = mentionMode === "N"
-          if (!sendGroups) {
-            groupsOk = 0
-          }
+        } else if (mentionMode === "N") {
           for (const groupId of groups) {
-            if (!sendGroups) continue
             try {
               await sock.sendMessage(groupId, { text: finalText })
               groupsOk += 1
@@ -4748,6 +4743,8 @@ setTimeout(() => {
         text,
         cmd,
         cmdName,
+        cmdArg1,
+        cmdArg2,
         prefix,
         isGroup,
         senderIsAdmin,

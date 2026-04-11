@@ -142,12 +142,104 @@ function getFirstMentionedJid(contextInfo = {}, options = {}) {
   return mentions[0] || ""
 }
 
+function resolveSingleTargetFromMentionOrReply(params = {}) {
+  const {
+    mentioned = [],
+    contextInfo = {},
+    sender = "",
+    botJid = "",
+    normalizeJid,
+    requireSingleMention = true,
+    allowSelf = true,
+    allowBot = true,
+    options = {},
+  } = params || {}
+
+  const normalizeCandidate = (value = "") => {
+    const normalized = normalizeMentionJid(value, options)
+    if (normalized) return normalized
+
+    const raw = String(value || "").trim()
+    if (!raw) return ""
+    const normalizedRaw = typeof normalizeJid === "function"
+      ? String(normalizeJid(raw) || raw)
+      : raw
+    return String(normalizedRaw || "").trim().split(":")[0]
+  }
+
+  const mentionSource = Array.isArray(mentioned) && mentioned.length > 0
+    ? mentioned
+    : (Array.isArray(contextInfo?.mentionedJid) ? contextInfo.mentionedJid : [])
+
+  const explicitMentions = [...new Set(
+    mentionSource
+      .map((value) => normalizeCandidate(value))
+      .filter(Boolean)
+  )]
+
+  if (requireSingleMention && explicitMentions.length > 1) {
+    return {
+      ok: false,
+      target: "",
+      source: "mention",
+      reason: "multiple-mentions",
+      mentionCount: explicitMentions.length,
+    }
+  }
+
+  const mentionTarget = explicitMentions[0] || ""
+  const hasQuotedMessage = Boolean(contextInfo?.quotedMessage)
+  const replyTarget = normalizeCandidate(contextInfo?.participant || "")
+  const target = mentionTarget || replyTarget
+
+  if (!target) {
+    return {
+      ok: false,
+      target: "",
+      source: "none",
+      reason: hasQuotedMessage ? "quoted-target-missing" : "target-not-found",
+      mentionCount: explicitMentions.length,
+    }
+  }
+
+  const normalizedSender = normalizeCandidate(sender)
+  if (!allowSelf && normalizedSender && target === normalizedSender) {
+    return {
+      ok: false,
+      target,
+      source: mentionTarget ? "mention" : "reply",
+      reason: "self-target",
+      mentionCount: explicitMentions.length,
+    }
+  }
+
+  const normalizedBotJid = normalizeCandidate(botJid)
+  if (!allowBot && normalizedBotJid && target === normalizedBotJid) {
+    return {
+      ok: false,
+      target,
+      source: mentionTarget ? "mention" : "reply",
+      reason: "bot-target",
+      mentionCount: explicitMentions.length,
+    }
+  }
+
+  return {
+    ok: true,
+    target,
+    source: mentionTarget ? "mention" : "reply",
+    reason: "ok",
+    mentionCount: explicitMentions.length,
+  }
+}
+
 module.exports = {
   normalizeMentionJid,
   normalizeMentionArray,
   extractMentionHandlesFromText,
   applyMentionSafetyToMessage,
   getFirstMentionedJid,
+  resolveSingleTargetFromMentionOrReply,
   getMentionHandleFromJid,
   formatMentionTag,
 }

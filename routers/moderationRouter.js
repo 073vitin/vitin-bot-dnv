@@ -11,6 +11,7 @@ async function handleModerationCommands(ctx) {
     cmd,
     cmdName,
     cmdArg1,
+    cmdArg2,
     prefix,
     isGroup,
     senderIsAdmin,
@@ -380,17 +381,10 @@ async function handleModerationCommands(ctx) {
     }
 
     // Extract punishment type from arguments (M for mute, B for ban), default to M
-    // Look for B or M in the text after the mention - check cmdArg2 first (right after mention), then cmdArg1 (if no mention)
+    // Look for B or M in cmdArg2 (comes after the mention)
     let punishmentType = "mute"
-    if (mentioned[0]) {
-      // If there's a mention, the punishment type would be in cmdArg2
-      const punishmentArg = String(cmdArg2 || "").toUpperCase()
-      if (punishmentArg === "B") punishmentType = "ban"
-    } else {
-      // If no mention, check cmdArg1 for B or M
-      const punishmentArg = String(cmdArg1 || "").toUpperCase()
-      if (punishmentArg === "B") punishmentType = "ban"
-    }
+    const punishmentArg = String(cmdArg2 || "").toUpperCase()
+    if (punishmentArg === "B") punishmentType = "ban"
 
     const now = Date.now()
     const threshold = storage.getGroupVoteThreshold(from)
@@ -880,6 +874,7 @@ async function handleModerationCommands(ctx) {
     }
 
     if (!punishmentChoice) {
+      console.log("[router:moderation] punicoesadd - no punishment choice extracted", { alvo, text })
       trackModeration("punicoesadd", "rejected", { reason: "invalid-choice" })
       await sock.sendMessage(from, {
         text: "Use: !puniçõesadd [@user] <1-13> [severidade]\nEx.: !punicoesadd @user 7 3 | !punicoesadd @user 7x3\n" + getPunishmentMenuText(),
@@ -889,6 +884,7 @@ async function handleModerationCommands(ctx) {
     }
 
     if (hasExplicitSeverity && (!Number.isFinite(severityMultiplier) || severityMultiplier <= 0)) {
+      console.log("[router:moderation] punicoesadd - invalid severity", { alvo, severityMultiplier })
       trackModeration("punicoesadd", "rejected", { reason: "invalid-severity" })
       await sock.sendMessage(from, {
         text: "Severidade inválida. Use um número positivo.\nEx.: !puniçõesadd @user 7 3",
@@ -897,10 +893,12 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
+    console.log("[router:moderation] punicoesadd - applying punishment", { alvo, punishmentChoice, severityMultiplier, origin: "admin" })
     await applyPunishment(sock, from, alvo, punishmentChoice, {
       origin: "admin",
       severityMultiplier,
     })
+    console.log("[router:moderation] punicoesadd - punishment applied successfully", { alvo, punishmentChoice })
     trackModeration("punicoesadd", "success", { target: alvo, punishmentChoice })
     return true
   }

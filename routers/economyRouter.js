@@ -1,5 +1,10 @@
 const CURRENCY_LABEL = "Epsteincoins"
-const { normalizeMentionArray, getMentionHandleFromJid, formatMentionTag } = require("../services/mentionService")
+const {
+  normalizeMentionArray,
+  getMentionHandleFromJid,
+  formatMentionTag,
+  resolveSingleTargetFromMentionOrReply,
+} = require("../services/mentionService")
 const telemetry = require("../services/telemetryService")
 
 const pendingForgeTypeByUser = new Map()
@@ -564,6 +569,7 @@ function cleanupUserLinkedState(storage, userId) {
 async function handleEconomyCommands(ctx) {
   const {
     sock,
+    msg,
     from,
     sender,
     cmd,
@@ -694,6 +700,58 @@ async function handleEconomyCommands(ctx) {
 
   const registeredSenderId = resolveRegisteredSenderId()
   const mentionPreferenceUserId = registeredSenderId || sender
+  const commandContextInfo = msg?.message?.extendedTextMessage?.contextInfo || {}
+  const botJid = jidNormalizedUser(sock.user?.id || "")
+
+  const resolveSingleCommandTarget = (options = {}) => resolveSingleTargetFromMentionOrReply({
+    mentioned,
+    contextInfo: commandContextInfo,
+    sender,
+    botJid,
+    normalizeJid: jidNormalizedUser,
+    requireSingleMention: true,
+    allowSelf: options.allowSelf !== undefined ? options.allowSelf : true,
+    allowBot: options.allowBot !== undefined ? options.allowBot : true,
+  })
+
+  const sendTargetResolutionError = async (resolution, usageText = "", options = {}) => {
+    const {
+      allowMissing = false,
+      selfText = "Você não pode usar esse comando em você mesmo.",
+      botText = "🤖 Esse comando não pode ser usado no bot.",
+    } = options || {}
+
+    if (resolution?.ok) return false
+
+    const reason = String(resolution?.reason || "")
+    if (allowMissing && reason === "target-not-found") {
+      return false
+    }
+
+    if (reason === "multiple-mentions") {
+      await sock.sendMessage(from, { text: "Mencione apenas 1 usuário ou responda a mensagem dele." })
+      return true
+    }
+    if (reason === "quoted-target-missing") {
+      await sock.sendMessage(from, { text: "Usuário não encontrado." })
+      return true
+    }
+    if (reason === "self-target") {
+      await sock.sendMessage(from, { text: selfText })
+      return true
+    }
+    if (reason === "bot-target") {
+      await sock.sendMessage(from, { text: botText })
+      return true
+    }
+    if (usageText) {
+      await sock.sendMessage(from, { text: usageText })
+      return true
+    }
+
+    await sock.sendMessage(from, { text: "Usuário não encontrado." })
+    return true
+  }
 
   const normalizeRankingUserId = (userId = "") => {
     const normalizedByRegistration = typeof registrationService?.normalizeUserId === "function"
@@ -1375,13 +1433,23 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     }
 
     if (action === "accept") {
-      const requestedUser = mentioned[0]
-      const approvalTeamId = String((requestedUser ? cmdParts[3] : cmdArg2) || "").trim().toUpperCase()
+      const requestedUserResolution = resolveSingleCommandTarget({
+        allowSelf: false,
+        allowBot: false,
+      })
+      if (await sendTargetResolutionError(requestedUserResolution, "", { allowMissing: true })) {
+        return true
+      }
+
+      const requestedUser = requestedUserResolution.ok ? requestedUserResolution.target : ""
+      const approvalTeamId = String((requestedUser
+        ? (requestedUserResolution.source === "mention" ? cmdParts[3] : cmdParts[2])
+        : cmdArg2) || "").trim().toUpperCase()
 
       // Owner/lieutenant approval flow: !time aceitar @user TEAMID
       if (requestedUser) {
         if (!approvalTeamId) {
-          await sock.sendMessage(from, { text: `Use: ${prefix}${cmdName} aceitar @user <teamID>` })
+          await sock.sendMessage(from, { text: `Use: ${prefix}${cmdName} aceitar @user <teamID> (ou responda a mensagem do usuário)` })
           return true
         }
 
@@ -1482,9 +1550,16 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
     if (action === "promote") {
       const userTeamId = storage.getUserTeamId(sender)
-      const target = mentioned[0]
+      const targetResolution = resolveSingleCommandTarget({
+        allowSelf: false,
+        allowBot: false,
+      })
+      if (await sendTargetResolutionError(targetResolution, `Use: ${prefix}${cmdName} promover @user (ou responda a mensagem do usuário)`)) {
+        return true
+      }
+      const target = targetResolution.target
       if (!userTeamId || !target) {
-        await sock.sendMessage(from, { text: `Use: ${prefix}${cmdName} promover @user` })
+        await sock.sendMessage(from, { text: `Use: ${prefix}${cmdName} promover @user (ou responda a mensagem do usuário)` })
         return true
       }
       const team = storage.getTeam(userTeamId)
@@ -1512,9 +1587,16 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
     if (action === "demote") {
       const userTeamId = storage.getUserTeamId(sender)
-      const target = mentioned[0]
+      const targetResolution = resolveSingleCommandTarget({
+        allowSelf: false,
+        allowBot: false,
+      })
+      if (await sendTargetResolutionError(targetResolution, `Use: ${prefix}${cmdName} rebaixar @user (ou responda a mensagem do usuário)`)) {
+        return true
+      }
+      const target = targetResolution.target
       if (!userTeamId || !target) {
-        await sock.sendMessage(from, { text: `Use: ${prefix}${cmdName} rebaixar @user` })
+        await sock.sendMessage(from, { text: `Use: ${prefix}${cmdName} rebaixar @user (ou responda a mensagem do usuário)` })
         return true
       }
       const team = storage.getTeam(userTeamId)
@@ -2998,17 +3080,25 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     }
 
     if (!["respond", "review", "accept", "counter", "reject", "cancel", "list", "info", "help"].includes(action)) {
-      const target = mentioned[0]
-      if (!target) {
+      const targetResolution = resolveSingleCommandTarget({
+        allowSelf: false,
+        allowBot: false,
+      })
+      if (!targetResolution.ok && targetResolution.reason === "target-not-found") {
         await sendTradeUsage()
         return true
       }
+      if (await sendTargetResolutionError(targetResolution)) {
+        return true
+      }
+      const target = targetResolution.target
       if (target === sender) {
         await sock.sendMessage(from, { text: "Você não pode abrir trade com você mesmo." })
         return true
       }
 
-      const parsedOffer = parseTradeOffer(cmdParts.slice(2), economyService, limits)
+      const offerTokenStartIndex = targetResolution.source === "mention" ? 2 : 1
+      const parsedOffer = parseTradeOffer(cmdParts.slice(offerTokenStartIndex), economyService, limits)
       if (!parsedOffer.ok) {
         await sock.sendMessage(from, {
           text: "Oferta inválida. Use: !escambo @user <coins> [item:quantidade...]",
@@ -3086,7 +3176,14 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
   }
 
   if (cmdName === prefix + "perfil" && cmdArg1 !== "stats") {
-    const targetUser = mentioned[0] || sender
+    const targetResolution = resolveSingleCommandTarget({
+      allowSelf: true,
+      allowBot: false,
+    })
+    if (await sendTargetResolutionError(targetResolution, "", { allowMissing: true })) {
+      return true
+    }
+    const targetUser = targetResolution.ok ? targetResolution.target : sender
     const profile = economyService.getProfile(targetUser)
     const xp = getXpSnapshot(economyService, targetUser)
     let kronosInfo = ""
@@ -3153,7 +3250,14 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
   }
 
   if (cmdName === prefix + "extrato") {
-    const targetUser = mentioned[0] || sender
+    const targetResolution = resolveSingleCommandTarget({
+      allowSelf: true,
+      allowBot: false,
+    })
+    if (await sendTargetResolutionError(targetResolution, "", { allowMissing: true })) {
+      return true
+    }
+    const targetUser = targetResolution.ok ? targetResolution.target : sender
     const statement = economyService.getStatement(targetUser, 10)
     if (!statement.length) {
       await sock.sendMessage(from, { text: "Sem movimentações no extrato ainda." })
@@ -3348,9 +3452,24 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 
   // !criarcupom @user percentage (override-only)
   if (cmdName === prefix + "criarcupom" && isOverrideSender) {
-    const target = mentioned[0]
-    const percentage = parsePositiveInt(cmdArg2, 0)
-    if (!target || !percentage || percentage <= 0 || percentage > 100) {
+    const targetResolution = resolveSingleCommandTarget({
+      allowSelf: false,
+      allowBot: false,
+    })
+    if (await sendTargetResolutionError(
+      targetResolution,
+      `Use: ${prefix}criarcupom @user <1-100> (ou responda a mensagem do usuário)`,
+      {
+        selfText: "Você não pode criar cupom para você mesmo.",
+      }
+    )) {
+      return true
+    }
+
+    const target = targetResolution.target
+    const percentageIndex = targetResolution.source === "mention" ? 2 : 1
+    const percentage = parsePositiveInt(cmdParts[percentageIndex], 0)
+    if (!percentage || percentage <= 0 || percentage > 100) {
       await sock.sendMessage(from, {
         text: `Use: ${prefix}criarcupom @user <1-100>`,
       })
@@ -3459,10 +3578,26 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
   }
 
   if (cmdName === prefix + "comprarpara" && isGroup) {
-    const target = mentioned[0]
-    const item = cmdParts[2] || ""
-    const quantity = parseQuantity(cmdParts[3], 1)
-    if (!target || !item) {
+    const targetResolution = resolveSingleCommandTarget({
+      allowSelf: false,
+      allowBot: false,
+    })
+    if (await sendTargetResolutionError(
+      targetResolution,
+      "Use: !comprarpara @user <item> [quantidade]",
+      {
+        selfText: "Você não pode comprar para você mesmo.",
+      }
+    )) {
+      return true
+    }
+
+    const target = targetResolution.target
+    const itemIndex = targetResolution.source === "mention" ? 2 : 1
+    const quantityIndex = targetResolution.source === "mention" ? 3 : 2
+    const item = cmdParts[itemIndex] || ""
+    const quantity = parseQuantity(cmdParts[quantityIndex], 1)
+    if (!item) {
       await sock.sendMessage(from, {
         text: "Use: !comprarpara @user <item> [quantidade]",
       })
@@ -3564,9 +3699,24 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
   }
 
   if (cmdName === prefix + "doarcoins" && isGroup) {
-    const target = mentioned[0]
-    const quantity = parseQuantity(cmdParts[2], 1)
-    if (!target || quantity <= 0) {
+    const targetResolution = resolveSingleCommandTarget({
+      allowSelf: false,
+      allowBot: false,
+    })
+    if (await sendTargetResolutionError(
+      targetResolution,
+      "Use: !doarcoins @user [quantidade]",
+      {
+        selfText: "Você não pode doar para você mesmo.",
+      }
+    )) {
+      return true
+    }
+
+    const target = targetResolution.target
+    const quantityIndex = targetResolution.source === "mention" ? 2 : 1
+    const quantity = parseQuantity(cmdParts[quantityIndex], 1)
+    if (quantity <= 0) {
       await sock.sendMessage(from, { text: "Use: !doarcoins @user [quantidade]" })
       return true
     }
@@ -3591,10 +3741,26 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
   }
 
   if (cmdName === prefix + "doaritem" && isGroup) {
-    const target = mentioned[0]
-    const item = cmdParts[2] || ""
-    const quantity = parseQuantity(cmdParts[3], 1)
-    if (!target || !item) {
+    const targetResolution = resolveSingleCommandTarget({
+      allowSelf: false,
+      allowBot: false,
+    })
+    if (await sendTargetResolutionError(
+      targetResolution,
+      "Use: !doaritem @user <item> [quantidade]",
+      {
+        selfText: "Você não pode doar item para você mesmo.",
+      }
+    )) {
+      return true
+    }
+
+    const target = targetResolution.target
+    const itemIndex = targetResolution.source === "mention" ? 2 : 1
+    const quantityIndex = targetResolution.source === "mention" ? 3 : 2
+    const item = cmdParts[itemIndex] || ""
+    const quantity = parseQuantity(cmdParts[quantityIndex], 1)
+    if (!item) {
       await sock.sendMessage(from, { text: "Use: !doaritem @user <item> [quantidade]" })
       return true
     }
@@ -3621,7 +3787,21 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
   }
 
   if (cmdName === prefix + "roubar" && isGroup) {
-    const target = mentioned[0]
+    const targetResolution = resolveSingleCommandTarget({
+      allowSelf: false,
+      allowBot: false,
+    })
+    if (await sendTargetResolutionError(
+      targetResolution,
+      "Use: !roubar @user",
+      {
+        selfText: "Você não pode roubar você mesmo.",
+      }
+    )) {
+      return true
+    }
+
+    const target = targetResolution.target
     if (!target) {
       await sock.sendMessage(from, { text: "Use: !roubar @user" })
       return true
@@ -4692,14 +4872,27 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
   }
 
   if (cmdName === prefix + "usarpasse" && isGroup) {
-    const target = mentioned[0]
-    const passType = Number.parseInt(cmdParts[2] || "", 10)
-    const passSeverity = parseQuantity(cmdParts[3], 1)
-    const botId = jidNormalizedUser(sock.user?.id || "")
-    if (!target) {
-      await sock.sendMessage(from, { text: "Use: !usarpasse @user <tipo 1-13> <severidade>" })
+    const targetResolution = resolveSingleCommandTarget({
+      allowSelf: false,
+      allowBot: false,
+    })
+    if (await sendTargetResolutionError(
+      targetResolution,
+      "Use: !usarpasse @user <tipo 1-13> <severidade>",
+      {
+        selfText: "Você não pode aplicar passe de punição em você mesmo.",
+        botText: "🤖 O bot não pode receber punições administrativas.",
+      }
+    )) {
       return true
     }
+
+    const target = targetResolution.target
+    const passTypeIndex = targetResolution.source === "mention" ? 2 : 1
+    const passSeverityIndex = targetResolution.source === "mention" ? 3 : 2
+    const passType = Number.parseInt(cmdParts[passTypeIndex] || "", 10)
+    const passSeverity = parseQuantity(cmdParts[passSeverityIndex], 1)
+    const botId = jidNormalizedUser(sock.user?.id || "")
     if (jidNormalizedUser(target) === botId) {
       await sock.sendMessage(from, { text: "🤖 O bot não pode receber punições administrativas." })
       return true
