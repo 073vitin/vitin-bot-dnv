@@ -1808,16 +1808,65 @@ async function startBot(){
   if (!fs.existsSync(authDir)) {
     fs.mkdirSync(authDir, { recursive: true })
   }
+  console.log("[startBot] Loading auth state from:", authDir)
   const { state, saveCreds } = await useMultiFileAuthState(authDir)
-  const { version } = await fetchLatestBaileysVersion()
+  console.log("[startBot] Auth state loaded")
+  
+  console.log("[startBot] Fetching latest Baileys version...")
+  let versionInfo = null
+  try {
+    versionInfo = await fetchLatestBaileysVersion()
+    console.log("[startBot] Baileys version info:", JSON.stringify(versionInfo, null, 2))
+  } catch (versionErr) {
+    console.warn("[startBot] Error fetching version:", versionErr?.message)
+    console.log("[startBot] Continuing with default/empty version")
+    versionInfo = {}
+  }
+  
+  const version = versionInfo?.version || versionInfo
 
-  const sock = makeWASocket({
-    version,
-    auth: state,
-    logger,
-    printQRInTerminal:false,
-    browser:["VitinBot","Chrome","1.0"]
-  })
+  try {
+    console.log("[startBot] Creating WhatsApp socket connection...")
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      logger,
+      printQRInTerminal: false,
+      browser: ["VitinBot", "Chrome", "1.0"],
+      connectTimeoutMs: 60000,
+    })
+    
+    if (!sock || typeof sock !== 'object') {
+      throw new Error("Socket creation failed - returned invalid object: " + typeof sock)
+    }
+    
+    if (!sock.ev || typeof sock.ev !== 'object') {
+      throw new Error("Socket.ev not available - socket object incomplete")
+    }
+    
+    // Add a safety timeout for initial connection
+    const connectionTimeout = setTimeout(() => {
+      console.error("[startBot] Socket creation timeout - no connection event after 90s")
+      if (typeof sock?.ws?.close === 'function') {
+        try {
+          sock.ws.close()
+        } catch (e) {
+          console.error("[startBot] Error closing socket:", e)
+        }
+      }
+    }, 90000)
+    
+    // Clear timeout once connected (use on instead of once)
+    const clearTimeoutOnceConnected = () => {
+      clearTimeout(connectionTimeout)
+      if (typeof sock?.ev?.off === 'function') {
+        sock.ev.off("connection.update", clearTimeoutOnceConnected)
+      }
+    }
+    
+    if (typeof sock.ev?.on === 'function') {
+      sock.ev.on("connection.update", clearTimeoutOnceConnected)
+    }
 
   // keep a reference for graceful shutdown and external checks
   activeSock = sock
@@ -1903,22 +1952,42 @@ async function startBot(){
 
   sock.ev.on("creds.update", saveCreds)
 
+  // Error event handlers
+  sock.ev.on("connection.error", (error) => {
+    console.error("[connection.error] WebSocket/Connection error:", error?.message || error)
+  })
+
+  if (sock.ws) {
+    sock.ws.on("error", (error) => {
+      console.error("[ws.error] WebSocket error:", error?.message || error)
+    })
+    sock.ws.on("close", () => {
+      console.log("[ws.close] WebSocket closed")
+    })
+  }
+
   sock.ev.on("connection.update", async(update)=>{
     const { connection, qr, lastDisconnect } = update
     if (connection) {
       perfStats.connectionState = connection
+      console.log("[connection.update] Connection state:", connection)
     }
 
     if(qr){
-      qrImage = await QRCode.toDataURL(qr)
-      // keep a short-lived fallback in case the UI polls right after generation
-      _lastGeneratedQr = qrImage
-      _lastGeneratedQrAt = Date.now()
-      console.log("QR GERADO")
+      console.log("[connection.update] QR code received, generating image...")
+      try {
+        qrImage = await QRCode.toDataURL(qr)
+        // keep a short-lived fallback in case the UI polls right after generation
+        _lastGeneratedQr = qrImage
+        _lastGeneratedQrAt = Date.now()
+        console.log("[connection.update] ✓ QR GERADO - Aguardando scan na página http://localhost:3000")
+      } catch (err) {
+        console.error("[connection.update] Erro ao gerar QR code:", err)
+      }
     }
 
     if(connection === "open"){
-      console.log("BOT ONLINE")
+      console.log("[connection.update] ✓ BOT ONLINE - Conectado ao WhatsApp")
       qrImage = null
       perfStats.connectedAt = Date.now()
       if (!perfStats.authenticatedAt) {
@@ -1947,12 +2016,15 @@ async function startBot(){
       }
       persistLifetimeStats()
       const reason = lastDisconnect?.error?.output?.statusCode
+      console.log("[connection.update] Bot disconnected. Reason code:", reason, "Error:", lastDisconnect?.error?.message || "unknown")
       if(reason !== DisconnectReason.loggedOut){
-        console.log("Reconectando...")
+        console.log("[connection.update] Reconnecting in 5s...")
         botIniciado = false
 setTimeout(() => {
   startBot()
 }, 5000)
+      } else {
+        console.log("[connection.update] Bot was logged out. Clearing auth and restart needed.")
       }
     }
   })
@@ -4937,5 +5009,15 @@ if (handledWeaponsCommand) return;
 
     await Promise.allSettled(queuedTasks)
   })
+  } catch (err) {
+    console.error("[startBot] Fatal error during socket initialization:", err?.message || err)
+    console.error("[startBot] Stack:", err?.stack)
+    botIniciado = false
+    // Attempt restart after delay
+    setTimeout(() => {
+      console.log("[startBot] Attempting restart after error...")
+      startBot()
+    }, 5000)
+  }
 }
 startBot()

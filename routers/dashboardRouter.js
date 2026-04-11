@@ -55,13 +55,13 @@ function registerDashboardRoutes(app, options = {}) {
   app.use("/public", express.static(staticDir))
 
   app.get("/profiler-data", (req, res) => {
-    logDashboardHeaders("/profiler-data", req)
+    //logDashboardHeaders("/profiler-data", req)
     res.setHeader("Content-Type", "application/json; charset=utf-8")
     res.json(getDashboardPayload())
   })
 
   app.get("/dashboard-data", (req, res) => {
-    logDashboardHeaders("/dashboard-data", req)
+    //logDashboardHeaders("/dashboard-data", req)
     res.setHeader("Content-Type", "application/json; charset=utf-8")
     res.json(getDashboardPayload())
   })
