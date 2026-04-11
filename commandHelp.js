@@ -622,12 +622,12 @@ blackjack: {
   unblock: {
     name: "Desbloquear",
     aliases: ["unblock"],
-    description: "[Admin] Desbloqueia um usuário",
+    description: "[Override] Desbloqueia um usuário",
     usage: "!unblock @user",
     commonUsage: [
       "!unblock @usuario - Desbloquear",
     ],
-    details: "Admin only.",
+    details: "Override only.",
   },
 
   punicoes: {

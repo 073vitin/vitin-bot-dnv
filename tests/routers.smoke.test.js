@@ -4905,6 +4905,88 @@ test("moderation router rejects !block for non-override sender", async () => {
   assert.ok(sent.some((entry) => /Apenas overrides podem usar esse comando/i.test(String(entry.payload?.text || ""))))
 })
 
+test("moderation router unblocks user globally with !unblock", async () => {
+  const { sock, sent } = createSockCapture()
+  const target = "alvo@s.whatsapp.net"
+  const removed = []
+
+  const handled = await handleModerationCommands({
+    sock,
+    msg: { message: {} },
+    from: "group@g.us",
+    sender: "override@s.whatsapp.net",
+    text: "!unblock @alvo",
+    cmd: "!unblock @alvo",
+    cmdName: "!unblock",
+    cmdArg1: "",
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    mentioned: [target],
+    jidNormalizedUser: (id) => String(id || "").split(":")[0],
+    storage: {
+      removeGlobalBlockedUsers: (identities) => {
+        removed.push(...identities)
+        return identities
+      },
+    },
+    clearPunishment: () => {},
+    clearPendingPunishment: () => {},
+    getPunishmentMenuText: () => "MENU",
+    getPunishmentChoiceFromText: () => null,
+    applyPunishment: async () => {},
+    overrideChecksEnabled: true,
+    overrideJid: "override@s.whatsapp.net",
+    overrideIdentifiers: ["override@s.whatsapp.net"],
+  })
+
+  assert.equal(handled, true)
+  assert.ok(removed.includes(target))
+  assert.ok(removed.includes("alvo"))
+  assert.ok(removed.includes("alvo@s.whatsapp.net"))
+  assert.ok(removed.includes("alvo@lid"))
+  assert.ok(sent.some((entry) => /foi desbloqueado para comandos/i.test(String(entry.payload?.text || ""))))
+})
+
+test("moderation router rejects !unblock for non-override sender", async () => {
+  const { sock, sent } = createSockCapture()
+  const removed = []
+
+  const handled = await handleModerationCommands({
+    sock,
+    msg: { message: {} },
+    from: "group@g.us",
+    sender: "admin@s.whatsapp.net",
+    text: "!unblock @alvo",
+    cmd: "!unblock @alvo",
+    cmdName: "!unblock",
+    cmdArg1: "",
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: true,
+    mentioned: ["alvo@s.whatsapp.net"],
+    jidNormalizedUser: (id) => String(id || "").split(":")[0],
+    storage: {
+      removeGlobalBlockedUsers: (identities) => {
+        removed.push(...identities)
+        return identities
+      },
+    },
+    clearPunishment: () => {},
+    clearPendingPunishment: () => {},
+    getPunishmentMenuText: () => "MENU",
+    getPunishmentChoiceFromText: () => null,
+    applyPunishment: async () => {},
+    overrideChecksEnabled: true,
+    overrideJid: "override@s.whatsapp.net",
+    overrideIdentifiers: ["override@s.whatsapp.net"],
+  })
+
+  assert.equal(handled, true)
+  assert.equal(removed.length, 0)
+  assert.ok(sent.some((entry) => /Apenas overrides podem usar esse comando/i.test(String(entry.payload?.text || ""))))
+})
+
 test("moderation router lists blocked phone numbers with !bloqueadosfones", async () => {
   const { sock, sent } = createSockCapture()
 

@@ -287,9 +287,9 @@ async function handleModerationCommands(ctx) {
   }
 
   if (cmdName === prefix + "unblock") {
-    if (!senderIsAdmin) {
-      trackModeration("unblock", "rejected", { reason: "not-admin" })
-      await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
+    if (!isOverrideSender) {
+      trackModeration("unblock", "rejected", { reason: "not-override" })
+      await sock.sendMessage(from, { text: "Apenas overrides podem usar esse comando." })
       return true
     }
 
