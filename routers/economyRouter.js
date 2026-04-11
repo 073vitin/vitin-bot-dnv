@@ -761,38 +761,67 @@ async function handleEconomyCommands(ctx) {
   }
 
   const getRankingIdentity = (userId = "", options = {}) => {
+    const normalizedRankingUserId = normalizeRankingUserId(userId)
     const isRegistered = typeof registrationService?.isRegistered === "function"
-      ? registrationService.isRegistered(userId)
+      ? (
+        registrationService.isRegistered(userId) ||
+        (normalizedRankingUserId && normalizedRankingUserId !== userId && registrationService.isRegistered(normalizedRankingUserId))
+      )
       : true
-    if (!isRegistered) return { visible: false, label: "", mentionId: null }
-
-    const mentionOptIn = typeof economyService.isMentionOptIn === "function"
-      ? economyService.isMentionOptIn(userId)
-      : true
-
-    const profile = typeof economyService.getProfile === "function"
-      ? economyService.getProfile(userId)
-      : null
-    const publicLabel = String(profile?.preferences?.publicLabel || "").trim()
-    const registeredEntry = typeof registrationService?.getRegisteredEntry === "function"
-      ? registrationService.getRegisteredEntry(userId)
-      : null
-    const knownName = String(registeredEntry?.lastKnownName || "").trim()
-    const stableLabel = typeof economyService.getStablePublicLabel === "function"
-      ? economyService.getStablePublicLabel(userId)
-      : (getMentionHandleFromJid(String(userId || "")) || "Jogador")
-    const publicIdentityLabel = publicLabel || knownName || stableLabel
-    const requirePublicIdentity = Boolean(options?.requirePublicIdentity)
 
     const mentionJidByNormalized = options?.mentionJidByNormalized instanceof Map
       ? options.mentionJidByNormalized
       : null
+    const mentionJid = mentionJidByNormalized
+      ? mentionJidByNormalized.get(normalizedRankingUserId) || mentionJidByNormalized.get(jidNormalizedUser(userId)) || null
+      : userId
+
+    const mentionOptIn = (() => {
+      if (!isRegistered) return false
+      if (typeof economyService.isMentionOptIn !== "function") return true
+      const direct = economyService.isMentionOptIn(userId)
+      if (direct) return true
+      if (normalizedRankingUserId && normalizedRankingUserId !== userId) {
+        return Boolean(economyService.isMentionOptIn(normalizedRankingUserId))
+      }
+      return Boolean(direct)
+    })()
+
+    const directProfile = typeof economyService.getProfile === "function"
+      ? economyService.getProfile(userId)
+      : null
+    const normalizedProfile = typeof economyService.getProfile === "function" && normalizedRankingUserId && normalizedRankingUserId !== userId
+      ? economyService.getProfile(normalizedRankingUserId)
+      : null
+    const profile = String(directProfile?.preferences?.publicLabel || "").trim()
+      ? directProfile
+      : (String(normalizedProfile?.preferences?.publicLabel || "").trim() ? normalizedProfile : (directProfile || normalizedProfile))
+    const publicLabel = String(profile?.preferences?.publicLabel || "").trim()
+    const directRegisteredEntry = typeof registrationService?.getRegisteredEntry === "function"
+      ? registrationService.getRegisteredEntry(userId)
+      : null
+    const normalizedRegisteredEntry = typeof registrationService?.getRegisteredEntry === "function" && normalizedRankingUserId && normalizedRankingUserId !== userId
+      ? registrationService.getRegisteredEntry(normalizedRankingUserId)
+      : null
+    const registeredEntry = String(directRegisteredEntry?.lastKnownName || "").trim()
+      ? directRegisteredEntry
+      : (String(normalizedRegisteredEntry?.lastKnownName || "").trim() ? normalizedRegisteredEntry : (directRegisteredEntry || normalizedRegisteredEntry))
+    const knownName = String(registeredEntry?.lastKnownName || "").trim()
+    let stableLabel = ""
+    if (isRegistered && typeof economyService.getStablePublicLabel === "function") {
+      stableLabel = String(economyService.getStablePublicLabel(normalizedRankingUserId || userId) || "").trim()
+    }
+    if (!stableLabel) {
+      const fallbackJid = mentionJid || normalizedRankingUserId || userId
+      stableLabel = String(getMentionHandleFromJid(String(fallbackJid || "")) || "").split(":")[0].trim()
+    }
+    if (!stableLabel) {
+      stableLabel = "Jogador"
+    }
+    const publicIdentityLabel = publicLabel || knownName || stableLabel
+    const requirePublicIdentity = Boolean(options?.requirePublicIdentity)
 
     if (mentionOptIn) {
-      const normalizedRankingUserId = normalizeRankingUserId(userId)
-      const mentionJid = mentionJidByNormalized
-        ? mentionJidByNormalized.get(normalizedRankingUserId) || mentionJidByNormalized.get(jidNormalizedUser(userId)) || null
-        : userId
       if (mentionJid) {
         const tag = getMentionHandleFromJid(String(mentionJid)).split(":")[0]
         if (!tag) return { visible: false, label: "", mentionId: null }

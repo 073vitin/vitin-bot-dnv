@@ -883,6 +883,69 @@ test("economy router !coinsranking falls back to nickname when mention jid is no
   assert.deepEqual(sent[0].payload?.mentions || [], [])
 })
 
+test("economy router !coinsranking shows top unregistered participant in group list", async () => {
+  const { sock, sent } = createSockCapture()
+  sock.groupMetadata = async () => ({
+    participants: [
+      { id: "caller@s.whatsapp.net" },
+      { id: "toprich@s.whatsapp.net" },
+    ],
+  })
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "caller@s.whatsapp.net",
+    cmd: "!coinsranking",
+    cmdName: "!coinsranking",
+    cmdArg1: "",
+    cmdArg2: "",
+    cmdParts: ["!coinsranking"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    registrationService: {
+      isRegistered: (userId) => userId === "caller@s.whatsapp.net",
+      getRegisteredEntry: (userId) => {
+        if (userId === "caller@s.whatsapp.net") return { lastKnownName: "Caller" }
+        return null
+      },
+    },
+    economyService: {
+      getGroupRanking: () => ([
+        { userId: "toprich@s.whatsapp.net", coins: 30000 },
+        { userId: "caller@s.whatsapp.net", coins: 1200 },
+      ]),
+      getUserGlobalPosition: () => 2,
+      isMentionOptIn: (userId) => userId === "caller@s.whatsapp.net",
+      getProfile: (userId) => ({
+        preferences: {
+          publicLabel: userId === "caller@s.whatsapp.net" ? "CallerNick" : "",
+        },
+      }),
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(sent.length, 1)
+  const text = String(sent[0].payload?.text || "")
+  assert.match(text, /30000/)
+  assert.match(text, /toprich/i)
+  assert.match(text, /posição no grupo: \*2\*/i)
+})
+
 test("economy router handles !guia command and sends three DM sections", async () => {
   const { sock, sent } = createSockCapture()
 
