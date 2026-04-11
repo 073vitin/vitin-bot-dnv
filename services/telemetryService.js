@@ -1,5 +1,6 @@
 const fs = require("fs")
 const path = require("path")
+const { getMentionHandleFromJid } = require("./mentionService")
 
 const DATA_DIR = path.join(__dirname, ".data")
 const TELEMETRY_DIR = path.join(DATA_DIR, "telemetry")

@@ -1,5 +1,6 @@
 const telemetry = require("../services/telemetryService")
 const { getCommandHelp, getPublicCommandNames } = require("../commandHelp")
+const fs = require("fs")
 const os = require("os")
 const child_process = require("child_process")
 const { normalizeUserId } = require("../services/registrationService")
@@ -34,6 +35,139 @@ const BUG_BOUNTY_IGNORE_REASONS = Object.freeze({
 let questionInboxStateFallback = { questions: {} }
 let enqueteInboxStateFallback = { enquetes: {} }
 let bugBountyStateFallback = { reports: {} }
+const PERF_DISK_INFO_CACHE_TTL_MS = 60 * 1000
+let perfDiskInfoCache = {
+  value: null,
+  expiresAt: 0,
+}
+
+function parseMessageTimestampMs(ts) {
+  if (typeof ts === "number") return ts * 1000
+  if (typeof ts === "bigint") return Number(ts) * 1000
+  if (typeof ts === "string") {
+    const parsed = Number.parseInt(ts, 10)
+    return Number.isFinite(parsed) ? parsed * 1000 : 0
+  }
+  if (ts && typeof ts === "object") {
+    if (typeof ts.toNumber === "function") {
+      const parsed = Number(ts.toNumber())
+      return Number.isFinite(parsed) ? parsed * 1000 : 0
+    }
+    const parsed = Number(ts.low)
+    return Number.isFinite(parsed) ? parsed * 1000 : 0
+  }
+  return 0
+}
+
+function getPerfLatencySnapshot(msg = {}) {
+  const timestampMs = parseMessageTimestampMs(msg?.messageTimestamp)
+  if (!timestampMs) {
+    return {
+      measuredMs: 0,
+      lowerBoundMs: 0,
+      upperBoundMs: 0,
+      hasTimestamp: false,
+    }
+  }
+
+  // WhatsApp timestamps are second-based, so measured latency can be overestimated by up to 999ms.
+  const measuredMs = Math.max(0, Date.now() - timestampMs)
+  return {
+    measuredMs,
+    lowerBoundMs: Math.max(0, measuredMs - 999),
+    upperBoundMs: measuredMs,
+    hasTimestamp: true,
+  }
+}
+
+function formatUptime(sec) {
+  sec = Math.floor(sec)
+  const days = Math.floor(sec / 86400)
+  sec %= 86400
+  const hours = Math.floor(sec / 3600)
+  sec %= 3600
+  const minutes = Math.floor(sec / 60)
+  const seconds = sec % 60
+  const parts = []
+  if (days) parts.push(`${days}d`)
+  if (hours) parts.push(`${hours}h`)
+  if (minutes) parts.push(`${minutes}m`)
+  parts.push(`${seconds}s`)
+  return parts.join(" ")
+}
+
+function getDiskInfoViaStatfs() {
+  if (typeof fs.statfsSync !== "function") return null
+  try {
+    const stats = fs.statfsSync(process.cwd())
+    const blockSize = Number(stats?.bsize || stats?.frsize || 0)
+    const blocks = Number(stats?.blocks || 0)
+    const freeBlocks = Number(stats?.bavail || stats?.bfree || 0)
+    if (!Number.isFinite(blockSize) || blockSize <= 0) return null
+    if (!Number.isFinite(blocks) || blocks <= 0) return null
+    if (!Number.isFinite(freeBlocks) || freeBlocks < 0) return null
+
+    return {
+      size: blockSize * blocks,
+      free: blockSize * freeBlocks,
+    }
+  } catch (_err) {
+    return null
+  }
+}
+
+function getDiskInfoViaCommand() {
+  try {
+    if (process.platform === "win32") {
+      const cwd = process.cwd()
+      const drive = cwd[0].toUpperCase()
+      const out = child_process.execFileSync("wmic", ["logicaldisk", "get", "Caption,FreeSpace,Size", "/format:csv"], { encoding: "utf8" })
+      const lines = out.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+      for (const line of lines.slice(1)) {
+        const parts = line.split(",")
+        const caption = parts[1]
+        const free = Number(parts[2])
+        const size = Number(parts[3])
+        if (caption && caption.toUpperCase().startsWith(`${drive}:`)) {
+          return { free, size }
+        }
+      }
+      for (const line of lines.slice(1)) {
+        const parts = line.split(",")
+        const free = Number(parts[2])
+        const size = Number(parts[3])
+        if (Number.isFinite(size)) return { free, size }
+      }
+      return null
+    }
+
+    const out = child_process.execFileSync("df", ["-k", process.cwd()], { encoding: "utf8" })
+    const rows = out.trim().split(/\r?\n/)
+    const last = rows[rows.length - 1]
+    const cols = last.trim().split(/\s+/)
+    const size = Number(cols[1]) * 1024
+    const free = Number(cols[3]) * 1024
+    if (!Number.isFinite(size) || size <= 0) return null
+    if (!Number.isFinite(free) || free < 0) return null
+    return { size, free }
+  } catch (_err) {
+    return null
+  }
+}
+
+function getDiskInfoCached() {
+  const now = Date.now()
+  if (perfDiskInfoCache.expiresAt > now) {
+    return perfDiskInfoCache.value
+  }
+
+  const nextValue = getDiskInfoViaStatfs() || getDiskInfoViaCommand()
+  perfDiskInfoCache = {
+    value: nextValue,
+    expiresAt: now + PERF_DISK_INFO_CACHE_TTL_MS,
+  }
+  return nextValue
+}
 
 function generateQuestionId() {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -2003,81 +2137,9 @@ ${feedbackText}`,
   }
 
   if (cmd === prefix + "perf") {
-    function parseMessageTimestampMs(ts) {
-      if (typeof ts === "number") return ts * 1000
-      if (typeof ts === "bigint") return Number(ts) * 1000
-      if (typeof ts === "string") {
-        const parsed = Number.parseInt(ts, 10)
-        return Number.isFinite(parsed) ? parsed * 1000 : 0
-      }
-      if (ts && typeof ts === "object") {
-        if (typeof ts.toNumber === "function") {
-          const parsed = Number(ts.toNumber())
-          return Number.isFinite(parsed) ? parsed * 1000 : 0
-        }
-        const parsed = Number(ts.low)
-        return Number.isFinite(parsed) ? parsed * 1000 : 0
-      }
-      return 0
-    }
-
-    const messageTsMs = parseMessageTimestampMs(msg?.messageTimestamp)
-    const latencyMs = messageTsMs ? Math.max(0, Date.now() - messageTsMs) : 0
-
-    function formatUptime(sec) {
-      sec = Math.floor(sec)
-      const days = Math.floor(sec / 86400)
-      sec %= 86400
-      const hours = Math.floor(sec / 3600)
-      sec %= 3600
-      const minutes = Math.floor(sec / 60)
-      const seconds = sec % 60
-      const parts = []
-      if (days) parts.push(`${days}d`)
-      if (hours) parts.push(`${hours}h`)
-      if (minutes) parts.push(`${minutes}m`)
-      parts.push(`${seconds}s`)
-      return parts.join(" ")
-    }
-
-    function getDiskInfo() {
-      try {
-        if (process.platform === "win32") {
-          const cwd = process.cwd()
-          const drive = cwd[0].toUpperCase()
-          const out = child_process.execSync('wmic logicaldisk get Caption,FreeSpace,Size /format:csv', { encoding: "utf8" })
-          const lines = out.trim().split(/\r?\n/).map(l => l.trim()).filter(Boolean)
-          for (const line of lines.slice(1)) {
-            const parts = line.split(",")
-            const caption = parts[1]
-            const free = Number(parts[2])
-            const size = Number(parts[3])
-            if (caption && caption.toUpperCase().startsWith(`${drive}:`)) {
-              return { free, size }
-            }
-          }
-          for (const line of lines.slice(1)) {
-            const parts = line.split(",")
-            const free = Number(parts[2])
-            const size = Number(parts[3])
-            if (Number.isFinite(size)) return { free, size }
-          }
-        } else {
-          const out = child_process.execSync(`df -k ${process.cwd()}`, { encoding: "utf8" })
-          const rows = out.trim().split(/\r?\n/)
-          const last = rows[rows.length - 1]
-          const cols = last.trim().split(/\s+/)
-          const size = Number(cols[1]) * 1024
-          const free = Number(cols[3]) * 1024
-          return { size, free }
-        }
-      } catch (err) {
-        return null
-      }
-      return null
-    }
-
-    const disk = getDiskInfo()
+    const perfCommandStartedAt = Date.now()
+    const latencySnapshot = getPerfLatencySnapshot(msg)
+    const disk = getDiskInfoCached()
     const totalStorageText = disk && Number.isFinite(disk.size)
       ? `${Math.round(disk.size / 1024 / 1024)}MB`
       : "N/A"
@@ -2089,6 +2151,13 @@ ${feedbackText}`,
     const totalRamMB = Math.round(os.totalmem() / 1024 / 1024)
 
     const uptimeText = formatUptime(process.uptime())
+    const localProcessingMs = Math.max(0, Date.now() - perfCommandStartedAt)
+    const latencyLine = latencySnapshot.hasTimestamp
+      ? `${latencySnapshot.measuredMs}ms`
+      : "N/A"
+    const latencyBoundsLine = latencySnapshot.hasTimestamp
+      ? `${latencySnapshot.lowerBoundMs}ms - ${latencySnapshot.upperBoundMs}ms`
+      : "N/A"
     const hours = new Date().getHours()
     const greeting = hours >= 5 && hours < 12 ? "bom dia" : hours >= 12 && hours < 18 ? "boa tarde" : "boa noite"
     const userShort = getMentionHandleFromJid(String(sender || ""))
@@ -2100,7 +2169,9 @@ ${feedbackText}`,
 ║        🤖 V.I.R.J.E.N.S ONLINE 🤖
 ║
 ║ ⚡ PERFORMANCE
-║ ├ 💨 Resposta: ${latencyMs}ms
+║ ├ 💨 Resposta (WA): ${latencyLine}
+║ ├ 🧭 Faixa real: ${latencyBoundsLine}
+║ ├ ⚙️ Processamento local: ${localProcessingMs}ms
 ║ └ ⏳ Uptime: ${uptimeText}
 ║
 ║ 💻 SISTEMA  
@@ -2114,7 +2185,11 @@ ${feedbackText}`,
 ╚┉✼┉═══༺◈✼☁️✼◈༻═══┉✼┉╝`
 
     await sock.sendMessage(from, { text: box, mentions: normalizeMentionArray([sender]) })
-    trackUtility("perf", "success", { latencyMs })
+    trackUtility("perf", "success", {
+      latencyMs: latencySnapshot.measuredMs,
+      latencyMinMs: latencySnapshot.lowerBoundMs,
+      localProcessingMs,
+    })
     return true
   }
 
