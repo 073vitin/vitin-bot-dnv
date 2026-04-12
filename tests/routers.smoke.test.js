@@ -482,7 +482,159 @@ test("economy router handles !xpranking command", async () => {
   assert.equal(sent.length, 1)
   assert.match(String(sent[0].payload?.text || ""), /Ranking de XP/)
   assert.match(String(sent[0].payload?.text || ""), /Nível 5/)
-  assert.match(String(sent[0].payload?.text || ""), /posição global de XP/i)
+  assert.match(String(sent[0].payload?.text || ""), /posição de XP no grupo/i)
+})
+
+test("economy router !coinsranking local uses group scope when argument is provided", async () => {
+  const { sock, sent } = createSockCapture()
+  sock.groupMetadata = async () => ({
+    participants: [
+      { id: "autor@s.whatsapp.net" },
+      { id: "alvo@s.whatsapp.net" },
+    ],
+  })
+
+  let groupCalls = 0
+  let globalCalls = 0
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "autor@s.whatsapp.net",
+    cmd: "!coinsranking local",
+    cmdName: "!coinsranking",
+    cmdArg1: "local",
+    cmdArg2: "",
+    cmdParts: ["!coinsranking", "local"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    registrationService: {
+      isRegistered: () => true,
+      getRegisteredEntry: (userId) => ({
+        lastKnownName: userId.startsWith("autor") ? "Autor" : "Alvo",
+      }),
+    },
+    economyService: {
+      getGroupRanking: () => {
+        groupCalls += 1
+        return [
+          { userId: "autor@s.whatsapp.net", coins: 950 },
+          { userId: "alvo@s.whatsapp.net", coins: 800 },
+        ]
+      },
+      getGlobalRanking: () => {
+        globalCalls += 1
+        return [
+          { userId: "global1@s.whatsapp.net", coins: 9999 },
+        ]
+      },
+      getUserGlobalPosition: () => 4,
+      getStablePublicLabel: (userId) => (userId.startsWith("autor") ? "AUTOR" : "ALVO"),
+      isMentionOptIn: () => true,
+      getProfile: (userId) => ({
+        preferences: {
+          publicLabel: userId === "autor@s.whatsapp.net" ? "AutorNick" : "",
+        },
+      }),
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(sent.length, 1)
+  const text = String(sent[0].payload?.text || "")
+  assert.match(text, /Ranking de Epsteincoins \(local\)/i)
+  assert.match(text, /posição no grupo/i)
+  assert.equal(globalCalls, 0)
+  assert.equal(groupCalls >= 1, true)
+})
+
+test("economy router !xpranking global uses global scope when argument is provided", async () => {
+  const { sock, sent } = createSockCapture()
+  sock.groupMetadata = async () => ({
+    participants: [
+      { id: "autor@s.whatsapp.net" },
+      { id: "alvo@s.whatsapp.net" },
+    ],
+  })
+
+  let globalCalls = 0
+  let groupCalls = 0
+
+  const handled = await handleEconomyCommands({
+    sock,
+    from: "group@g.us",
+    sender: "autor@s.whatsapp.net",
+    cmd: "!xpranking global",
+    cmdName: "!xpranking",
+    cmdArg1: "global",
+    cmdArg2: "",
+    cmdParts: ["!xpranking", "global"],
+    mentioned: [],
+    prefix: "!",
+    isGroup: true,
+    senderIsAdmin: false,
+    jidNormalizedUser: (id) => id,
+    storage: {
+      getMutedUsers: () => ({}),
+      setMutedUsers: () => {},
+    },
+    registrationService: {
+      isRegistered: () => true,
+      getRegisteredEntry: (userId) => ({
+        lastKnownName: userId.startsWith("autor") ? "Autor" : "Alvo",
+      }),
+    },
+    economyService: {
+      getGlobalXpRanking: () => {
+        globalCalls += 1
+        return [
+          { userId: "autor@s.whatsapp.net", level: 9, xp: 120, xpToNextLevel: 320 },
+          { userId: "alvo@s.whatsapp.net", level: 8, xp: 80, xpToNextLevel: 300 },
+        ]
+      },
+      getGroupXpRanking: () => {
+        groupCalls += 1
+        return [
+          { userId: "autor@s.whatsapp.net", level: 5, xp: 20, xpToNextLevel: 240 },
+        ]
+      },
+      getUserGlobalXpPosition: () => 2,
+      getStablePublicLabel: (userId) => (userId.startsWith("autor") ? "AUTOR" : "ALVO"),
+      isMentionOptIn: () => true,
+      getProfile: (userId) => ({
+        preferences: {
+          publicLabel: userId === "autor@s.whatsapp.net" ? "AutorNick" : "",
+        },
+      }),
+    },
+    parseQuantity: () => 0,
+    formatDuration: () => "0m",
+    buildGameStatsText: () => "",
+    buildEconomyStatsText: () => "",
+    buildInventoryText: () => "",
+    incrementUserStat: () => {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(sent.length, 1)
+  const text = String(sent[0].payload?.text || "")
+  assert.match(text, /Ranking de XP \(global\)/i)
+  assert.match(text, /posição global de XP/i)
+  assert.equal(globalCalls, 1)
+  assert.equal(groupCalls, 0)
 })
 
 test("economy router !coinsranking hides unregistered/non-visible users and avoids placeholder labels", async () => {

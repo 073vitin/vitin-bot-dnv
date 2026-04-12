@@ -156,23 +156,27 @@ const COMMAND_HELP = {
   coinsranking: {
     name: "Ranking de coins",
     aliases: ["coinsranking"],
-    description: "Mostra top 10 com mais moedas",
-    usage: "!coinsranking",
+    description: "Mostra top 10 com mais moedas (local no grupo ou global)",
+    usage: "!coinsranking [global|local]",
     commonUsage: [
-      "!coinsranking - Ver ranking global",
+      "!coinsranking - Ver ranking local (em grupo)",
+      "!coinsranking global - Ver ranking global",
+      "!coinsranking local - Forçar ranking local do grupo",
     ],
-    details: "Veja quem é mais rico no bot. Útil para acompanhar a concorrência.",
+    details: "Sem argumento: em grupo mostra ranking local; em DM mostra ranking global.",
   },
 
   xpranking: {
     name: "Ranking de XP",
     aliases: ["xpranking"],
-    description: "Mostra top 10 com maiores níveis de XP",
-    usage: "!xpranking",
+    description: "Mostra top 10 com maiores níveis de XP (local no grupo ou global)",
+    usage: "!xpranking [global|local]",
     commonUsage: [
-      "!xpranking - Ver ranking global",
+      "!xpranking - Ver ranking local (em grupo)",
+      "!xpranking global - Ver ranking global",
+      "!xpranking local - Forçar ranking local do grupo",
     ],
-    details: "Veja quem tem maior nível. Indicador de atividade e dedicação.",
+    details: "Sem argumento: em grupo mostra ranking local; em DM mostra ranking global.",
   },
 
   cassino: {

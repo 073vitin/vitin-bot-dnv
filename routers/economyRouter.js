@@ -827,6 +827,46 @@ async function handleEconomyCommands(ctx) {
     })
   }
 
+  const parseRankingScopeMode = (value = "") => {
+    const normalized = String(value || "").trim().toLowerCase()
+    if (!normalized) {
+      return {
+        ok: true,
+        mode: isGroup ? "local" : "global",
+      }
+    }
+
+    if (["global", "g", "geral", "mundo"].includes(normalized)) {
+      return { ok: true, mode: "global" }
+    }
+
+    if (["local", "l", "grupo", "group"].includes(normalized)) {
+      return { ok: true, mode: "local" }
+    }
+
+    return {
+      ok: false,
+      mode: "",
+    }
+  }
+
+  const buildRankingScopeUsage = (commandName = "") => {
+    const defaultModeText = isGroup
+      ? "local no grupo atual"
+      : "global (em DM)"
+    return (
+      `Use: ${commandName} [global|local]\n` +
+      `Sem argumento, o padrão é *${defaultModeText}*.`
+    )
+  }
+
+  const getSenderPositionInRanking = (rankingEntries = []) => {
+    const normalizedSender = normalizeRankingUserId(sender)
+    const ranking = Array.isArray(rankingEntries) ? rankingEntries : []
+    const index = ranking.findIndex((entry) => normalizeRankingUserId(entry?.userId) === normalizedSender)
+    return index >= 0 ? index + 1 : null
+  }
+
   // (force handling moved to bot.js)
 
   if (cmdName === prefix + "mentions" || cmdName === prefix + "mention") {
@@ -2313,7 +2353,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 `╭━━━〔 🧭 SUBMENU: GERAL/UTILIDADE 〕━━━╮
 │ Comandos-base para perfil, identidade e consulta:
 │ ${prefix}perfil stats | ${prefix}perfil *@user
-│ ${prefix}xp | ${prefix}xpranking | ${prefix}coinsranking
+│ ${prefix}xp | ${prefix}xpranking [global|local] | ${prefix}coinsranking [global|local]
 │ ${prefix}mentions <on|off> | ${prefix}apelido <nome público>
 │ ${prefix}extrato *@user
 │ ${prefix}item <item>
@@ -3317,7 +3357,21 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  if (cmd === prefix + "coinsranking") {
+  if (cmdName === prefix + "coinsranking") {
+    const scopeParse = parseRankingScopeMode(cmdArg1)
+    if (!scopeParse.ok) {
+      await sock.sendMessage(from, { text: buildRankingScopeUsage(prefix + "coinsranking") })
+      return true
+    }
+
+    const rankingScope = scopeParse.mode
+    if (!isGroup && rankingScope === "local") {
+      await sock.sendMessage(from, {
+        text: `Ranking local só funciona em grupos.\n${buildRankingScopeUsage(prefix + "coinsranking")}`,
+      })
+      return true
+    }
+
     let mentionJidByNormalized = null
     let members = []
     if (isGroup) {
@@ -3337,7 +3391,13 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     }
 
     let ranking = []
-    if (typeof economyService.getGlobalRanking === "function") {
+    if (rankingScope === "local") {
+      if (typeof economyService.getGroupRanking === "function") {
+        ranking = economyService.getGroupRanking(members, 10)
+      } else if (typeof economyService.getGlobalRanking === "function") {
+        ranking = economyService.getGlobalRanking(10)
+      }
+    } else if (typeof economyService.getGlobalRanking === "function") {
       ranking = economyService.getGlobalRanking(10)
     } else if (isGroup && typeof economyService.getGroupRanking === "function") {
       ranking = economyService.getGroupRanking(members, 10)
@@ -3352,7 +3412,11 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       }))
       .filter((entry) => entry.rankingIdentity.visible)
     if (visibleRanking.length === 0) {
-      await sock.sendMessage(from, { text: "Sem dados de economia neste grupo ainda." })
+      await sock.sendMessage(from, {
+        text: rankingScope === "local"
+          ? "Sem dados de economia neste grupo ainda."
+          : "Sem dados de economia global ainda.",
+      })
       return true
     }
 
@@ -3360,21 +3424,47 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const label = entry.rankingIdentity.label
       return `${index + 1}. ${label} - *${entry.coins}*`
     })
-    const globalPos = economyService.getUserGlobalPosition(sender)
+    let positionLine = ""
+    if (rankingScope === "global") {
+      const globalPos = typeof economyService.getUserGlobalPosition === "function"
+        ? economyService.getUserGlobalPosition(sender)
+        : null
+      positionLine = `Sua posição global: *${globalPos || "N/A"}*`
+    } else {
+      const localRankingForPosition = typeof economyService.getGroupRanking === "function"
+        ? economyService.getGroupRanking(members, Math.max(10, members.length || 0))
+        : ranking
+      const localPos = getSenderPositionInRanking(localRankingForPosition)
+      positionLine = `Sua posição no grupo: *${localPos || "N/A"}*`
+    }
     const mentions = [...new Set(visibleRanking
       .map((entry) => entry.rankingIdentity.mentionId)
       .filter(Boolean))]
     await sock.sendMessage(from, {
       text:
-        `🏦 Ranking de ${CURRENCY_LABEL} (global)\n` +
+        `🏦 Ranking de ${CURRENCY_LABEL} (${rankingScope})\n` +
         `${lines.join("\n")}\n\n` +
-        `Sua posição global: *${globalPos || "N/A"}*`,
+        positionLine,
       mentions,
     })
     return true
   }
 
-  if (cmd === prefix + "xpranking") {
+  if (cmdName === prefix + "xpranking") {
+    const scopeParse = parseRankingScopeMode(cmdArg1)
+    if (!scopeParse.ok) {
+      await sock.sendMessage(from, { text: buildRankingScopeUsage(prefix + "xpranking") })
+      return true
+    }
+
+    const rankingScope = scopeParse.mode
+    if (!isGroup && rankingScope === "local") {
+      await sock.sendMessage(from, {
+        text: `Ranking local só funciona em grupos.\n${buildRankingScopeUsage(prefix + "xpranking")}`,
+      })
+      return true
+    }
+
     let mentionJidByNormalized = null
     let members = []
     if (isGroup) {
@@ -3394,7 +3484,13 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     }
 
     let ranking = []
-    if (typeof economyService.getGlobalXpRanking === "function") {
+    if (rankingScope === "local") {
+      if (typeof economyService.getGroupXpRanking === "function") {
+        ranking = economyService.getGroupXpRanking(members, 10)
+      } else if (typeof economyService.getGlobalXpRanking === "function") {
+        ranking = economyService.getGlobalXpRanking(10)
+      }
+    } else if (typeof economyService.getGlobalXpRanking === "function") {
       ranking = economyService.getGlobalXpRanking(10)
     } else if (isGroup && typeof economyService.getGroupXpRanking === "function") {
       ranking = economyService.getGroupXpRanking(members, 10)
@@ -3409,7 +3505,11 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       }))
       .filter((entry) => entry.rankingIdentity.visible)
     if (visibleRanking.length === 0) {
-      await sock.sendMessage(from, { text: "Sem dados de XP neste grupo ainda." })
+      await sock.sendMessage(from, {
+        text: rankingScope === "local"
+          ? "Sem dados de XP neste grupo ainda."
+          : "Sem dados de XP global ainda.",
+      })
       return true
     }
 
@@ -3420,17 +3520,27 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       const xpToNext = Math.max(1, Math.floor(Number(entry?.xpToNextLevel) || 1))
       return `${index + 1}. ${label} - *Nível ${level}* (${xpNow}/${xpToNext} XP)`
     })
-    const globalPos = typeof economyService.getUserGlobalXpPosition === "function"
-      ? economyService.getUserGlobalXpPosition(sender)
-      : null
+    let positionLine = ""
+    if (rankingScope === "global") {
+      const globalPos = typeof economyService.getUserGlobalXpPosition === "function"
+        ? economyService.getUserGlobalXpPosition(sender)
+        : null
+      positionLine = `Sua posição global de XP: *${globalPos || "N/A"}*`
+    } else {
+      const localRankingForPosition = typeof economyService.getGroupXpRanking === "function"
+        ? economyService.getGroupXpRanking(members, Math.max(10, members.length || 0))
+        : ranking
+      const localPos = getSenderPositionInRanking(localRankingForPosition)
+      positionLine = `Sua posição de XP no grupo: *${localPos || "N/A"}*`
+    }
     const mentions = [...new Set(visibleRanking
       .map((entry) => entry.rankingIdentity.mentionId)
       .filter(Boolean))]
     await sock.sendMessage(from, {
       text:
-        `⭐ Ranking de XP (global)\n` +
+        `⭐ Ranking de XP (${rankingScope})\n` +
         `${lines.join("\n")}\n\n` +
-        `Sua posição global de XP: *${globalPos || "N/A"}*`,
+        positionLine,
       mentions,
     })
     return true
