@@ -921,7 +921,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
       appliedAt: now,
       letters
     }
-    warningText = `${mentionTag}, punição ativada: ${letters.length} letras bloqueadas (indefinido).\nLetras bloqueadas: *${lettersLabel}*.\nMensagens que contenham qualquer letra bloqueada serão apagadas (anti-bypass: 4->A, |_|->U).\nPara sair, envie *UMA* mensagem contendo *todas* as letras bloqueadas, usando apenas essas letras + espaços/quebras de linha.`
+    warningText = `${mentionTag}, punição ativada: ${letters.length} letras bloqueadas (indefinido).\nPara sair, envie *UMA* mensagem que contenha *todas* as ${letters.length} letras bloqueadas, pelo menos 1x cada, usando apenas essas letras + espaços/quebras de linha.\nSe faltar 1 letra ou tiver qualquer caractere extra, a mensagem é apagada.\nExemplos válidos (supondo que as letras bloqueadas são A, B, C, D, E):\n"A B C D E", "ABCDE". Exemplo inválido: "ABCDEF".`
   }
 
   if (normalizedPunishmentId === "4") {
