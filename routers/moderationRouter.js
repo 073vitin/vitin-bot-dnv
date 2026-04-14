@@ -773,8 +773,13 @@ async function handleModerationCommands(ctx) {
     if (mutedUsers[from]?.[alvo]) lines.push("- Mute admin manual (indefinido)")
 
     const activePunishments = storage.getActivePunishments()
-    const active = activePunishments[from]?.[alvo]
-    if (active) {
+    const activeEntry = activePunishments[from]?.[alvo]
+    const activeStack = Array.isArray(activeEntry)
+      ? activeEntry.filter((entry) => entry && typeof entry === "object")
+      : (activeEntry && typeof activeEntry === "object"
+        ? (Array.isArray(activeEntry.stack) ? activeEntry.stack : [activeEntry])
+        : [])
+    for (const active of activeStack) {
       if (active.type === "max5chars") lines.push("- Máx. 5 caracteres")
       if (active.type === "rate20s") lines.push("- 1 mensagem/20s")
       if (active.type === "lettersBlock") lines.push(`- Bloqueio por letras`)

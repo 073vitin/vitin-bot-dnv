@@ -169,6 +169,11 @@ const messageQueueByChat = new Map()
 const processedMessageCacheByChat = new Map()
 const MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000
 const MESSAGE_DEDUPE_MAX_KEYS = 600
+const MESSAGE_PROCESSING_TIMEOUT_MS = 15 * 1000
+const MESSAGE_DELETE_TIMEOUT_MS = 3000
+const MESSAGE_DELETE_RETRY_DELAYS_MS = [150, 350]
+const GROUP_METADATA_CACHE_TTL_MS = 20 * 1000
+const GROUP_METADATA_TIMEOUT_MS = 5000
 const QUEST_RESET_AUTOGEN_INTERVAL_MS = 60 * 1000
 let questResetAutogenInterval = null
 let questResetAutogenInFlight = false
@@ -351,6 +356,92 @@ function enqueueMessageByKey(queueKey = "global", task = async () => {}) {
     })
   messageQueueByChat.set(key, next)
   return next
+}
+
+function waitMs(ms = 0) {
+  const delayMs = Math.max(0, Number(ms) || 0)
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, delayMs)
+    if (typeof timer?.unref === "function") {
+      timer.unref()
+    }
+  })
+}
+
+function createTimeoutError(label = "operation", timeoutMs = 0) {
+  const err = new Error(`${label} timed out after ${timeoutMs}ms`)
+  err.code = "ETIMEDOUT"
+  return err
+}
+
+async function withTimeout(taskPromise, timeoutMs = 0, label = "operation") {
+  const timeout = Number(timeoutMs)
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    return taskPromise
+  }
+
+  let timeoutId = null
+  try {
+    return await Promise.race([
+      Promise.resolve(taskPromise),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(createTimeoutError(label, timeout))
+        }, timeout)
+        if (typeof timeoutId?.unref === "function") {
+          timeoutId.unref()
+        }
+      }),
+    ])
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+    }
+  }
+}
+
+async function deleteMessageWithRetry(sock, chatId = "", messageKey = null, options = {}) {
+  if (!chatId || !messageKey || typeof sock?.sendMessage !== "function") {
+    return false
+  }
+
+  const timeoutMs = Number(options.timeoutMs)
+  const effectiveTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : MESSAGE_DELETE_TIMEOUT_MS
+  const retryDelays = Array.isArray(options.retryDelaysMs) && options.retryDelaysMs.length > 0
+    ? options.retryDelaysMs
+    : MESSAGE_DELETE_RETRY_DELAYS_MS
+  const maxAttempts = Math.max(1, retryDelays.length + 1)
+  const context = String(options.context || "message-delete")
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await withTimeout(
+        sock.sendMessage(chatId, { delete: messageKey }),
+        effectiveTimeoutMs,
+        `${context}:sendMessage(delete)`
+      )
+      return true
+    } catch (err) {
+      if (attempt >= maxAttempts) {
+        console.error("[bot] deleteMessageWithRetry exhausted", {
+          context,
+          chatId,
+          messageId: String(messageKey?.id || ""),
+          error: String(err?.message || err),
+        })
+        return false
+      }
+
+      const delayMs = Math.max(0, Number(retryDelays[attempt - 1]) || 0)
+      if (delayMs > 0) {
+        await waitMs(delayMs)
+      }
+    }
+  }
+
+  return false
 }
 
 function recordTerminalOutput(source, chunk) {
@@ -1890,6 +1981,8 @@ async function startBot(){
   ensureQuestResetAutogenerationScheduler()
 
   const groupMentionLookupByGroup = new Map()
+  const groupMetadataCacheByJid = new Map()
+  const groupMetadataInFlightByJid = new Map()
 
   const rebuildGroupMentionLookup = (groupId, participants = []) => {
     if (!groupId) return
@@ -1908,9 +2001,38 @@ async function startBot(){
   const originalGroupMetadata = sock.groupMetadata.bind(sock)
   sock.groupMetadata = async (...args) => {
     const startedAt = Date.now()
-    try {
-      const metadata = await originalGroupMetadata(...args)
-      const groupId = String(args[0] || "")
+    const groupId = String(args[0] || "")
+    const now = Date.now()
+
+    const cached = groupId ? groupMetadataCacheByJid.get(groupId) : null
+    if (cached?.metadata && (now - Number(cached.fetchedAt || 0)) <= GROUP_METADATA_CACHE_TTL_MS) {
+      recordMetric(perfStats.groupMetadataMs, Date.now() - startedAt)
+      return cached.metadata
+    }
+
+    if (groupId) {
+      const inFlight = groupMetadataInFlightByJid.get(groupId)
+      if (inFlight) {
+        try {
+          return await inFlight
+        } finally {
+          recordMetric(perfStats.groupMetadataMs, Date.now() - startedAt)
+        }
+      }
+    }
+
+    const metadataPromise = (async () => {
+      const metadata = await withTimeout(
+        originalGroupMetadata(...args),
+        GROUP_METADATA_TIMEOUT_MS,
+        `groupMetadata(${groupId || "unknown"})`
+      )
+      if (groupId) {
+        groupMetadataCacheByJid.set(groupId, {
+          metadata,
+          fetchedAt: Date.now(),
+        })
+      }
       if (groupId) {
         knownGroupIds.add(groupId)
         if (metadata?.subject) {
@@ -1919,7 +2041,27 @@ async function startBot(){
         rebuildGroupMentionLookup(groupId, metadata?.participants || [])
       }
       return metadata
+    })()
+
+    if (groupId) {
+      groupMetadataInFlightByJid.set(groupId, metadataPromise)
+    }
+
+    try {
+      return await metadataPromise
+    } catch (err) {
+      if (cached?.metadata) {
+        console.warn("[bot] groupMetadata failed; using stale cache", {
+          groupId,
+          error: String(err?.message || err),
+        })
+        return cached.metadata
+      }
+      throw err
     } finally {
+      if (groupId && groupMetadataInFlightByJid.get(groupId) === metadataPromise) {
+        groupMetadataInFlightByJid.delete(groupId)
+      }
       recordMetric(perfStats.groupMetadataMs, Date.now() - startedAt)
     }
   }
@@ -2170,10 +2312,20 @@ setTimeout(() => {
       const punishmentKey =
         findMatchingIdentityKeyInMap(punishmentsInGroup, senderRaw) ||
         findMatchingIdentityKeyInMap(punishmentsInGroup, sender)
-      const activePunishment = punishmentKey ? punishmentsInGroup[punishmentKey] : null
-      const punishmentEndsAt = Number(activePunishment?.endsAt) || 0
-      const punishmentIsActive = Boolean(activePunishment && (!punishmentEndsAt || Date.now() < punishmentEndsAt))
-      const punishmentDeletesCommands = punishmentIsActive && String(activePunishment?.type || "") !== "sexualReaction"
+      const activePunishmentEntry = punishmentKey ? punishmentsInGroup[punishmentKey] : null
+      const punishmentStack = Array.isArray(activePunishmentEntry)
+        ? activePunishmentEntry.filter((entry) => entry && typeof entry === "object")
+        : (activePunishmentEntry && typeof activePunishmentEntry === "object"
+          ? (Array.isArray(activePunishmentEntry.stack) ? activePunishmentEntry.stack : [activePunishmentEntry])
+          : [])
+      const nowTs = Date.now()
+      const activePunishmentStack = punishmentStack.filter((entry) => {
+        const punishmentEndsAt = Number(entry?.endsAt) || 0
+        return !punishmentEndsAt || nowTs < punishmentEndsAt
+      })
+      const punishmentDeletesCommands = activePunishmentStack.some(
+        (entry) => String(entry?.type || "") !== "sexualReaction"
+      )
 
       const mutedUsers = storage.getMutedUsers()
       const mutedUsersInGroup = mutedUsers[from] && typeof mutedUsers[from] === "object"
@@ -2186,12 +2338,9 @@ setTimeout(() => {
       if (mutedKey || punishmentDeletesCommands) {
         let deleteSucceeded = false
         await measureStage("commandDeleteGuard", async () => {
-          try {
-            await sock.sendMessage(from, { delete: msg.key })
-            deleteSucceeded = true
-          } catch (err) {
-            console.error("Erro ao apagar comando de usuário mutado/punido", err)
-          }
+            deleteSucceeded = await deleteMessageWithRetry(sock, from, msg.key, {
+              context: "commandDeleteGuard",
+            })
         })
         if (!deleteSucceeded) {
           console.log("[bot] commandDeleteGuard - delete attempt failed; blocking command execution")
@@ -2217,10 +2366,11 @@ setTimeout(() => {
         const triggered = filters.some((entry) => messageTriggersFilter(text, entry?.text || ""))
         if (triggered) {
           await measureStage("groupFilter.enforcement", async () => {
-            try {
-              await sock.sendMessage(from, { delete: msg.key })
-            } catch (err) {
-              console.error("Erro ao apagar mensagem por filtro de moderação", err)
+            const deleted = await deleteMessageWithRetry(sock, from, msg.key, {
+              context: "groupFilter.enforcement",
+            })
+            if (!deleted) {
+              console.error("Erro ao apagar mensagem por filtro de moderação")
             }
             await sock.sendMessage(from, {
               text: `⚠️ ${formatMentionTag(sender)}, sua mensagem acionou um filtro de moderação adicionado pelos administradores.`,
@@ -3757,12 +3907,9 @@ setTimeout(() => {
           }
           let deleteSucceeded = false
           await measureStage("mutedDelete", async () => {
-            try {
-              await sock.sendMessage(from, { delete: msg.key })
-              deleteSucceeded = true
-            } catch (e) {
-              console.error("Erro ao apagar mensagem de usuário mutado", e)
-            }
+            deleteSucceeded = await deleteMessageWithRetry(sock, from, msg.key, {
+              context: "mutedDelete",
+            })
           })
           if (!deleteSucceeded) {
             console.log("[bot] mutedDelete - delete attempt failed; keeping message blocked")
@@ -4432,10 +4579,11 @@ setTimeout(() => {
           const finalState = storage.getGameState(from, "memóriaActive")
           if (finalState) {
             if (sequenceMessage?.key) {
-              try {
-                await sock.sendMessage(from, { delete: sequenceMessage.key })
-              } catch (e) {
-                console.error("Erro ao apagar mensagem da sequência da memória", e)
+              const sequenceDeleteOk = await deleteMessageWithRetry(sock, from, sequenceMessage.key, {
+                context: "memoria.sequenceDelete",
+              })
+              if (!sequenceDeleteOk) {
+                console.error("Erro ao apagar mensagem da sequência da memória")
               }
             }
             await sock.sendMessage(from, {
@@ -5088,10 +5236,30 @@ if (handledWeaponsCommand) return;
         if (dedupeKey && hasProcessedMessage(queueKey, dedupeKey)) {
           return
         }
-        if (dedupeKey) {
-          rememberProcessedMessage(queueKey, dedupeKey)
+        try {
+          await withTimeout(
+            processSingleUpsertMessage(incomingMsg),
+            MESSAGE_PROCESSING_TIMEOUT_MS,
+            `messages.upsert.process(${queueKey})`
+          )
+          if (dedupeKey) {
+            rememberProcessedMessage(queueKey, dedupeKey)
+          }
+        } catch (err) {
+          perfStats.messagesErrored += 1
+          lifetimeStats.messagesErrored += 1
+          persistLifetimeStats()
+          telemetry.incrementCounter("command.error", 1, {
+            scope: "messages.upsert.timeout",
+          })
+          telemetry.appendEvent("command.error", {
+            scope: "messages.upsert.timeout",
+            queueKey,
+            messageId: String(incomingMsg?.key?.id || ""),
+            message: String(err?.message || err || "unknown error"),
+          })
+          console.error("Erro/timeout no processamento de messages.upsert", err)
         }
-        await processSingleUpsertMessage(incomingMsg)
       })
     })
 

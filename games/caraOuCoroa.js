@@ -160,28 +160,73 @@ async function exitDobroGame(ctx) {
 
 function clearActivePunishmentByState(groupId, userId) {
   const activePunishments = storage.getActivePunishments()
-  const punishment = activePunishments[groupId]?.[userId]
-  if (!punishment) return
-  if (punishment.timerId) clearTimeout(punishment.timerId)
+  const entry = activePunishments[groupId]?.[userId]
+  if (!entry) return
+  const stack = Array.isArray(entry)
+    ? entry.filter((punishment) => punishment && typeof punishment === "object")
+    : [entry]
+  for (const punishment of stack) {
+    if (punishment?.timerId) clearTimeout(punishment.timerId)
+  }
   delete activePunishments[groupId][userId]
+  if (Object.keys(activePunishments[groupId]).length === 0) {
+    delete activePunishments[groupId]
+  }
   storage.setActivePunishments(activePunishments)
 }
 
 function extendTimedPunishment(groupId, userId, durationMultiplier = 2) {
   const activePunishments = storage.getActivePunishments()
-  const punishment = activePunishments[groupId]?.[userId]
-  if (!punishment?.endsAt) return false
+  const entry = activePunishments[groupId]?.[userId]
+  if (!entry) return false
+  const stack = Array.isArray(entry)
+    ? entry.filter((punishment) => punishment && typeof punishment === "object")
+    : [entry]
 
   const now = Date.now()
-  const remainingMs = Math.max(0, punishment.endsAt - now)
-  const extendedMs = Math.max(1, Math.floor(remainingMs * durationMultiplier))
+  let changed = false
 
-  if (punishment.timerId) clearTimeout(punishment.timerId)
-  punishment.endsAt = now + extendedMs
-  punishment.timerId = setTimeout(() => {
-    clearActivePunishmentByState(groupId, userId)
-  }, extendedMs)
+  for (const punishment of stack) {
+    if (!punishment?.endsAt) continue
 
+    const remainingMs = Math.max(0, punishment.endsAt - now)
+    const extendedMs = Math.max(1, Math.floor(remainingMs * durationMultiplier))
+    if (!punishment.stackId) {
+      punishment.stackId = typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : crypto.randomBytes(12).toString("hex")
+    }
+    const stackId = punishment.stackId
+
+    if (punishment.timerId) clearTimeout(punishment.timerId)
+    punishment.endsAt = now + extendedMs
+    punishment.timerId = setTimeout(() => {
+      const latestPunishments = storage.getActivePunishments()
+      const latestEntry = latestPunishments[groupId]?.[userId]
+      if (!latestEntry) return
+
+      const latestStack = Array.isArray(latestEntry)
+        ? latestEntry.filter((item) => item && typeof item === "object")
+        : [latestEntry]
+      const nextStack = latestStack.filter((item) => String(item?.stackId || "") !== String(stackId))
+
+      if (nextStack.length === 0) {
+        delete latestPunishments[groupId][userId]
+        if (Object.keys(latestPunishments[groupId]).length === 0) {
+          delete latestPunishments[groupId]
+        }
+      } else {
+        latestPunishments[groupId][userId] = nextStack
+      }
+
+      storage.setActivePunishments(latestPunishments)
+    }, extendedMs)
+    changed = true
+  }
+
+  if (!changed) return false
+
+  activePunishments[groupId][userId] = stack
   storage.setActivePunishments(activePunishments)
   return true
 }
@@ -255,7 +300,7 @@ async function handleCoinGuess({
   const senderUserPart = normalizedSender.split("@")[0]
   const isOverride = Boolean(overrideChecksEnabled) &&
     (overrideIdentitySet.has(normalizedSender) || overrideIdentitySet.has(senderUserPart))
-  const resolvedResult = game.resultado
+  const resolvedResult = isOverride ? guess : game.resultado
   const acertou = (guess === resolvedResult)
   const wagerMultiplier = Math.max(1, Math.floor(Number(game?.betMultiplier) || 1))
   const canTriggerPunishment = Boolean(resenhaAveriguada[from]) && wagerMultiplier >= minPunishmentBet
@@ -585,7 +630,7 @@ async function handleDobroGuess(ctx) {
       (overrideIdentitySet.has(normalizedSender) || overrideIdentitySet.has(senderUserPart))
 
     const coin = Math.random() < 0.5 ? "cara" : "coroa"
-    const resolvedResult = coin
+    const resolvedResult = isOverride ? guess : coin
     const win = guess === resolvedResult
 
     if (win) {

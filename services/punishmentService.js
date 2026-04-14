@@ -34,8 +34,129 @@ const WORD_LIST_POOL = [
   "esporte",
 ]
 const REPOST_REACTION_EMOJIS = ["🍆", "🔥", "🔞", "🤤", "😈"]
+const PUNISHMENT_DELETE_TIMEOUT_MS = 3000
+const PUNISHMENT_DELETE_RETRY_DELAYS_MS = [150, 350]
 const LETTER_DUMP_STATE_KEY = "letterDumpDetector"
 const LETTER_DUMP_WHITELIST = new Set(["a", "i", "k", "q"])
+const LEET_MULTI_CHAR_REPLACERS = [
+  [/\|_\|/g, "u"],
+]
+const LEET_CHAR_MAP = {
+  "@": "a",
+  "4": "a",
+  "3": "e",
+  "1": "i",
+  "!": "i",
+  "|": "i",
+  "0": "o",
+  "$": "s",
+  "5": "s",
+  "7": "t",
+  "+": "t",
+  "8": "b",
+  "9": "g",
+  "2": "z",
+}
+
+const PUNISHMENT_TYPE_TO_ID = {
+  max5chars: "1",
+  rate20s: "2",
+  lettersBlock: "3",
+  emojiOnly: "4",
+  mute5m: "5",
+  noVowels: "6",
+  urgentPrefix: "7",
+  wordListRequired: "8",
+  allCaps: "9",
+  deleteAndRepost: "10",
+  sexualReaction: "11",
+  randomDeleteChance: "12",
+  max3wordsStrict: "13",
+}
+
+function waitMs(ms = 0) {
+  const delay = Math.max(0, Number(ms) || 0)
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, delay)
+    if (typeof timer?.unref === "function") {
+      timer.unref()
+    }
+  })
+}
+
+function createTimeoutError(label = "operation", timeoutMs = 0) {
+  const err = new Error(`${label} timed out after ${timeoutMs}ms`)
+  err.code = "ETIMEDOUT"
+  return err
+}
+
+async function withTimeout(taskPromise, timeoutMs = 0, label = "operation") {
+  const timeout = Number(timeoutMs)
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    return taskPromise
+  }
+
+  let timeoutId = null
+  try {
+    return await Promise.race([
+      Promise.resolve(taskPromise),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(createTimeoutError(label, timeout))
+        }, timeout)
+        if (typeof timeoutId?.unref === "function") {
+          timeoutId.unref()
+        }
+      }),
+    ])
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+    }
+  }
+}
+
+async function deleteMessageWithRetry(sock, from, messageKey, options = {}) {
+  if (!from || !messageKey || typeof sock?.sendMessage !== "function") {
+    return false
+  }
+
+  const retryDelays = Array.isArray(options.retryDelaysMs) && options.retryDelaysMs.length > 0
+    ? options.retryDelaysMs
+    : PUNISHMENT_DELETE_RETRY_DELAYS_MS
+  const timeoutMs = Number(options.timeoutMs)
+  const effectiveTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : PUNISHMENT_DELETE_TIMEOUT_MS
+  const maxAttempts = Math.max(1, retryDelays.length + 1)
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await withTimeout(
+        sock.sendMessage(from, { delete: messageKey }),
+        effectiveTimeoutMs,
+        "punishment.delete"
+      )
+      return true
+    } catch (err) {
+      if (attempt >= maxAttempts) {
+        console.error("[punishment] deleteMessageWithRetry exhausted", {
+          from,
+          messageId: String(messageKey?.id || ""),
+          error: String(err?.message || err),
+        })
+        return false
+      }
+
+      const delayMs = Math.max(0, Number(retryDelays[attempt - 1]) || 0)
+      if (delayMs > 0) {
+        await waitMs(delayMs)
+      }
+    }
+  }
+
+  return false
+}
 
 function getPunishmentChoiceFromText(text = "") {
   const cleaned = text.toLowerCase().trim()
@@ -55,9 +176,180 @@ function normalizePunishmentId(value = "") {
   return String(parsed)
 }
 
+function inferPunishmentIdFromType(type = "") {
+  return PUNISHMENT_TYPE_TO_ID[String(type || "")] || ""
+}
+
+function createPunishmentStackId() {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  return crypto.randomBytes(12).toString("hex")
+}
+
+function ensurePunishmentStateMeta(state = null) {
+  if (!state || typeof state !== "object") return null
+  if (!state.stackId) {
+    state.stackId = createPunishmentStackId()
+  }
+
+  const normalizedId = normalizePunishmentId(state.punishmentId)
+  if (normalizedId) {
+    state.punishmentId = normalizedId
+  } else {
+    const inferredId = inferPunishmentIdFromType(state.type)
+    if (inferredId) {
+      state.punishmentId = inferredId
+    }
+  }
+
+  return state
+}
+
+function normalizePunishmentStack(value = null) {
+  const source = Array.isArray(value)
+    ? value
+    : (value && typeof value === "object"
+      ? (Array.isArray(value.stack) ? value.stack : [value])
+      : [])
+
+  const normalized = []
+  for (const entry of source) {
+    const sanitized = ensurePunishmentStateMeta(entry)
+    if (sanitized) normalized.push(sanitized)
+  }
+  return normalized
+}
+
+function setPunishmentStackForUser(groupPunishments = {}, userKey = "", stack = []) {
+  const normalizedStack = normalizePunishmentStack(stack)
+  if (!userKey) return false
+  if (normalizedStack.length === 0) {
+    delete groupPunishments[userKey]
+    return false
+  }
+  groupPunishments[userKey] = normalizedStack
+  return true
+}
+
+function removePunishmentFromStackById(groupPunishments = {}, userKey = "", stackId = "") {
+  if (!userKey) return null
+  const stack = normalizePunishmentStack(groupPunishments[userKey])
+  const stackIdLabel = String(stackId || "")
+  const index = stack.findIndex((entry) => String(entry?.stackId || "") === stackIdLabel)
+  if (index < 0) {
+    if (stack.length > 0 && !Array.isArray(groupPunishments[userKey])) {
+      groupPunishments[userKey] = stack
+    }
+    return null
+  }
+
+  const [removed] = stack.splice(index, 1)
+  if (removed?.timerId) {
+    clearTimeout(removed.timerId)
+  }
+  setPunishmentStackForUser(groupPunishments, userKey, stack)
+  return removed
+}
+
 function getLinear15xSeverityScale(severityMultiplier = 1) {
   const level = Math.max(1, Math.floor(Number(severityMultiplier) || 1))
   return 1 + (level - 1) * 0.5
+}
+
+function getPunishmentNameByType(type = "") {
+  const punishmentId = inferPunishmentIdFromType(type)
+  if (!punishmentId) return "desconhecida"
+  return getPunishmentNameById(punishmentId)
+}
+
+function getPunishmentLabelFromState(punishmentState = null) {
+  if (!punishmentState || typeof punishmentState !== "object") {
+    return "desconhecida"
+  }
+
+  const normalizedId = normalizePunishmentId(punishmentState.punishmentId)
+  const baseName = normalizedId
+    ? getPunishmentNameById(normalizedId)
+    : getPunishmentNameByType(punishmentState.type)
+
+  if (punishmentState.type === "wordListRequired") {
+    const words = Array.isArray(punishmentState.wordList)
+      ? punishmentState.wordList.filter(Boolean)
+      : []
+    if (words.length > 0) {
+      return `${baseName} (${words.join(", ")})`
+    }
+  }
+
+  if (punishmentState.type === "randomDeleteChance") {
+    const chance = Math.max(0, Math.min(1, Number(punishmentState.deleteChance) || 0))
+    return `${baseName} (${Math.round(chance * 100)}%)`
+  }
+
+  return baseName
+}
+
+async function sendPunishmentExpiredMessage(sock, groupId, userId, punishmentState = null) {
+  if (!sock || typeof sock.sendMessage !== "function") return
+  const targetUserId = normalizeUserId(userId) || String(userId || "")
+  if (!targetUserId) return
+  const label = getPunishmentLabelFromState(punishmentState)
+  await sock.sendMessage(groupId, {
+    text: `${formatMentionTag(targetUserId)}, punição expirada: *${label}*.`,
+    mentions: normalizeMentionArray([targetUserId]),
+  })
+}
+
+async function expirePunishmentByStackId(sock, groupId, userId, stackId) {
+  const activePunishments = storage.getActivePunishments()
+  const groupPunishments = activePunishments[groupId]
+  if (!groupPunishments || typeof groupPunishments !== "object") {
+    return false
+  }
+
+  const matchedKey = findMatchingUserKey(groupPunishments, userId)
+  if (!matchedKey) {
+    return false
+  }
+
+  const removed = removePunishmentFromStackById(groupPunishments, matchedKey, stackId)
+  if (!removed) {
+    return false
+  }
+
+  if (Object.keys(groupPunishments).length === 0) {
+    delete activePunishments[groupId]
+  }
+  storage.setActivePunishments(activePunishments)
+
+  const targetForMessage = normalizeUserId(removed.targetUserId || userId) || String(userId || "")
+  await sendPunishmentExpiredMessage(sock, groupId, targetForMessage, removed)
+  return true
+}
+
+function schedulePunishmentExpiryTimer(sock, groupId, userId, punishmentState = null) {
+  if (!punishmentState?.endsAt) {
+    return false
+  }
+
+  if (punishmentState.timerId) {
+    clearTimeout(punishmentState.timerId)
+  }
+
+  const remainingMs = Math.max(0, Number(punishmentState.endsAt) - Date.now())
+  if (remainingMs <= 0) {
+    return false
+  }
+
+  const stackId = String(punishmentState.stackId || "")
+  punishmentState.timerId = setTimeout(() => {
+    expirePunishmentByStackId(sock, groupId, userId, stackId).catch(() => {})
+  }, remainingMs)
+  if (typeof punishmentState.timerId?.unref === "function") {
+    punishmentState.timerId.unref()
+  }
+  return true
 }
 
 function getPunishmentNameById(punishmentId) {
@@ -83,17 +375,17 @@ function getPunishmentMenuText() {
     "Escolha a punição digitando um número de *1* a *13*:",
     "1. Mensagens com no máximo 5 caracteres por 5 minutos.",
     "2. Máximo de 1 mensagem a cada 20 segundos por 10 minutos.",
-    "3. Bloqueio por letras aleatórias (indefinido até enviar UMA mensagem contendo TODAS as letras bloqueadas; só letras bloqueadas + espaços/quebras de linha são aceitos).",
+    "3. Bloqueio por letras aleatórias (indefinido: mensagens contendo letras bloqueadas são apagadas; para sair, envie UMA mensagem só com essas letras + espaços/quebras de linha, contendo todas).",
     "4. Só pode enviar emojis e figurinhas por 5 minutos.",
     "5. Mute total por 5 minutos (tudo que enviar será apagado).",
-    "6. Sem vogais por 5 minutos (severidade escala tempo em 1.5x).",
-    "7. Toda mensagem deve começar com \"🚨URGENTE:\" por 5 minutos, EXATAMENTE como está entre aspas. (severidade escala tempo em 1.5x).",
+    "6. Sem vogais por 5 minutos (anti-bypass: 4->A, |_|->U; severidade escala tempo linearmente).",
+    "7. Toda mensagem deve começar com \"🚨URGENTE:\" por 5 minutos, EXATAMENTE como está entre aspas. (severidade escala tempo linearmente).",
     "8. Mensagem deve conter palavras da lista por 5 minutos (severidade escala tempo em 1.5x e quantidade +1 por nível).",
-    "9. Mensagens em caixa alta por 10 minutos (severidade adiciona +2 minutos por nível).",
-    "10. Mensagens são apagadas e repostadas pelo bot por 5 minutos (severidade não escala).",
-    "11. Mensagens recebem reação sugestiva por 5 minutos (severidade escala tempo em 1.5x).",
-    "12. Chance de apagar mensagens por 1 hora (20% base, +5% por nível).",
-    "13. Máximo de 3 palavras por 5 minutos (severidade adiciona +2 minutos por nível)."
+    "9. Mensagens em caixa alta por 10 minutos (severidade escala tempo linearmente).",
+    "10. Mensagens são apagadas e repostadas pelo bot por 5 minutos (severidade escala tempo linearmente).",
+    "11. Mensagens recebem reação sugestiva por 5 minutos (severidade escala tempo linearmente).",
+    "12. Chance de apagar mensagens por 1 hora (20% base, +4% por nível).",
+    "13. Máximo de 3 palavras por 5 minutos (severidade escala tempo linearmente)."
   ].join("\n")
 }
 
@@ -110,8 +402,8 @@ function getPunishmentDetailsText() {
     "- Duração: 10 minutos x severidade.",
     "",
     "3. Bloqueio de letras",
-    "- Regra: só passa UMA mensagem contendo todas as letras bloqueadas (ao menos 1x cada), aceitando apenas essas letras + espaços/quebras de linha.",
-    "- Se faltar letra ou tiver qualquer caractere extra, a mensagem é apagada.",
+    "- Regra: mensagem contendo qualquer letra bloqueada é apagada (detecção anti-bypass, ex.: 4->A e |_|->U).",
+    "- Saída: envie UMA mensagem contendo todas as letras bloqueadas (ao menos 1x cada), usando apenas essas letras + espaços/quebras de linha.",
     "- Escala: +1 letra proibida por severidade.",
     "- Término: indefinido, encerra ao cumprir condição de saída.",
     "",
@@ -124,12 +416,12 @@ function getPunishmentDetailsText() {
     "- Duração: 5 minutos x severidade.",
     "",
     "6. Sem vogais",
-    "- Regra: mensagem com vogal é apagada.",
-    "- Duração: 5 minutos, escala x1.5 por severidade.",
+    "- Regra: mensagem com vogal é apagada (inclui anti-bypass como 4->A e |_|->U).",
+    "- Duração: 5 minutos x severidade.",
     "",
     "7. Prefixo obrigatório",
     "- Regra: mensagem sem início em \"🚨URGENTE:\" é apagada. O início deve ser exatamente como descrito.",
-    "- Duração: 5 minutos, escala x1.5 por severidade.",
+    "- Duração: 5 minutos x severidade.",
     "",
     "8. Palavra(s) da lista",
     "- Regra: precisa conter palavra(s) sorteada(s) da lista.",
@@ -138,25 +430,24 @@ function getPunishmentDetailsText() {
     "",
     "9. Caixa alta",
     "- Regra: texto com letras minúsculas é apagado.",
-    "- Duração: 10 minutos +2 minutos por severidade.",
+    "- Duração: 10 minutos x severidade.",
     "",
     "10. Apaga e reposta",
     "- Regra: bot apaga e reposta texto/mídia (quando possível).",
-    "- Duração: 5 minutos.",
-    "- Escala: não escala com severidade.",
+    "- Duração: 5 minutos x severidade.",
     "",
     "11. Reação sugestiva",
     "- Regra: bot reage com emoji sugestivo nas mensagens.",
-    "- Duração: 5 minutos, escala x1.5 por severidade.",
+    "- Duração: 5 minutos x severidade.",
     "",
     "12. Chance de apagar",
     "- Regra: mensagem pode ser apagada aleatoriamente.",
     "- Duração: 1 hora.",
-    "- Chance: 20% base +5% por severidade.",
+    "- Chance: 20% base +4% por severidade.",
     "",
     "13. Máx. 3 palavras (anti-bypass)",
     "- Regra: mais de 3 tokens (inclui separação por símbolos/espaços) é apagado.",
-    "- Duração: 5 minutos +2 minutos por severidade.",
+    "- Duração: 5 minutos x severidade.",
   ].join("\n")
 }
 
@@ -199,20 +490,55 @@ function isStickerMessage(msg = null) {
   return Boolean(msg?.message?.stickerMessage)
 }
 
-function isUnlockLettersMessage(text = "", letters = []) {
-  const requiredLetters = [...new Set((letters || [])
-    .map((letter) => String(letter || "").trim().toLowerCase())
+function normalizeComparableText(value = "") {
+  const ascii = String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+
+  let sequenced = ascii
+  for (const [pattern, replacement] of LEET_MULTI_CHAR_REPLACERS) {
+    sequenced = sequenced.replace(pattern, replacement)
+  }
+
+  let normalized = ""
+  for (const ch of sequenced) {
+    const mapped = LEET_CHAR_MAP[ch] || ch
+    if (/^[a-z0-9]$/.test(mapped)) {
+      normalized += mapped
+    }
+  }
+
+  return normalized
+}
+
+function normalizeBlockedLetters(letters = []) {
+  return [...new Set((letters || [])
+    .map((letter) => normalizeComparableText(letter))
     .filter((letter) => /^[a-z]$/.test(letter))
   )]
+}
+
+function messageContainsBlockedLetters(text = "", letters = []) {
+  const blockedLetters = normalizeBlockedLetters(letters)
+  if (blockedLetters.length === 0) return false
+
+  const normalizedText = normalizeComparableText(text)
+  if (!normalizedText) return false
+  return blockedLetters.some((letter) => normalizedText.includes(letter))
+}
+
+function isUnlockLettersMessage(text = "", letters = []) {
+  const requiredLetters = normalizeBlockedLetters(letters)
   if (!requiredLetters.length) return false
 
-  const raw = String(text || "").toLowerCase()
-  if (!raw.trim()) return false
+  const normalizedText = normalizeComparableText(text)
+  if (!normalizedText) return false
 
+  const requiredSet = new Set(requiredLetters)
   const seen = new Set()
-  for (const ch of raw) {
-    if (/\s/.test(ch)) continue
-    if (!requiredLetters.includes(ch)) return false
+  for (const ch of normalizedText) {
+    if (!requiredSet.has(ch)) return false
     seen.add(ch)
   }
 
@@ -409,15 +735,57 @@ function clearPunishment(groupId, userId) {
   if (!matchedKey) {
     return
   }
-  const timerId = groupPunishments[matchedKey]?.timerId
-  if (timerId) {
-    clearTimeout(timerId)
+
+  const stack = normalizePunishmentStack(groupPunishments[matchedKey])
+  for (const entry of stack) {
+    if (entry?.timerId) {
+      clearTimeout(entry.timerId)
+    }
   }
+
   delete groupPunishments[matchedKey]
   if (Object.keys(groupPunishments).length === 0) {
     delete activePunishments[groupId]
   }
   storage.setActivePunishments(activePunishments)
+}
+
+function appendPunishmentForUser(activePunishments = {}, groupId = "", userId = "", punishmentState = null, sock = null) {
+  if (!groupId) return { state: null, stackSize: 0, userKey: "" }
+  if (!activePunishments[groupId]) {
+    activePunishments[groupId] = {}
+  }
+
+  const groupPunishments = activePunishments[groupId]
+  const normalizedUser = normalizeUserId(userId) || String(userId || "")
+  const matchedKey = findMatchingUserKey(groupPunishments, normalizedUser)
+  let userKey = matchedKey || normalizedUser
+
+  if (matchedKey && matchedKey !== normalizedUser && !groupPunishments[normalizedUser]) {
+    groupPunishments[normalizedUser] = groupPunishments[matchedKey]
+    delete groupPunishments[matchedKey]
+    userKey = normalizedUser
+  }
+
+  const stack = normalizePunishmentStack(groupPunishments[userKey])
+  const normalizedState = ensurePunishmentStateMeta(punishmentState)
+  if (!normalizedState) {
+    return { state: null, stackSize: stack.length, userKey }
+  }
+
+  normalizedState.targetUserId = normalizeUserId(normalizedState.targetUserId || normalizedUser) || normalizedUser
+  stack.push(normalizedState)
+  setPunishmentStackForUser(groupPunishments, userKey, stack)
+
+  if (normalizedState.endsAt) {
+    schedulePunishmentExpiryTimer(sock, groupId, normalizedState.targetUserId, normalizedState)
+  }
+
+  return {
+    state: normalizedState,
+    stackSize: stack.length,
+    userKey,
+  }
 }
 
 async function applyPunishment(sock, groupId, userId, punishmentId, options = {}) {
@@ -508,9 +876,6 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     ? Math.floor(severityMultiplierRaw)
     : 1
   const activePunishments = storage.getActivePunishments()
-  if (!activePunishments[groupId]) activePunishments[groupId] = {}
-  clearPunishment(groupId, targetUserId)
-  if (!activePunishments[groupId]) activePunishments[groupId] = {}
 
   const mentionTag = `${formatMentionTag(targetUserId)}`
   const now = Date.now()
@@ -521,7 +886,10 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     const durationMs = 5 * 60_000 * severityMultiplier
     punishmentState = {
       type: "max5chars",
-      endsAt: now + durationMs
+      punishmentId: normalizedPunishmentId,
+      severityMultiplier,
+      appliedAt: now,
+      endsAt: now + durationMs,
     }
     warningText = `${mentionTag}, punição ativada: suas mensagens só podem ter até *5 caracteres* por *${Math.floor(durationMs / 60_000)} minutos* (espaço conta). Mensagens fora disso serão apagadas.`
   }
@@ -530,6 +898,9 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     const durationMs = 10 * 60_000 * severityMultiplier
     punishmentState = {
       type: "rate20s",
+      punishmentId: normalizedPunishmentId,
+      severityMultiplier,
+      appliedAt: now,
       endsAt: now + durationMs,
       lastAllowedAt: 0
     }
@@ -538,18 +909,28 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
 
   if (normalizedPunishmentId === "3") {
     const letters = getRandomDifferentLetters(severityMultiplier + 1)
+    const lettersLabel = letters
+      .map((letter) => String(letter || "").trim().toUpperCase())
+      .filter(Boolean)
+      .join(", ")
 
     punishmentState = {
       type: "lettersBlock",
+      punishmentId: normalizedPunishmentId,
+      severityMultiplier,
+      appliedAt: now,
       letters
     }
-    warningText = `${mentionTag}, punição ativada: ${letters.length} letras bloqueadas (indefinido).\nPara sair, envie *UMA* mensagem que contenha *todas* as ${letters.length} letras bloqueadas, pelo menos 1x cada, usando apenas essas letras + espaços/quebras de linha.\nSe faltar 1 letra ou tiver qualquer caractere extra, a mensagem é apagada.\nExemplos válidos (supondo que as letras bloqueadas são A, B, C, D, E):\n"A B C D E", "ABCDE". Exemplo inválido: "ABCDEF".`
+    warningText = `${mentionTag}, punição ativada: ${letters.length} letras bloqueadas (indefinido).\nLetras bloqueadas: *${lettersLabel}*.\nMensagens que contenham qualquer letra bloqueada serão apagadas (anti-bypass: 4->A, |_|->U).\nPara sair, envie *UMA* mensagem contendo *todas* as letras bloqueadas, usando apenas essas letras + espaços/quebras de linha.`
   }
 
   if (normalizedPunishmentId === "4") {
     const durationMs = 5 * 60_000 * severityMultiplier
     punishmentState = {
       type: "emojiOnly",
+      punishmentId: normalizedPunishmentId,
+      severityMultiplier,
+      appliedAt: now,
       endsAt: now + durationMs
     }
     warningText = `${mentionTag}, punição ativada: por *${Math.floor(durationMs / 60_000)} minutos* você só pode enviar mensagens formadas por emojis ou figurinhas. Qualquer mensagem com texto fora desse formato será apagada.`
@@ -559,28 +940,37 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     const durationMs = 5 * 60_000 * severityMultiplier
     punishmentState = {
       type: "mute5m",
+      punishmentId: normalizedPunishmentId,
+      severityMultiplier,
+      appliedAt: now,
       endsAt: now + durationMs
     }
     warningText = `${mentionTag}, punição ativada: *mute total por ${Math.floor(durationMs / 60_000)} minutos*. Qualquer mensagem sua será apagada.`
   }
 
   if (normalizedPunishmentId === "6") {
-    const durationMs = Math.ceil(5 * 60_000 * getLinear15xSeverityScale(severityMultiplier))
+    const durationMs = 5 * 60_000 * severityMultiplier
     punishmentState = {
       type: "noVowels",
+      punishmentId: normalizedPunishmentId,
+      severityMultiplier,
+      appliedAt: now,
       endsAt: now + durationMs,
     }
-    warningText = `${mentionTag}, punição ativada: sem vogais por *${Math.ceil(durationMs / 60_000)} minutos*. Mensagens com vogais serão apagadas.`
+    warningText = `${mentionTag}, punição ativada: sem vogais por *${Math.floor(durationMs / 60_000)} minutos*. Mensagens com vogais serão apagadas (anti-bypass: 4->A, |_|->U).`
   }
 
   if (normalizedPunishmentId === "7") {
-    const durationMs = Math.ceil(5 * 60_000 * getLinear15xSeverityScale(severityMultiplier))
+    const durationMs = 5 * 60_000 * severityMultiplier
     punishmentState = {
       type: "urgentPrefix",
+      punishmentId: normalizedPunishmentId,
+      severityMultiplier,
+      appliedAt: now,
       endsAt: now + durationMs,
       requiredPrefix: "🚨URGENTE:",
     }
-    warningText = `${mentionTag}, punição ativada: por *${Math.ceil(durationMs / 60_000)} minutos* toda mensagem deve começar com *🚨URGENTE:* (deve ser EXATAMENTE como descrito).`
+    warningText = `${mentionTag}, punição ativada: por *${Math.floor(durationMs / 60_000)} minutos* toda mensagem deve começar com *🚨URGENTE:* (deve ser EXATAMENTE como descrito).`
   }
 
   if (normalizedPunishmentId === "8") {
@@ -589,6 +979,9 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     const wordList = getRandomWordList(requiredWordsCount)
     punishmentState = {
       type: "wordListRequired",
+      punishmentId: normalizedPunishmentId,
+      severityMultiplier,
+      appliedAt: now,
       endsAt: now + durationMs,
       wordList,
       minRequiredWords: requiredWordsCount,
@@ -597,38 +990,50 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
   }
 
   if (normalizedPunishmentId === "9") {
-    const durationMin = 10 + (Math.max(1, severityMultiplier) - 1) * 2
+    const durationMin = 10 * severityMultiplier
     const durationMs = durationMin * 60_000
     punishmentState = {
       type: "allCaps",
+      punishmentId: normalizedPunishmentId,
+      severityMultiplier,
+      appliedAt: now,
       endsAt: now + durationMs,
     }
     warningText = `${mentionTag}, punição ativada: por *${durationMin} minutos* toda mensagem deve estar em CAIXA ALTA.`
   }
 
   if (normalizedPunishmentId === "10") {
-    const durationMs = 5 * 60_000
+    const durationMs = 5 * 60_000 * severityMultiplier
     punishmentState = {
       type: "deleteAndRepost",
+      punishmentId: normalizedPunishmentId,
+      severityMultiplier,
+      appliedAt: now,
       endsAt: now + durationMs,
     }
-    warningText = `${mentionTag}, punição ativada: por *5 minutos* suas mensagens serão apagadas e repostadas pelo bot.`
+    warningText = `${mentionTag}, punição ativada: por *${Math.floor(durationMs / 60_000)} minutos* suas mensagens serão apagadas e repostadas pelo bot.`
   }
 
   if (normalizedPunishmentId === "11") {
-    const durationMs = Math.ceil(5 * 60_000 * getLinear15xSeverityScale(severityMultiplier))
+    const durationMs = 5 * 60_000 * severityMultiplier
     punishmentState = {
       type: "sexualReaction",
+      punishmentId: normalizedPunishmentId,
+      severityMultiplier,
+      appliedAt: now,
       endsAt: now + durationMs,
     }
-    warningText = `${mentionTag}, punição ativada: por *${Math.ceil(durationMs / 60_000)} minutos* suas mensagens receberão reações sugestivas.`
+    warningText = `${mentionTag}, punição ativada: por *${Math.floor(durationMs / 60_000)} minutos* suas mensagens receberão reações sugestivas.`
   }
 
   if (normalizedPunishmentId === "12") {
     const durationMs = 60 * 60_000
-    const deleteChance = Math.min(1, (20 + (Math.max(1, severityMultiplier) - 1) * 5) / 100)
+    const deleteChance = Math.min(1, (20 + (Math.max(1, severityMultiplier) - 1) * 4) / 100)
     punishmentState = {
       type: "randomDeleteChance",
+      punishmentId: normalizedPunishmentId,
+      severityMultiplier,
+      appliedAt: now,
       endsAt: now + durationMs,
       deleteChance,
     }
@@ -636,10 +1041,13 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
   }
 
   if (normalizedPunishmentId === "13") {
-    const durationMin = 5 + (Math.max(1, severityMultiplier) - 1) * 2
+    const durationMin = 5 * severityMultiplier
     const durationMs = durationMin * 60_000
     punishmentState = {
       type: "max3wordsStrict",
+      punishmentId: normalizedPunishmentId,
+      severityMultiplier,
+      appliedAt: now,
       endsAt: now + durationMs,
     }
     warningText = `${mentionTag}, punição ativada: por *${durationMin} minutos* você pode enviar no máximo *3 palavras* por mensagem.`
@@ -647,18 +1055,16 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
 
   if (!punishmentState) return
 
-  activePunishments[groupId][targetUserId] = punishmentState
-
-  if (punishmentState?.endsAt) {
-    const msRemaining = Math.max(0, punishmentState.endsAt - now)
-    const timerId = setTimeout(() => {
-      clearPunishment(groupId, targetUserId)
-      sock.sendMessage(groupId, {
-        text: `${formatMentionTag(targetUserId)}, sua punição expirou.`,
-        mentions: normalizeMentionArray([targetUserId]),
-      }).catch(() => {})
-    }, msRemaining)
-    activePunishments[groupId][targetUserId].timerId = timerId
+  const appendResult = appendPunishmentForUser(
+    activePunishments,
+    groupId,
+    targetUserId,
+    punishmentState,
+    sock
+  )
+  const appliedState = appendResult.state
+  if (!appliedState) {
+    return
   }
 
   storage.setActivePunishments(activePunishments)
@@ -672,7 +1078,7 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     origin,
     punishmentId: normalizedPunishmentId,
     severityMultiplier,
-    timed: Boolean(punishmentState?.endsAt),
+    timed: Boolean(appliedState?.endsAt),
   })
   economyService.incrementStat(targetUserId, "punishmentsReceivedTotal", 1)
   if (origin === "admin") {
@@ -685,7 +1091,12 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     text: warningText,
     mentions: normalizeMentionArray([targetUserId])
   })
-  console.log("[punishment] applyPunishment COMPLETE", { groupId, targetUserId, type: punishmentState?.type })
+  console.log("[punishment] applyPunishment COMPLETE", {
+    groupId,
+    targetUserId,
+    type: appliedState?.type,
+    stackSize: appendResult.stackSize,
+  })
 }
 
 async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGroup, skipForCommand = false, botIsAdmin = true) {
@@ -722,13 +1133,16 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
       current.sequence = []
 
       const activePunishments = storage.getActivePunishments()
-      if (!activePunishments[from]) activePunishments[from] = {}
 
       if (current.offenseCount >= 3) {
-        activePunishments[from][senderId] = {
+        appendPunishmentForUser(activePunishments, from, senderId, {
           type: "mute5m",
+          punishmentId: "5",
+          severityMultiplier: 1,
+          appliedAt: now,
+          targetUserId: senderId,
           endsAt: now + (5 * 60 * 1000),
-        }
+        }, sock)
         economyService.debitCoinsFlexible(senderId, 50, {
           type: "anti-letter-dump-fine",
           details: "Multa por spam de letras",
@@ -739,10 +1153,14 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
           mentions: normalizeMentionArray([senderId]),
         })
       } else if (current.offenseCount >= 2) {
-        activePunishments[from][senderId] = {
+        appendPunishmentForUser(activePunishments, from, senderId, {
           type: "mute5m",
+          punishmentId: "5",
+          severityMultiplier: 1,
+          appliedAt: now,
+          targetUserId: senderId,
           endsAt: now + 60_000,
-        }
+        }, sock)
         await sock.sendMessage(from, {
           text: `❌ Spam detectado ${formatMentionTag(senderId)}. 2ª ocorrência: mute temporário de 1 minuto.`,
           mentions: normalizeMentionArray([senderId]),
@@ -766,150 +1184,223 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
 
   const activePunishments = storage.getActivePunishments()
   const groupPunishments = activePunishments[from] || {}
-  const matchedKey = findMatchingUserKey(groupPunishments, senderId)
-  const punishment = matchedKey ? groupPunishments[matchedKey] : null
-  if (!punishment) {
+  let matchedKey = findMatchingUserKey(groupPunishments, senderId)
+  if (!matchedKey) {
     return false
   }
 
+  let stack = normalizePunishmentStack(groupPunishments[matchedKey])
+  let shouldPersistState = false
+
   if (matchedKey !== senderId && !groupPunishments[senderId]) {
     // Lazy migration keeps future lookups consistent even if old keys were stored as @lid/@s variants.
-    groupPunishments[senderId] = punishment
+    groupPunishments[senderId] = stack
     delete groupPunishments[matchedKey]
-    storage.setActivePunishments(activePunishments)
+    matchedKey = senderId
+    shouldPersistState = true
+  } else if (!Array.isArray(groupPunishments[matchedKey])) {
+    groupPunishments[matchedKey] = stack
+    shouldPersistState = true
   }
 
   const now = Date.now()
-  if (punishment.endsAt && now >= punishment.endsAt) {
-    clearPunishment(from, senderId)
-    await sock.sendMessage(from, {
-      text: `${formatMentionTag(senderId)}, sua punição expirou.`,
-      mentions: normalizeMentionArray([senderId]),
-    })
+  const expiredPunishments = []
+  const activeStack = []
+  for (const punishment of stack) {
+    const endsAt = Number(punishment?.endsAt) || 0
+    if (endsAt && now >= endsAt) {
+      if (punishment?.timerId) {
+        clearTimeout(punishment.timerId)
+      }
+      expiredPunishments.push(punishment)
+      shouldPersistState = true
+      continue
+    }
+    activeStack.push(punishment)
+  }
+  stack = activeStack
+
+  if (shouldPersistState) {
+    setPunishmentStackForUser(groupPunishments, matchedKey, stack)
+    if (Object.keys(groupPunishments).length === 0) {
+      delete activePunishments[from]
+    }
+    storage.setActivePunishments(activePunishments)
+  }
+
+  if (expiredPunishments.length > 0) {
+    for (const expired of expiredPunishments) {
+      await sendPunishmentExpiredMessage(sock, from, senderId, expired)
+    }
+  }
+
+  if (stack.length === 0) {
     return false
   }
 
   let shouldDelete = false
+  let shouldRepostAfterDelete = false
+  let stackMutated = false
+  const deleteTriggeredTypes = new Set()
+  const releaseMessages = []
+  const nextStack = []
 
-  if (punishment.type === "max5chars") {
-    const measured = stripWhitespaceExceptSpace(text)
-    shouldDelete = measured.length > 5
-  }
+  for (const punishment of stack) {
+    let keepEntry = true
+    let entryShouldDelete = false
 
-  if (punishment.type === "rate20s") {
-    if (punishment.lastAllowedAt && now - punishment.lastAllowedAt < 20_000) {
+    if (punishment.type === "max5chars") {
+      const measured = stripWhitespaceExceptSpace(text)
+      entryShouldDelete = measured.length > 5
+    }
+
+    if (punishment.type === "rate20s") {
+      if (punishment.lastAllowedAt && now - punishment.lastAllowedAt < 20_000) {
+        entryShouldDelete = true
+      } else {
+        punishment.lastAllowedAt = now
+        stackMutated = true
+      }
+    }
+
+    if (punishment.type === "lettersBlock") {
+      const letters = punishment.letters || []
+      if (isUnlockLettersMessage(text, letters)) {
+        const lettersLabel = letters
+          .map((letter) => String(letter || "").trim().toUpperCase())
+          .filter(Boolean)
+          .join(", ")
+        keepEntry = false
+        stackMutated = true
+        releaseMessages.push(`${formatMentionTag(senderId)}, você cumpriu a condição e foi liberado da punição das letras (${lettersLabel}).`)
+      } else {
+        entryShouldDelete = messageContainsBlockedLetters(text, letters)
+      }
+    }
+
+    if (punishment.type === "emojiOnly") {
+      const isEmoji = isEmojiOnlyMessage(text)
+      const hasSticker = isStickerMessage(msg)
+      entryShouldDelete = !isEmoji && !hasSticker
+    }
+
+    if (punishment.type === "mute5m") {
+      entryShouldDelete = true
+    }
+
+    if (punishment.type === "noVowels") {
+      const normalizedText = normalizeComparableText(text)
+      const hasVowels = /[aeiou]/.test(normalizedText)
+      entryShouldDelete = hasVowels
+    }
+
+    if (punishment.type === "urgentPrefix") {
+      const prefix = String(punishment.requiredPrefix || "🚨URGENTE:")
+      const matches = matchesUrgentPrefix(text, prefix)
+      entryShouldDelete = !matches
+    }
+
+    if (punishment.type === "wordListRequired") {
+      const words = Array.isArray(punishment.wordList) ? punishment.wordList : []
+      const minRequired = Math.max(1, Math.floor(Number(punishment.minRequiredWords) || 1))
+      const hasWords = containsWordListTerms(text, words, minRequired)
+      entryShouldDelete = !hasWords
+    }
+
+    if (punishment.type === "allCaps") {
+      const raw = String(text || "")
+      if (!raw.trim() || !hasLetters(raw)) {
+        entryShouldDelete = false
+      } else {
+        entryShouldDelete = raw !== raw.toUpperCase()
+      }
+    }
+
+    if (punishment.type === "deleteAndRepost") {
+      entryShouldDelete = true
+      shouldRepostAfterDelete = true
+    }
+
+    if (punishment.type === "sexualReaction") {
+      const emoji = REPOST_REACTION_EMOJIS[crypto.randomInt(0, REPOST_REACTION_EMOJIS.length)]
+      try {
+        await sock.sendMessage(from, {
+          react: {
+            text: emoji,
+            key: msg.key,
+          },
+        })
+      } catch (e) {
+        console.error("[punishment] Erro ao reagir", e)
+      }
+    }
+
+    if (punishment.type === "randomDeleteChance") {
+      const chance = Math.max(0, Math.min(1, Number(punishment.deleteChance) || 0.2))
+      const roll = Math.random()
+      entryShouldDelete = roll < chance
+    }
+
+    if (punishment.type === "max3wordsStrict") {
+      const wordCount = countWordTokensStrict(text)
+      entryShouldDelete = wordCount > 3
+    }
+
+    if (keepEntry) {
+      nextStack.push(punishment)
+    }
+
+    if (entryShouldDelete) {
       shouldDelete = true
-    } else {
-      punishment.lastAllowedAt = now
-      storage.setActivePunishments(activePunishments)
+      deleteTriggeredTypes.add(String(punishment.type || "unknown"))
     }
   }
 
-  if (punishment.type === "lettersBlock") {
-    const letters = punishment.letters || []
-    if (isUnlockLettersMessage(text, letters)) {
-      clearPunishment(from, senderId)
+  if (stackMutated) {
+    setPunishmentStackForUser(groupPunishments, matchedKey, nextStack)
+    if (Object.keys(groupPunishments).length === 0) {
+      delete activePunishments[from]
+    }
+    storage.setActivePunishments(activePunishments)
+    stack = nextStack
+  }
+
+  if (releaseMessages.length > 0) {
+    for (const releaseText of releaseMessages) {
       await sock.sendMessage(from, {
-        text: `${formatMentionTag(senderId)}, você cumpriu a condição e foi liberado da punição das letras (${lettersLabel}).`,
-        mentions: normalizeMentionArray([senderId])
+        text: releaseText,
+        mentions: normalizeMentionArray([senderId]),
       })
-      return false
     }
-    shouldDelete = true
-  }
-
-  if (punishment.type === "emojiOnly") {
-    const isEmoji = isEmojiOnlyMessage(text)
-    const hasSticker = isStickerMessage(msg)
-    shouldDelete = !isEmoji && !hasSticker
-  }
-
-  if (punishment.type === "mute5m") {
-    shouldDelete = true
-  }
-
-  if (punishment.type === "noVowels") {
-    const hasVowels = /[aeiouáàâãéèêíìîóòôõúùû]/i.test(String(text || ""))
-    shouldDelete = hasVowels
-  }
-
-  if (punishment.type === "urgentPrefix") {
-    const prefix = String(punishment.requiredPrefix || "🚨URGENTE:")
-    const matches = matchesUrgentPrefix(text, prefix)
-    shouldDelete = !matches
-  }
-
-  if (punishment.type === "wordListRequired") {
-    const words = Array.isArray(punishment.wordList) ? punishment.wordList : []
-    const minRequired = Math.max(1, Math.floor(Number(punishment.minRequiredWords) || 1))
-    const hasWords = containsWordListTerms(text, words, minRequired)
-    shouldDelete = !hasWords
-  }
-
-  if (punishment.type === "allCaps") {
-    const raw = String(text || "")
-    if (!raw.trim() || !hasLetters(raw)) {
-      shouldDelete = false
-    } else {
-      shouldDelete = raw !== raw.toUpperCase()
-    }
-  }
-
-  if (punishment.type === "deleteAndRepost") {
-    shouldDelete = true
-  }
-
-  if (punishment.type === "sexualReaction") {
-    const emoji = REPOST_REACTION_EMOJIS[crypto.randomInt(0, REPOST_REACTION_EMOJIS.length)]
-    try {
-      await sock.sendMessage(from, {
-        react: {
-          text: emoji,
-          key: msg.key,
-        },
-      })
-    } catch (e) {
-      console.error("[punishment] Erro ao reagir", e)
-    }
-    return false
-  }
-
-  if (punishment.type === "randomDeleteChance") {
-    const chance = Math.max(0, Math.min(1, Number(punishment.deleteChance) || 0.2))
-    const roll = Math.random()
-    shouldDelete = roll < chance
-  }
-
-  if (punishment.type === "max3wordsStrict") {
-    const wordCount = countWordTokensStrict(text)
-    shouldDelete = wordCount > 3
   }
 
   if (!shouldDelete) {
     return false
   }
 
-  console.log("[punishment] handlePunishmentEnforcement - DELETING", { senderId, type: punishment.type })
+  const deleteTypes = Array.from(deleteTriggeredTypes)
+  const primaryDeleteType = deleteTypes[0] || "stacked"
+  console.log("[punishment] handlePunishmentEnforcement - DELETING", { senderId, types: deleteTypes })
   telemetry.incrementCounter("punishment.enforcement", 1, {
-    type: punishment.type,
+    type: primaryDeleteType,
     action: "delete",
   })
   telemetry.appendEvent("punishment.enforcement", {
     groupId: from,
     userId: senderId,
-    type: punishment.type,
+    type: primaryDeleteType,
+    types: deleteTypes,
     action: "delete",
   })
 
   let deleteSucceeded = false
-  try {
-    await sock.sendMessage(from, { delete: msg.key })
-    deleteSucceeded = true
-    if (punishment.type === "deleteAndRepost") {
+  deleteSucceeded = await deleteMessageWithRetry(sock, from, msg.key)
+  if (deleteSucceeded && shouldRepostAfterDelete) {
+    try {
       await resendPunishedContent(sock, from, senderId, msg, text)
+    } catch (e) {
+      console.error("[punishment] Erro ao repostar conteúdo da punição", e)
     }
-  } catch (e) {
-    console.error("[punishment] Erro ao apagar mensagem por punição", e)
   }
   if (!deleteSucceeded) {
     return true
@@ -1044,48 +1535,55 @@ async function rehydrateActivePunishments(sock) {
       continue
     }
 
-    for (const [userIdRaw, punishment] of Object.entries(users)) {
+    for (const [userIdRaw] of Object.entries(users)) {
+      const currentEntry = users[userIdRaw]
       const userId = normalizeUserId(userIdRaw) || String(userIdRaw || "")
-      if (!userId || !punishment || typeof punishment !== "object") {
+      if (!userId || !currentEntry || typeof currentEntry !== "object") {
         delete users[userIdRaw]
         changed = true
         continue
       }
 
-      if (userId !== userIdRaw && !users[userId]) {
-        users[userId] = punishment
+      let userKey = userIdRaw
+      let stack = normalizePunishmentStack(currentEntry)
+
+      if (userId !== userIdRaw) {
+        const existingStack = normalizePunishmentStack(users[userId])
+        stack = [...existingStack, ...stack]
+        users[userId] = stack
         delete users[userIdRaw]
+        userKey = userId
+        changed = true
+      } else if (!Array.isArray(users[userKey])) {
+        users[userKey] = stack
         changed = true
       }
 
-      if (punishment.timerId) {
-        clearTimeout(punishment.timerId)
-        delete punishment.timerId
-        changed = true
-      }
-
-      const endsAt = Number(punishment.endsAt) || 0
-      if (!endsAt) {
-        continue
-      }
-
-      const remainingMs = endsAt - now
-      if (remainingMs <= 0) {
-        delete users[userIdRaw]
-        changed = true
-        continue
-      }
-
-      punishment.timerId = setTimeout(() => {
-        clearPunishment(groupId, userId)
-        if (sock && typeof sock.sendMessage === "function") {
-          sock.sendMessage(groupId, {
-            text: `${formatMentionTag(userId)}, sua punição expirou.`,
-            mentions: normalizeMentionArray([userId]),
-          }).catch(() => {})
+      const rehydratedStack = []
+      for (const entry of stack) {
+        if (entry?.timerId) {
+          clearTimeout(entry.timerId)
+          delete entry.timerId
+          changed = true
         }
-      }, remainingMs)
-      changed = true
+
+        const endsAt = Number(entry?.endsAt) || 0
+        if (endsAt) {
+          const remainingMs = endsAt - now
+          if (remainingMs <= 0) {
+            changed = true
+            continue
+          }
+          schedulePunishmentExpiryTimer(sock, groupId, userId, entry)
+          changed = true
+        }
+
+        rehydratedStack.push(entry)
+      }
+
+      if (!setPunishmentStackForUser(users, userKey, rehydratedStack)) {
+        changed = true
+      }
     }
 
     if (Object.keys(users).length === 0) {

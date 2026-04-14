@@ -32,6 +32,12 @@ function setCoinRound(groupId, senderId, resultado, betMultiplier = 1) {
   storage.setCoinGames(coinGames)
 }
 
+function getPunishmentStack(groupId, userId) {
+  const entry = storage.getActivePunishments()[groupId]?.[userId]
+  if (!entry) return []
+  return Array.isArray(entry) ? entry : [entry]
+}
+
 test("startCoinRound accepts explicit !moeda bet multiplier", async () => {
   const economyService = require("../services/economyService")
   const groupId = `__coin_round_bet_${Date.now()}@g.us`
@@ -271,8 +277,8 @@ test("applyPunishment applies all punishment types with numeric IDs", async () =
       origin: "admin",
       severityMultiplier: 1,
     })
-    const active = storage.getActivePunishments()
-    assert.equal(active[groupId]?.[target]?.type, expectedType)
+    const stack = getPunishmentStack(groupId, target)
+    assert.equal(stack[stack.length - 1]?.type, expectedType)
   }
 
   punishmentService.clearPunishment(groupId, target)
@@ -384,7 +390,7 @@ test("punishment enforcement remains blocking when delete fails", async () => {
   punishmentService.clearPunishment(groupId, target)
 })
 
-test("lettersBlock requires all blocked letters and only blocked letters plus whitespace", async () => {
+test("lettersBlock deletes only blocked letters and supports leet detection", async () => {
   const groupId = `__punishment_letters_unlock_${Date.now()}@g.us`
   const target = "letters@s.whatsapp.net"
   const { sock, sent } = createSockCapture()
@@ -393,27 +399,38 @@ test("lettersBlock requires all blocked letters and only blocked letters plus wh
   if (!active[groupId]) active[groupId] = {}
   active[groupId][target] = {
     type: "lettersBlock",
-    letters: ["a", "d", "f"],
+    letters: ["a", "u"],
   }
   storage.setActivePunishments(active)
 
-  const enforcedMissingLetter = await punishmentService.handlePunishmentEnforcement(
+  const allowedMessage = await punishmentService.handlePunishmentEnforcement(
     sock,
-    { key: { id: "msg-missing", remoteJid: groupId, fromMe: false, participant: target } },
+    { key: { id: "msg-allowed", remoteJid: groupId, fromMe: false, participant: target } },
     groupId,
     target,
-    "A D",
+    "bcd fgh",
     true,
     false,
     true
   )
 
-  const enforcedWrongLetter = await punishmentService.handlePunishmentEnforcement(
+  const blockedLetter = await punishmentService.handlePunishmentEnforcement(
     sock,
-    { key: { id: "msg-wrong", remoteJid: groupId, fromMe: false, participant: target } },
+    { key: { id: "msg-blocked", remoteJid: groupId, fromMe: false, participant: target } },
     groupId,
     target,
-    "A BDF",
+    "a b",
+    true,
+    false,
+    true
+  )
+
+  const blockedLeet = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-leet", remoteJid: groupId, fromMe: false, participant: target } },
+    groupId,
+    target,
+    "4 b |_|",
     true,
     false,
     true
@@ -424,42 +441,211 @@ test("lettersBlock requires all blocked letters and only blocked letters plus wh
     { key: { id: "msg-unlock", remoteJid: groupId, fromMe: false, participant: target } },
     groupId,
     target,
-    "A\nDF",
+    "4 |_|",
     true,
     false,
     true
   )
 
-  assert.equal(enforcedMissingLetter, true)
-  assert.equal(enforcedWrongLetter, true)
+  assert.equal(allowedMessage, false)
+  assert.equal(blockedLetter, true)
+  assert.equal(blockedLeet, true)
   assert.equal(unlocked, false)
-  assert.ok(sent.some((entry) => entry.payload?.delete?.id === "msg-missing"))
-  assert.ok(sent.some((entry) => entry.payload?.delete?.id === "msg-wrong"))
+  assert.equal(sent.some((entry) => entry.payload?.delete?.id === "msg-allowed"), false)
+  assert.ok(sent.some((entry) => entry.payload?.delete?.id === "msg-blocked"))
+  assert.ok(sent.some((entry) => entry.payload?.delete?.id === "msg-leet"))
   assert.ok(sent.some((entry) => /foi liberado da punição das letras/i.test(String(entry.payload?.text || ""))))
   assert.equal(Boolean(storage.getActivePunishments()[groupId]?.[target]), false)
 })
 
-test("punishment linear 1.5x scaling is applied instead of exponential growth", async () => {
+test("noVowels enforces classic and leet vowels", async () => {
+  const groupId = `__punishment_no_vowels_${Date.now()}@g.us`
+  const target = "novowels@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+
+  const active = storage.getActivePunishments()
+  if (!active[groupId]) active[groupId] = {}
+  active[groupId][target] = {
+    type: "noVowels",
+  }
+  storage.setActivePunishments(active)
+
+  const consonantsOnly = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-novowels-ok", remoteJid: groupId, fromMe: false, participant: target } },
+    groupId,
+    target,
+    "brt krl",
+    true,
+    false,
+    true
+  )
+
+  const classicVowel = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-novowels-vowel", remoteJid: groupId, fromMe: false, participant: target } },
+    groupId,
+    target,
+    "casa",
+    true,
+    false,
+    true
+  )
+
+  const leetA = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-novowels-leet-a", remoteJid: groupId, fromMe: false, participant: target } },
+    groupId,
+    target,
+    "c4s4",
+    true,
+    false,
+    true
+  )
+
+  const leetU = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-novowels-leet-u", remoteJid: groupId, fromMe: false, participant: target } },
+    groupId,
+    target,
+    "|_|",
+    true,
+    false,
+    true
+  )
+
+  assert.equal(consonantsOnly, false)
+  assert.equal(classicVowel, true)
+  assert.equal(leetA, true)
+  assert.equal(leetU, true)
+  assert.equal(sent.some((entry) => entry.payload?.delete?.id === "msg-novowels-ok"), false)
+  assert.ok(sent.some((entry) => entry.payload?.delete?.id === "msg-novowels-vowel"))
+  assert.ok(sent.some((entry) => entry.payload?.delete?.id === "msg-novowels-leet-a"))
+  assert.ok(sent.some((entry) => entry.payload?.delete?.id === "msg-novowels-leet-u"))
+  punishmentService.clearPunishment(groupId, target)
+})
+
+test("punishment severity scales with linear timing and special-case rules", async () => {
   const groupId = `__punishment_linear_scale_${Date.now()}@g.us`
   const target = "target@s.whatsapp.net"
   const { sock } = createSockCapture()
 
-  const targetDurationMs = 10 * 60_000 // severity 3 => 5min * 2.0x (linear), not 11.25min (exponential)
   const toleranceMs = 2_000
-  const idsWithLinearScaling = ["6", "7", "8", "11"]
-
-  for (const punishmentId of idsWithLinearScaling) {
+  const assertDuration = async (punishmentId, severityMultiplier, expectedMs) => {
     const before = Date.now()
-    await punishmentService.applyPunishment(sock, groupId, target, punishmentId, {
+    await punishmentService.applyPunishment(sock, groupId, target, String(punishmentId), {
       origin: "admin",
-      severityMultiplier: 3,
+      severityMultiplier,
     })
-    const active = storage.getActivePunishments()
-    const endsAt = Number(active[groupId]?.[target]?.endsAt || 0)
+    const stack = getPunishmentStack(groupId, target)
+    const endsAt = Number(stack[stack.length - 1]?.endsAt || 0)
     const duration = endsAt - before
-    assert.ok(duration >= (targetDurationMs - toleranceMs) && duration <= (targetDurationMs + toleranceMs))
+    assert.ok(
+      duration >= (expectedMs - toleranceMs) && duration <= (expectedMs + toleranceMs),
+      `unexpected duration for punishment ${punishmentId}`
+    )
+    punishmentService.clearPunishment(groupId, target)
   }
 
+  await assertDuration("6", 3, 15 * 60_000)
+  await assertDuration("7", 3, 15 * 60_000)
+  await assertDuration("9", 3, 30 * 60_000)
+  await assertDuration("10", 3, 15 * 60_000)
+  await assertDuration("11", 3, 15 * 60_000)
+  await assertDuration("13", 3, 15 * 60_000)
+
+  await punishmentService.applyPunishment(sock, groupId, target, "8", {
+    origin: "admin",
+    severityMultiplier: 3,
+  })
+  let stack = getPunishmentStack(groupId, target)
+  let last = stack[stack.length - 1]
+  let duration = Number(last?.endsAt || 0) - Date.now()
+  assert.ok(duration > (9 * 60_000) && duration <= (10 * 60_000 + toleranceMs))
+  assert.equal(last?.minRequiredWords, 3)
+  punishmentService.clearPunishment(groupId, target)
+
+  await punishmentService.applyPunishment(sock, groupId, target, "12", {
+    origin: "admin",
+    severityMultiplier: 3,
+  })
+  stack = getPunishmentStack(groupId, target)
+  last = stack[stack.length - 1]
+  assert.equal(Math.round(Number(last?.deleteChance || 0) * 100), 28)
+  punishmentService.clearPunishment(groupId, target)
+})
+
+test("punishments stack and enforce simultaneously", async () => {
+  const groupId = `__punishment_stack_${Date.now()}@g.us`
+  const target = "stacked@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+
+  await punishmentService.applyPunishment(sock, groupId, target, "11", {
+    origin: "admin",
+    severityMultiplier: 1,
+  })
+  await punishmentService.applyPunishment(sock, groupId, target, "1", {
+    origin: "admin",
+    severityMultiplier: 1,
+  })
+
+  const stack = getPunishmentStack(groupId, target)
+  assert.equal(stack.length, 2)
+
+  const enforced = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-stack-1", remoteJid: groupId, fromMe: false, participant: target } },
+    groupId,
+    target,
+    "mensagem muito longa",
+    true,
+    false,
+    true
+  )
+
+  assert.equal(enforced, true)
+  assert.ok(sent.some((entry) => entry.payload?.delete?.id === "msg-stack-1"))
+  assert.ok(sent.some((entry) => entry.payload?.react?.key?.id === "msg-stack-1"))
+  punishmentService.clearPunishment(groupId, target)
+})
+
+test("expired punishment message identifies the exact punishment", async () => {
+  const groupId = `__punishment_expiry_msg_${Date.now()}@g.us`
+  const target = "expired@s.whatsapp.net"
+  const { sock, sent } = createSockCapture()
+
+  const active = storage.getActivePunishments()
+  if (!active[groupId]) active[groupId] = {}
+  active[groupId][target] = [
+    {
+      type: "allCaps",
+      punishmentId: "9",
+      endsAt: Date.now() - 2_000,
+    },
+    {
+      type: "sexualReaction",
+      punishmentId: "11",
+      endsAt: Date.now() + 60_000,
+    },
+  ]
+  storage.setActivePunishments(active)
+
+  const enforced = await punishmentService.handlePunishmentEnforcement(
+    sock,
+    { key: { id: "msg-expiry-1", remoteJid: groupId, fromMe: false, participant: target } },
+    groupId,
+    target,
+    "texto qualquer",
+    true,
+    false,
+    true
+  )
+
+  assert.equal(enforced, false)
+  assert.ok(sent.some((entry) => /punição expirada: \*somente caixa alta\*/i.test(String(entry.payload?.text || ""))))
+  const stack = getPunishmentStack(groupId, target)
+  assert.equal(stack.length, 1)
+  assert.equal(stack[0]?.type, "sexualReaction")
   punishmentService.clearPunishment(groupId, target)
 })
 
