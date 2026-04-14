@@ -3929,6 +3929,43 @@ test("utility router handles !feedback command", async () => {
   assert.match(String(sent[0].payload?.text || ""), /wa\.me\/\+557398579450/i)
 })
 
+test("utility router allows DM !s when senderIsRegistered was pre-resolved by pipeline", async () => {
+  const { sock, sent } = createSockCapture()
+
+  const handled = await handleUtilityCommands({
+    sock,
+    from: "5511999999999@lid",
+    sender: "5511999999999@lid",
+    rawText: "!s",
+    isCommand: true,
+    cmd: "!s",
+    prefix: "!",
+    isGroup: false,
+    senderIsRegistered: true,
+    registrationService: {
+      isRegistered: () => false,
+    },
+    msg: {
+      message: {
+        videoMessage: {
+          mimetype: "video/mp4",
+        },
+      },
+    },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => Buffer.from("video"),
+    logger: {},
+    videoToSticker: async () => Buffer.from("sticker"),
+    dddMap: {},
+  })
+
+  assert.equal(handled, true)
+  assert.equal(sent.length, 1)
+  assert.ok(Buffer.isBuffer(sent[0].payload?.sticker))
+})
+
 test("utility router handles !bugbounty summary and sends report flow instructions only in DM", async () => {
   __resetUtilityRouterStateForTests()
   const { sock, sent } = createSockCapture()

@@ -542,6 +542,7 @@ async function handleUtilityCommands(ctx) {
     cmd,
     prefix,
     isGroup,
+    senderIsRegistered,
     msg,
     quoted,
     mentioned,
@@ -2256,7 +2257,12 @@ ${feedbackText}`,
   }
 
   if (cmd === prefix + "s" || cmd === prefix + "fig" || cmd === prefix + "sticker" || cmd === prefix + "f") {
-    if (!isGroup && !registrationService?.isRegistered?.(sender)) {
+    const dmSenderRegistered = Boolean(
+      typeof senderIsRegistered === "boolean"
+        ? senderIsRegistered
+        : registrationService?.isRegistered?.(sender)
+    )
+    if (!isGroup && !dmSenderRegistered) {
       trackUtility("sticker", "rejected", { reason: "dm-unregistered" })
       await sock.sendMessage(from, {
         text: `Este comando no privado exige cadastro. Use *${prefix}register* primeiro.`,

@@ -343,19 +343,114 @@ function rememberProcessedMessage(queueKey = "", dedupeKey = "") {
   pruneProcessedMessageCache(queueKey)
 }
 
-function enqueueMessageByKey(queueKey = "global", task = async () => {}) {
-  const key = String(queueKey || "").trim() || "global"
-  const previous = messageQueueByChat.get(key) || Promise.resolve()
-  const next = previous
-    .catch(() => {})
-    .then(async () => task())
-    .finally(() => {
-      if (messageQueueByChat.get(key) === next) {
-        messageQueueByChat.delete(key)
+function createQueuedMessageTask(task = async () => {}) {
+  let resolveTask = () => {}
+  let rejectTask = () => {}
+  const promise = new Promise((resolve, reject) => {
+    resolveTask = resolve
+    rejectTask = reject
+  })
+
+  return {
+    run: typeof task === "function" ? task : async () => {},
+    resolve: resolveTask,
+    reject: rejectTask,
+    promise,
+  }
+}
+
+function scheduleMessageQueueDrain(queueKey = "global", state = null) {
+  if (!state || state.running || state.scheduled) return
+
+  state.scheduled = true
+  Promise.resolve().then(() => {
+    const latestState = messageQueueByChat.get(queueKey)
+    if (!latestState) return
+    latestState.scheduled = false
+    void drainMessageQueue(queueKey, latestState)
+  })
+}
+
+async function drainMessageQueue(queueKey = "global", state = null) {
+  if (!state || state.running) return
+
+  state.running = true
+  try {
+    while (true) {
+      const nextTask = state.overrideTasks.shift() || state.regularTasks.shift()
+      if (!nextTask) break
+
+      try {
+        const result = await nextTask.run()
+        nextTask.resolve(result)
+      } catch (err) {
+        nextTask.reject(err)
       }
-    })
-  messageQueueByChat.set(key, next)
-  return next
+    }
+  } finally {
+    state.running = false
+    const hasPending = state.overrideTasks.length > 0 || state.regularTasks.length > 0
+    if (hasPending) {
+      scheduleMessageQueueDrain(queueKey, state)
+    } else if (messageQueueByChat.get(queueKey) === state) {
+      messageQueueByChat.delete(queueKey)
+    }
+  }
+}
+
+function enqueueMessageByKey(queueKey = "global", task = async () => {}, options = {}) {
+  const key = String(queueKey || "").trim() || "global"
+  let state = messageQueueByChat.get(key)
+  if (!state) {
+    state = {
+      running: false,
+      scheduled: false,
+      overrideTasks: [],
+      regularTasks: [],
+    }
+    messageQueueByChat.set(key, state)
+  }
+
+  const queuedTask = createQueuedMessageTask(task)
+  const isOverridePriority = Boolean(options?.isOverridePriority)
+  if (isOverridePriority) {
+    state.overrideTasks.push(queuedTask)
+  } else {
+    state.regularTasks.push(queuedTask)
+  }
+
+  scheduleMessageQueueDrain(key, state)
+  return queuedTask.promise
+}
+
+function isOverridePriorityMessage(msg = {}) {
+  const forceMeta = msg?.__forceMeta && typeof msg.__forceMeta === "object"
+    ? msg.__forceMeta
+    : null
+  if (Boolean(forceMeta?.active)) return true
+
+  const from = String(msg?.key?.remoteJid || "").trim()
+  if (!from) return false
+
+  const isGroup = from.endsWith("@g.us")
+  const senderCandidates = [...new Set([
+    msg?.key?.participant,
+    msg?.key?.participantPn,
+    msg?.key?.remoteJid,
+    msg?.key?.remoteJidAlt,
+    from,
+  ].map((candidate) => String(candidate || "").trim()).filter(Boolean))]
+
+  for (const candidate of senderCandidates) {
+    const aliases = getIdentityAliases(candidate)
+    for (const alias of aliases) {
+      if (isOverrideIdentityAnyState(alias, from, isGroup)) {
+        return true
+      }
+    }
+  }
+
+  return false
 }
 
 function waitMs(ms = 0) {
@@ -5231,36 +5326,43 @@ if (handledWeaponsCommand) return;
     const queuedTasks = incomingMessages.map((incomingMsg) => {
       const queueKey = getMessageQueueKey(incomingMsg)
       const dedupeKey = getMessageDedupeKey(incomingMsg)
+      const isOverridePriority = isOverridePriorityMessage(incomingMsg)
 
-      return enqueueMessageByKey(queueKey, async () => {
-        if (dedupeKey && hasProcessedMessage(queueKey, dedupeKey)) {
-          return
-        }
-        try {
-          await withTimeout(
-            processSingleUpsertMessage(incomingMsg),
-            MESSAGE_PROCESSING_TIMEOUT_MS,
-            `messages.upsert.process(${queueKey})`
-          )
-          if (dedupeKey) {
-            rememberProcessedMessage(queueKey, dedupeKey)
+      return enqueueMessageByKey(
+        queueKey,
+        async () => {
+          if (dedupeKey && hasProcessedMessage(queueKey, dedupeKey)) {
+            return
           }
-        } catch (err) {
-          perfStats.messagesErrored += 1
-          lifetimeStats.messagesErrored += 1
-          persistLifetimeStats()
-          telemetry.incrementCounter("command.error", 1, {
-            scope: "messages.upsert.timeout",
-          })
-          telemetry.appendEvent("command.error", {
-            scope: "messages.upsert.timeout",
-            queueKey,
-            messageId: String(incomingMsg?.key?.id || ""),
-            message: String(err?.message || err || "unknown error"),
-          })
-          console.error("Erro/timeout no processamento de messages.upsert", err)
+          try {
+            await withTimeout(
+              processSingleUpsertMessage(incomingMsg),
+              MESSAGE_PROCESSING_TIMEOUT_MS,
+              `messages.upsert.process(${queueKey})`
+            )
+            if (dedupeKey) {
+              rememberProcessedMessage(queueKey, dedupeKey)
+            }
+          } catch (err) {
+            perfStats.messagesErrored += 1
+            lifetimeStats.messagesErrored += 1
+            persistLifetimeStats()
+            telemetry.incrementCounter("command.error", 1, {
+              scope: "messages.upsert.timeout",
+            })
+            telemetry.appendEvent("command.error", {
+              scope: "messages.upsert.timeout",
+              queueKey,
+              messageId: String(incomingMsg?.key?.id || ""),
+              message: String(err?.message || err || "unknown error"),
+            })
+            console.error("Erro/timeout no processamento de messages.upsert", err)
+          }
+        },
+        {
+          isOverridePriority,
         }
-      })
+      )
     })
 
     await Promise.allSettled(queuedTasks)
