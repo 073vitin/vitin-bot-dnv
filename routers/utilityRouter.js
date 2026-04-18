@@ -2438,7 +2438,87 @@ ${feedbackText}`,
     trackUtility("gado", "success", { target: alvo })
     return true
   }
+  
+if (cmdName === prefix + "transmutar") {
+  try {
+    await sock.sendMessage(from, {
+      react: { text: "🧪", key: msg.key }
+    })
 
+    let target = quoted || msg
+    let content = target?.message || target
+
+    if (content?.viewOnceMessageV2) content = content.viewOnceMessageV2.message
+    if (content?.viewOnceMessage) content = content.viewOnceMessage.message
+
+    // =========================
+    // STICKER -> IMG / VIDEO
+    // =========================
+    if (content?.stickerMessage) {
+      const buffer = await downloadMediaMessage(target, "buffer")
+
+      const isAnimated = buffer.includes("ANIM")
+
+      const input = "./tmp.webp"
+      const output = isAnimated ? "./tmp.mp4" : "./tmp.png"
+
+      fs.writeFileSync(input, buffer)
+
+      await new Promise((resolve, reject) => {
+        ffmpeg(input)
+          .outputOptions(["-y"])
+          .toFormat(isAnimated ? "mp4" : "png")
+          .save(output)
+          .on("end", resolve)
+          .on("error", reject)
+      })
+
+      const media = fs.readFileSync(output)
+
+      if (isAnimated) {
+        await sock.sendMessage(from, { video: media }, { quoted: msg })
+      } else {
+        await sock.sendMessage(from, { image: media }, { quoted: msg })
+      }
+
+      fs.unlinkSync(input)
+      fs.unlinkSync(output)
+      return
+    }
+
+    // =========================
+    // IMG -> STICKER
+    // =========================
+    if (content?.imageMessage) {
+      const buffer = await downloadMediaMessage(target, "buffer")
+      const sticker = await videoToSticker(buffer)
+
+      await sock.sendMessage(from, { sticker }, { quoted: msg })
+      return
+    }
+
+    // =========================
+    // VIDEO -> STICKER
+    // =========================
+    if (content?.videoMessage) {
+      const buffer = await downloadMediaMessage(target, "buffer")
+      const sticker = await videoToSticker(buffer)
+
+      await sock.sendMessage(from, { sticker }, { quoted: msg })
+      return
+    }
+
+    return sock.sendMessage(from, {
+      text: "responda uma figurinha, imagem ou vídeo 🧪",
+    }, { quoted: msg })
+
+  } catch (e) {
+    console.error("Erro no transmutar:", e)
+    await sock.sendMessage(from, {
+      text: "erro ao transmutar mídia",
+    }, { quoted: msg })
+  }
+}
   if (cmd.startsWith(prefix + "ship")) {
     let p1 = normalizeMentionJid(mentioned[0] || "")
     let p2 = normalizeMentionJid(mentioned[1] || "")
