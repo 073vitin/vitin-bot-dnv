@@ -2441,15 +2441,42 @@ ${feedbackText}`,
   
 if (cmdName === prefix + "transmutar") {
   try {
-    await sock.sendMessage(from, {
-      react: { text: "🧪", key: msg.key }
-    })
-
     let target = quoted || msg
     let content = target?.message || target
 
-    if (content?.viewOnceMessageV2) content = content.viewOnceMessageV2.message
-    if (content?.viewOnceMessage) content = content.viewOnceMessage.message
+    let isViewOnce = false
+
+    // detectar viewOnce
+    if (content?.viewOnceMessageV2) {
+      isViewOnce = true
+      content = content.viewOnceMessageV2.message
+    }
+
+    if (content?.viewOnceMessage) {
+      isViewOnce = true
+      content = content.viewOnceMessage.message
+    }
+
+    await sock.sendMessage(from, {
+      react: { text: isViewOnce ? "💾" : "🧪", key: msg.key }
+    })
+
+    // =========================
+    // VIEWONCE -> MIDIA NORMAL
+    // =========================
+    if (isViewOnce) {
+      const buffer = await downloadMediaMessage(target, "buffer")
+
+      if (content?.imageMessage) {
+        await sock.sendMessage(from, { image: buffer }, { quoted: msg })
+        return true
+      }
+
+      if (content?.videoMessage) {
+        await sock.sendMessage(from, { video: buffer }, { quoted: msg })
+        return true
+      }
+    }
 
     // =========================
     // STICKER -> IMG / VIDEO
@@ -2483,42 +2510,26 @@ if (cmdName === prefix + "transmutar") {
 
       fs.unlinkSync(input)
       fs.unlinkSync(output)
-      return
+      return true
     }
 
-    // =========================
-    // IMG -> STICKER
-    // =========================
-    if (content?.imageMessage) {
-      const buffer = await downloadMediaMessage(target, "buffer")
-      const sticker = await videoToSticker(buffer)
-
-      await sock.sendMessage(from, { sticker }, { quoted: msg })
-      return
-    }
-
-    // =========================
-    // VIDEO -> STICKER
-    // =========================
-    if (content?.videoMessage) {
-      const buffer = await downloadMediaMessage(target, "buffer")
-      const sticker = await videoToSticker(buffer)
-
-      await sock.sendMessage(from, { sticker }, { quoted: msg })
-      return
-    }
-
-    return sock.sendMessage(from, {
-      text: "responda uma figurinha, imagem ou vídeo 🧪",
+    await sock.sendMessage(from, {
+      text: "responda uma figurinha ou mídia de visualização única 🧪",
     }, { quoted: msg })
+
+    return true
 
   } catch (e) {
     console.error("Erro no transmutar:", e)
+
     await sock.sendMessage(from, {
       text: "erro ao transmutar mídia",
     }, { quoted: msg })
+
+    return true
   }
 }
+  
   if (cmd.startsWith(prefix + "ship")) {
     let p1 = normalizeMentionJid(mentioned[0] || "")
     let p2 = normalizeMentionJid(mentioned[1] || "")
