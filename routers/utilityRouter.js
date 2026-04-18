@@ -2446,7 +2446,9 @@ if (cmdName === prefix + "transmutar") {
 
     let isViewOnce = false
 
-    // detectar viewOnce
+    // =========================
+    // VIEW ONCE
+    // =========================
     if (content?.viewOnceMessageV2) {
       isViewOnce = true
       content = content.viewOnceMessageV2.message
@@ -2461,12 +2463,12 @@ if (cmdName === prefix + "transmutar") {
       react: { text: isViewOnce ? "💾" : "🧪", key: msg.key }
     })
 
+    const buffer = await downloadMediaMessage(target, "buffer")
+
     // =========================
-    // VIEWONCE -> MIDIA NORMAL
+    // VIEWONCE → MIDIA NORMAL
     // =========================
     if (isViewOnce) {
-      const buffer = await downloadMediaMessage(target, "buffer")
-
       if (content?.imageMessage) {
         await sock.sendMessage(from, { image: buffer }, { quoted: msg })
         return true
@@ -2479,40 +2481,65 @@ if (cmdName === prefix + "transmutar") {
     }
 
     // =========================
-    // STICKER -> IMG / VIDEO
+    // STICKER → IMG / VIDEO
     // =========================
     if (content?.stickerMessage) {
-      const buffer = await downloadMediaMessage(target, "buffer")
-
-      const isAnimated = buffer.includes("ANIM")
+      const isAnimated = content.stickerMessage.isAnimated
 
       const input = "./tmp.webp"
-      const output = isAnimated ? "./tmp.mp4" : "./tmp.png"
-
       fs.writeFileSync(input, buffer)
 
-      await new Promise((resolve, reject) => {
-        ffmpeg(input)
-          .outputOptions(["-y"])
-          .toFormat(isAnimated ? "mp4" : "png")
-          .save(output)
-          .on("end", resolve)
-          .on("error", reject)
-      })
-
-      const media = fs.readFileSync(output)
-
       if (isAnimated) {
+        const output = "./tmp.mp4"
+
+        await new Promise((resolve, reject) => {
+          ffmpeg(input)
+            .outputOptions([
+              "-vf scale=512:512,fps=20",
+              "-pix_fmt yuv420p"
+            ])
+            .toFormat("mp4")
+            .save(output)
+            .on("end", resolve)
+            .on("error", reject)
+        })
+
+        const media = fs.readFileSync(output)
         await sock.sendMessage(from, { video: media }, { quoted: msg })
+
+        fs.unlinkSync(output)
       } else {
+        const output = "./tmp.png"
+
+        await new Promise((resolve, reject) => {
+          ffmpeg(input)
+            .toFormat("png")
+            .save(output)
+            .on("end", resolve)
+            .on("error", reject)
+        })
+
+        const media = fs.readFileSync(output)
         await sock.sendMessage(from, { image: media }, { quoted: msg })
+
+        fs.unlinkSync(output)
       }
 
       fs.unlinkSync(input)
-      fs.unlinkSync(output)
       return true
     }
 
+    // =========================
+    // GIF → TRATAR COMO VIDEO
+    // =========================
+    if (content?.videoMessage?.gifPlayback) {
+      await sock.sendMessage(from, { video: buffer }, { quoted: msg })
+      return true
+    }
+
+    // =========================
+    // OUTROS
+    // =========================
     await sock.sendMessage(from, {
       text: "responda uma figurinha ou mídia de visualização única 🧪",
     }, { quoted: msg })
