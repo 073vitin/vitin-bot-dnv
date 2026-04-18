@@ -1957,7 +1957,7 @@ server = app.listen(PORT, ()=>console.log("Servidor rodando na porta " + PORT))
 // =========================
 async function videoToSticker(buffer){
   const input = "./input.mp4"
-  const outputGif = "./output.gif"
+  const outputWebp = "./output.webp"
 
   try {
     console.log("[videoToSticker] Iniciando conversão, tamanho do buffer:", buffer.length)
@@ -1967,35 +1967,40 @@ async function videoToSticker(buffer){
     await new Promise((resolve, reject) => {
       ffmpeg(input)
         .outputOptions([
-          "-t 10",  
-          "-vf fps=30,scale=512:512:flags=lanczos",  
-          "-loop 0",  
-          "-f gif"   
+          "-t 6",
+          "-vf scale=512:512:force_original_aspect_ratio=decrease,fps=20,pad=512:512:-1:-1:color=0x00000000",
+          "-loop 0",
+          "-an",
+          "-vsync 0",
+          "-vcodec libwebp",
+          "-preset default",
+          "-qscale 50",
+          "-metadata:s:v:0 alpha_mode=1"
         ])
-        .toFormat("gif")
-        .save(outputGif)
+        .toFormat("webp")
+        .save(outputWebp)
         .on("end", () => {
-          console.log("[videoToSticker] GIF gerado com sucesso")
+          console.log("[videoToSticker] WEBP gerado com sucesso")
           resolve()
         })
         .on("error", (err) => {
-          console.error("[videoToSticker] Erro ao gerar GIF:", err)
+          console.error("[videoToSticker] Erro ao gerar WEBP:", err)
           reject(err)
         })
     })
 
-    console.log("[videoToSticker] Lendo arquivo de saída:", outputGif)
-    const sticker = fs.readFileSync(outputGif)
-    console.log("[videoToSticker] Sticker animado (GIF) criado com sucesso, tamanho:", sticker.length)
+    console.log("[videoToSticker] Lendo arquivo de saída:", outputWebp)
+    const sticker = fs.readFileSync(outputWebp)
+    console.log("[videoToSticker] Sticker WEBP criado com sucesso, tamanho:", sticker.length)
     
     fs.unlinkSync(input)
-    fs.unlinkSync(outputGif)
+    fs.unlinkSync(outputWebp)
     return sticker
 
   } catch (err) {
     console.error("[videoToSticker] Erro completo:", err.message, err.stack)
     if (fs.existsSync(input)) fs.unlinkSync(input)
-    if (fs.existsSync(outputGif)) fs.unlinkSync(outputGif)
+    if (fs.existsSync(outputWebp)) fs.unlinkSync(outputWebp)
     throw err
   }
 }
