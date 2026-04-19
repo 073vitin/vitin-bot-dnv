@@ -16,9 +16,6 @@ const DAILY_QUEST_POOL = [
   { key: "moneyGameWon", title: "Ganhar moedas em jogos", targetMin: 300, targetMax: 1500, rewardXp: 145, rewardCoins: 220 },
   { key: "moneyCasinoWon", title: "Ganhar moedas no cassino", targetMin: 200, targetMax: 1200, rewardXp: 140, rewardCoins: 210 },
   { key: "questsCompleted", title: "Resgatar missões", targetMin: 1, targetMax: 2, rewardXp: 130, rewardCoins: 195 },
-  { key: "gameComandoWin", title: "Vencer Último a Obedecer", targetMin: 1, targetMax: 2, rewardXp: 135, rewardCoins: 200 },
-  { key: "gameMemoriaWin", title: "Vencer jogo da Memória", targetMin: 1, targetMax: 2, rewardXp: 130, rewardCoins: 190 },
-  { key: "gameReacaoWin", title: "Vencer teste de Reação", targetMin: 1, targetMax: 2, rewardXp: 130, rewardCoins: 190 },
 ]
 
 const WEEKLY_QUEST_POOL = [
@@ -53,9 +50,6 @@ const WEEKLY_QUEST_POOL = [
   { key: "moneyCasinoWon", title: "Ganhar moedas no cassino", targetMin: 3000, targetMax: 12000, rewardXp: 680, rewardCoins: 1600 },
   { key: "questsCompleted", title: "Resgatar missões", targetMin: 6, targetMax: 15, rewardXp: 600, rewardCoins: 1420 },
   { key: "lobbiesStarted", title: "Iniciar lobbies", targetMin: 5, targetMax: 12, rewardXp: 520, rewardCoins: 1250 },
-  { key: "gameComandoWin", title: "Vitórias em Último a Obedecer", targetMin: 3, targetMax: 10, rewardXp: 560, rewardCoins: 1320 },
-  { key: "gameMemoriaWin", title: "Vitórias no jogo da Memória", targetMin: 3, targetMax: 10, rewardXp: 560, rewardCoins: 1320 },
-  { key: "gameReacaoWin", title: "Vitórias no teste de Reação", targetMin: 3, targetMax: 10, rewardXp: 560, rewardCoins: 1320 },
 ]
 
 module.exports = {

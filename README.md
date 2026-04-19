@@ -28,13 +28,13 @@ npm test
 ## Estrutura do projeto
 
 - bot.js: casca de transporte e orquestração principal.
-- routers/gamesRouter.js: comandos de jogos e fluxo de mensagens dos jogos periódicos.
+- routers/gamesRouter.js: comandos de jogos e fluxo principal de partidas.
 - routers/economyRouter.js: comandos de economia e administração econômica.
 - routers/moderationRouter.js: comandos de moderação/punições.
 - routers/utilityRouter.js: utilitários e diversão.
 - services/economyService.js: motor de economia persistente (moedas, itens, estatísticas, cooldowns e extrato).
 - services/punishmentService.js: seleção, aplicação e validação de punições.
-- gameManager.js: ciclo de lobbies e gatilhos periódicos.
+- gameManager.js: ciclo de lobbies e utilitários de sessões.
 - storage.js: cache e persistência de estado para jogos e moderação.
 - services/telemetryService.js: coleta de eventos e métricas para balanceamento e observabilidade (e curiosidade).
 - games/: módulos dos jogos.
@@ -93,9 +93,8 @@ npm test
 - !começar <adivinhacao|batata|dados|rr> / !comecar / !start
 - !entrar <LobbyID> / !join <LobbyID>
 - !começar <LobbyID> / !comecar <LobbyID> / !start <LobbyID>
-- !começar <embaralhado|memória|reação|comando> / !comecar <embaralhado|memoria|reacao|comando>
 - !resposta / !passa / !rolar / !atirar
-- !moeda [1-10] / !moeda dobroounada
+- !moeda [2-10] / !moeda dobro / !moeda continua / !moeda sair
 - !streak / !streakranking
 
 Observações de lobby:
@@ -123,7 +122,6 @@ Observações de lobby:
 - !roubar
 - !daily
 - !cassino <valor>
-- !aposta <LobbyID> <1-10|skip>
 - !lootbox <quantidade>
 - !falsificar <tipo 1-13> [severidade] [quantidade] [S|N]
 - !loteria "<titulo>" "<recompensas>" <S|N> <qtdVencedores>
@@ -191,9 +189,6 @@ Pool diário:
 - moneyGameWon | Ganhar moedas em jogos | alvo 300-1500 | recompensa 145 XP + 220 moedas
 - moneyCasinoWon | Ganhar moedas no cassino | alvo 200-1200 | recompensa 140 XP + 210 moedas
 - questsCompleted | Resgatar missões | alvo 1-2 | recompensa 130 XP + 195 moedas
-- gameComandoWin | Vencer Último a Obedecer | alvo 1-2 | recompensa 135 XP + 200 moedas
-- gameMemoriaWin | Vencer jogo da Memória | alvo 1-2 | recompensa 130 XP + 190 moedas
-- gameReacaoWin | Vencer teste de Reação | alvo 1-2 | recompensa 130 XP + 190 moedas
 
 Pool semanal:
 - works | Concluir trabalhos | alvo 20-45 | recompensa 520 XP + 1250 moedas
@@ -213,9 +208,6 @@ Pool semanal:
 - moneyCasinoWon | Ganhar moedas no cassino | alvo 3000-12000 | recompensa 680 XP + 1600 moedas
 - questsCompleted | Resgatar missões | alvo 6-15 | recompensa 600 XP + 1420 moedas
 - lobbiesStarted | Iniciar lobbies | alvo 5-12 | recompensa 520 XP + 1250 moedas
-- gameComandoWin | Vitórias em Último a Obedecer | alvo 3-10 | recompensa 560 XP + 1320 moedas
-- gameMemoriaWin | Vitórias no jogo da Memória | alvo 3-10 | recompensa 560 XP + 1320 moedas
-- gameReacaoWin | Vitórias no teste de Reação | alvo 3-10 | recompensa 560 XP + 1320 moedas
 
 
 ### Moderação

@@ -7,7 +7,6 @@ const telemetry = require("../services/telemetryService")
 const storageModule = require("../storage.js")
 const RR_TURN_TIMEOUT_MS = 60_000
 const RR_TURN_TIMEOUT_SECONDS = Math.floor(RR_TURN_TIMEOUT_MS / 1000)
-const LOBBY_BET_GRACE_MS = 10_000
 const GAME_XP_REWARDS = {
   lobbyStart: 6,
   batataWin: 24,
@@ -58,21 +57,16 @@ async function handleGameCommands(ctx) {
     batataquente,
     dueloDados,
     roletaRussa,
-    startPeriodicGame,
-    GAME_REWARDS,
-    BASE_GAME_REWARD,
     normalizeUnifiedGameType,
     normalizeLobbyId,
     activeGameKey,
     resolveActiveLobbyForPlayer,
     getLobbyCreateBlockMessage,
     getGameBuyIn,
-    collectLobbyBuyIn,
     distributeLobbyBuyInPool,
     parsePositiveInt,
     isResenhaModeEnabled,
     rewardPlayer,
-    rewardPlayers,
     incrementUserStat,
     applyRandomGamePunishment,
     createPendingTargetForWinner,
@@ -80,6 +74,7 @@ async function handleGameCommands(ctx) {
     createLobbyWarningCallback,
     createLobbyTimeoutCallback,
     buildGameStatsText,
+    BASE_GAME_REWARD,
   } = ctx
 
   const isJoinCommand = cmdName === prefix + "entrar" || cmdName === prefix + "join"
@@ -88,8 +83,6 @@ async function handleGameCommands(ctx) {
     cmdName === prefix + "comecar" ||
     cmdName === prefix + "start"
   )
-  const normalizedStartTarget = normalizeUnifiedGameType(cmdArg1)
-  const isQuickGameStartTarget = ["embaralhado", "memoria", "memória", "reacao", "reação", "comando"].includes(normalizedStartTarget)
   const isPrefixedCommand = String(cmdName || "").startsWith(String(prefix || ""))
 
   function logGameFlow(stage, meta = {}) {
@@ -111,26 +104,6 @@ async function handleGameCommands(ctx) {
       isJoinCommand,
       isStartCommand,
     })
-  }
-
-  async function getCommandParticipants() {
-    const metadata = await sock.groupMetadata(from)
-    const botJid = jidNormalizedUser(sock.user?.id || "")
-    return (metadata?.participants || [])
-      .map((p) => jidNormalizedUser(p.id))
-      .filter((id) => id && id !== botJid)
-  }
-
-  function buildBetMultiplierMap(playerIds, multiplier) {
-    const safeMultiplier = parsePositiveInt(multiplier, 1)
-    return (playerIds || []).reduce((acc, playerId) => {
-      acc[playerId] = safeMultiplier
-      return acc
-    }, {})
-  }
-
-  function getLobbyGraceStateKey(lobbyId) {
-    return `lobbyGrace:${lobbyId}`
   }
 
   function sanitizeLobbyBet(value, fallback = 1) {
@@ -180,21 +153,16 @@ async function handleGameCommands(ctx) {
     return consumedBy
   }
 
-  function getGraceStates() {
-    const states = storage.getGameStates(from)
-    return Object.keys(states || {})
-      .filter((key) => key.startsWith("lobbyGrace:"))
-      .map((key) => ({ key, state: states[key], lobbyId: key.substring("lobbyGrace:".length) }))
-      .filter((entry) => entry.state && entry.lobbyId)
-  }
-
   function collectLobbyBuyInWithBets(playerIds, buyInAmount, gameType, playerBetByPlayer = {}) {
     if (!Array.isArray(playerIds) || playerIds.length === 0) {
       return { ok: true, pool: 0, buyInByPlayer: {}, playerBetByPlayer: {} }
     }
     // Exclude modo livre users from paying buy-in (except for casino)
     const isCasino = String(gameType || "").toLowerCase().includes("cassino")
-    const filteredPlayers = isCasino ? playerIds : playerIds.filter((id) => !storage.isModoLivreUser(id))
+    const isModoLivreUser = typeof storage.isModoLivreUser === "function"
+      ? (id) => storage.isModoLivreUser(id)
+      : () => false
+    const filteredPlayers = isCasino ? playerIds : playerIds.filter((id) => !isModoLivreUser(id))
     if (buyInAmount <= 0) {
       const normalizedBets = filteredPlayers.reduce((acc, playerId) => {
         acc[playerId] = sanitizeLobbyBet(playerBetByPlayer[playerId], 1)
@@ -242,9 +210,12 @@ async function handleGameCommands(ctx) {
   }
 
   function getLobbyPayoutOptions(state = {}) {
+    const playerBetByPlayer = state.playerBetByPlayer || {}
+    const hasExplicitBet = Object.values(playerBetByPlayer).some((value) => sanitizeLobbyBet(value, 1) > 1)
     return {
       payoutMode: "lobby-bet-formula",
-      playerBetByPlayer: state.playerBetByPlayer || {},
+      minimumPoolBeforeFormula: hasExplicitBet ? 0 : 100,
+      playerBetByPlayer,
       buyInByPlayer: state.buyInByPlayer || {},
     }
   }
@@ -352,7 +323,7 @@ async function handleGameCommands(ctx) {
     await sock.sendMessage(from, {
       text:
 `╭━━━〔 🎮 SUBMENU: JOGOS 〕━━━╮
-│ Jogos de lobby:
+│ Jogos de lobby (use !comecar <nome do jogo>):
 │ - adivinhacao
 │ - batata
 │ - dados
@@ -360,12 +331,6 @@ async function handleGameCommands(ctx) {
 │ - moeda
 │ - moeda dobro / moeda dobroounada
 │ - streak / streakranking
-│
-│ Jogos rápidos:
-│ - embaralhado
-│ - memória
-│ - reação
-│ - comando
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 📌 COMANDOS 〕━━━╮
@@ -374,8 +339,6 @@ async function handleGameCommands(ctx) {
 │ ${prefix}lobbies
 │ ${prefix}começar <jogo> (ou ${prefix}comecar / ${prefix}start)
 │ ${prefix}começar <LobbyID> (ou ${prefix}comecar / ${prefix}start)
-│ ${prefix}começar <embaralhado|memória|reação|comando>
-│ ${prefix}comecar <embaralhado|memoria|reacao|comando>
 ╰━━━━━━━━━━━━━━━━━━━━╯`,
     })
     return true
@@ -552,102 +515,7 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if (cmdName === prefix + "aposta" && isGroup) {
-    const explicitLobbyId = normalizeLobbyId(cmdArg1)
-    if (!explicitLobbyId) return false
-    const targetLobbyId = explicitLobbyId
-    const betToken = String(cmdArg2 || "").trim().toLowerCase()
-
-    const graceKey = getLobbyGraceStateKey(targetLobbyId)
-    const graceState = storage.getGameState(from, graceKey)
-    if (!graceState) return false
-
-    if (!Array.isArray(graceState.players) || !graceState.players.includes(sender)) {
-      await sock.sendMessage(from, {
-        text: `Você não está no lobby *${targetLobbyId}* em preparação.`,
-      })
-      return true
-    }
-
-    if (betToken === "skip") {
-      graceState.forceStart = true
-      storage.setGameState(from, graceKey, graceState)
-      await sock.sendMessage(from, {
-        text: `⏩ Lobby *${targetLobbyId}*: fase de aposta pulada por ${formatMentionTag(sender)}.`,
-        mentions: normalizeMentionArray([sender]),
-      })
-
-      await handleGameCommands({
-        sock,
-        from,
-        sender: graceState.startedBy || sender,
-        cmd: `${prefix}começar ${targetLobbyId}`,
-        cmdName: `${prefix}comecar`,
-        cmdArg1: targetLobbyId,
-        cmdArg2: String(graceState.rrBetValueToken || ""),
-        mentioned,
-        prefix,
-        isGroup,
-        text,
-        msg,
-        storage,
-        gameManager,
-        economyService,
-        caraOuCoroa,
-        adivinhacao,
-        batataquente,
-        dueloDados,
-        roletaRussa,
-        startPeriodicGame,
-        GAME_REWARDS,
-        BASE_GAME_REWARD,
-        normalizeUnifiedGameType,
-        normalizeLobbyId,
-        activeGameKey,
-        resolveActiveLobbyForPlayer,
-        getLobbyCreateBlockMessage,
-        getGameBuyIn,
-        collectLobbyBuyIn,
-        distributeLobbyBuyInPool,
-        parsePositiveInt,
-        isResenhaModeEnabled,
-        rewardPlayer,
-        rewardPlayers,
-        incrementUserStat,
-        applyRandomGamePunishment,
-        createPendingTargetForWinner,
-        jidNormalizedUser,
-        createLobbyWarningCallback,
-        createLobbyTimeoutCallback,
-        buildGameStatsText,
-      })
-      return true
-    }
-
-    const betRaw = Number.parseInt(String(betToken || ""), 10)
-    if (!Number.isFinite(betRaw) || betRaw < 1 || betRaw > 10) {
-      await sock.sendMessage(from, {
-        text: "Use: !aposta <LobbyID> <1-10> ou !aposta <LobbyID> skip",
-      })
-      return true
-    }
-
-    if (!graceState.playerBetByPlayer) graceState.playerBetByPlayer = {}
-    graceState.playerBetByPlayer[sender] = betRaw
-    storage.setGameState(from, graceKey, graceState)
-
-    const baseBuyIn = Math.max(0, Number(graceState.buyInAmount) || 0)
-    const multipliedBuyIn = baseBuyIn * betRaw
-    await sock.sendMessage(from, {
-      text:
-        `🎯 Lobby *${targetLobbyId}*: bet de ${formatMentionTag(sender)} ajustada para *${betRaw}x*.\n` +
-        `Buy-in deste jogador: *${multipliedBuyIn}* Epsteincoins (base ${baseBuyIn}).`,
-      mentions: normalizeMentionArray([sender]),
-    })
-    return true
-  }
-
-  if (isStartCommand && isGroup && !isQuickGameStartTarget) {
+  if (isStartCommand && isGroup) {
     const lobbyId = normalizeLobbyId(cmdArg1)
     if (!lobbyId) {
       await sock.sendMessage(from, { text: "Use: !começar <LobbyID> (ou !comecar / !start)" })
@@ -665,121 +533,10 @@ async function handleGameCommands(ctx) {
       await sock.sendMessage(from, { text: `O lobby *${lobbyId}* já está em andamento.` })
       return true
     }
-
-    const graceStateKey = getLobbyGraceStateKey(lobbyId)
-    const existingGraceState = storage.getGameState(from, graceStateKey)
-    if (!existingGraceState?.forceStart) {
-      if (existingGraceState) {
-        await sock.sendMessage(from, {
-          text: `Lobby *${lobbyId}* já está no período de aposta. Use: !aposta ${lobbyId} <1-10> ou !aposta ${lobbyId} skip`,
-        })
-        return true
-      }
-
-      const buyInAmount = getGameBuyIn(session.gameType)
-      const graceState = {
-        lobbyId,
-        gameType: session.gameType,
-        players: [...session.players],
-        buyInAmount,
-        playerBetByPlayer: (session.players || []).reduce((acc, playerId) => {
-          acc[playerId] = 1
-          return acc
-        }, {}),
-        rrBetValueToken: cmdArg2,
-        startedBy: sender,
-        forceStart: false,
-        createdAt: Date.now(),
-      }
-      storage.setGameState(from, graceStateKey, graceState)
-
-      await sock.sendMessage(from, {
-        text:
-          `⏳ Lobby *${lobbyId}* entra em período de aposta por ${Math.floor(LOBBY_BET_GRACE_MS / 1000)}s.\n` +
-          `Cada jogador pode definir bet de *1x a 10x* para multiplicar o buy-in.\n` +
-          `Use: *!aposta ${lobbyId} <1-10>* ou *!aposta ${lobbyId} skip*.\n` +
-          `Se não escolher, fica em *1x*.`,
-        mentions: session.players || [],
-      })
-
-      setTimeout(async () => {
-        try {
-          const latestGraceState = storage.getGameState(from, graceStateKey)
-          if (!latestGraceState) return
-          latestGraceState.forceStart = true
-          storage.setGameState(from, graceStateKey, latestGraceState)
-
-          try {
-            telemetry.incrementCounter("game.lobby.graceTimeoutTriggered", 1, { gameType: session?.gameType })
-            telemetry.appendEvent("game.lobby.graceTimeoutTriggered", { groupId: from, lobbyId, gameType: session?.gameType, players: latestGraceState.players })
-          } catch (e) {
-            // best-effort telemetry, ignore errors
-          }
-
-          // Quick pre-check: if the opt-in session was removed meanwhile, bail early.
-          const preSession = gameManager.getOptInSession(from, lobbyId)
-          if (!preSession) {
-            return
-          }
-
-          await handleGameCommands({
-            sock,
-            from,
-            sender: latestGraceState.startedBy || sender,
-            cmd: `${prefix}começar ${lobbyId}`,
-            cmdName: `${prefix}comecar`,
-            cmdArg1: lobbyId,
-            cmdArg2: String(latestGraceState.rrBetValueToken || ""),
-            mentioned,
-            prefix,
-            isGroup,
-            text,
-            msg,
-            storage,
-            gameManager,
-            economyService,
-            caraOuCoroa,
-            adivinhacao,
-            batataquente,
-            dueloDados,
-            roletaRussa,
-            startPeriodicGame,
-            GAME_REWARDS,
-            BASE_GAME_REWARD,
-            normalizeUnifiedGameType,
-            normalizeLobbyId,
-            activeGameKey,
-            resolveActiveLobbyForPlayer,
-            getLobbyCreateBlockMessage,
-            getGameBuyIn,
-            collectLobbyBuyIn,
-            distributeLobbyBuyInPool,
-            parsePositiveInt,
-            isResenhaModeEnabled,
-            rewardPlayer,
-            rewardPlayers,
-            incrementUserStat,
-            applyRandomGamePunishment,
-            createPendingTargetForWinner,
-            jidNormalizedUser,
-            createLobbyWarningCallback,
-            createLobbyTimeoutCallback,
-            buildGameStatsText,
-          })
-        } catch (err) {
-          console.error(`Error in lobby grace timeout for ${lobbyId} @ ${from}:`, err)
-          try {
-            telemetry.incrementCounter("game.lobby.graceTimeoutError", 1, { gameType: session?.gameType })
-            telemetry.appendEvent("game.lobby.graceTimeoutError", { groupId: from, lobbyId, gameType: session?.gameType, error: String(err?.stack || err?.message || err) })
-          } catch (e) {}
-        }
-      }, LOBBY_BET_GRACE_MS)
-
-      return true
-    }
-
-    const graceBetByPlayer = existingGraceState?.playerBetByPlayer || {}
-    storage.clearGameState(from, graceStateKey)
+    const playerBetByPlayer = (session.players || []).reduce((acc, playerId) => {
+      acc[playerId] = 1
+      return acc
+    }, {})
 
     incrementUserStat(sender, "lobbiesStarted", 1)
     grantGameXp(sender, GAME_XP_REWARDS.lobbyStart, "lobby-start", {
@@ -802,7 +559,7 @@ async function handleGameCommands(ctx) {
       }
 
       const buyInAmount = getGameBuyIn(session.gameType)
-      const buyInResult = collectLobbyBuyInWithBets(session.players, buyInAmount, session.gameType, graceBetByPlayer)
+      const buyInResult = collectLobbyBuyInWithBets(session.players, buyInAmount, session.gameType, playerBetByPlayer)
       if (!buyInResult.ok) {
         await sock.sendMessage(from, {
           text: `Sem saldo para entrada multiplicada (base ${buyInAmount}) para: ${buyInResult.insufficient.map((p) => `${formatMentionTag(p)}`).join(" ")}`,
@@ -839,7 +596,7 @@ async function handleGameCommands(ctx) {
       }
 
       const buyInAmount = getGameBuyIn(session.gameType)
-      const buyInResult = collectLobbyBuyInWithBets(session.players, buyInAmount, session.gameType, graceBetByPlayer)
+      const buyInResult = collectLobbyBuyInWithBets(session.players, buyInAmount, session.gameType, playerBetByPlayer)
       if (!buyInResult.ok) {
         await sock.sendMessage(from, {
           text: `Sem saldo para entrada multiplicada (base ${buyInAmount}) para: ${buyInResult.insufficient.map((p) => `${formatMentionTag(p)}`).join(" ")}`,
@@ -926,7 +683,7 @@ async function handleGameCommands(ctx) {
       }
 
       const buyInAmount = getGameBuyIn(session.gameType)
-      const buyInResult = collectLobbyBuyInWithBets(session.players, buyInAmount, session.gameType, graceBetByPlayer)
+      const buyInResult = collectLobbyBuyInWithBets(session.players, buyInAmount, session.gameType, playerBetByPlayer)
       if (!buyInResult.ok) {
         await sock.sendMessage(from, {
           text: `Sem saldo para entrada multiplicada (base ${buyInAmount}) para: ${buyInResult.insufficient.map((p) => `${formatMentionTag(p)}`).join(" ")}`,
@@ -974,13 +731,13 @@ async function handleGameCommands(ctx) {
             ok: true,
             pool: 0,
             buyInByPlayer: {
-              [session.players[0]]: buyInAmount * sanitizeLobbyBet(graceBetByPlayer[session.players[0]], 1),
+              [session.players[0]]: buyInAmount * sanitizeLobbyBet(playerBetByPlayer[session.players[0]], 1),
             },
             playerBetByPlayer: {
-              [session.players[0]]: sanitizeLobbyBet(graceBetByPlayer[session.players[0]], 1),
+              [session.players[0]]: sanitizeLobbyBet(playerBetByPlayer[session.players[0]], 1),
             },
           }
-        : collectLobbyBuyInWithBets(session.players, buyInAmount, session.gameType, graceBetByPlayer)
+        : collectLobbyBuyInWithBets(session.players, buyInAmount, session.gameType, playerBetByPlayer)
       if (!buyInResult.ok) {
         await sock.sendMessage(from, {
           text: `Sem saldo para entrada multiplicada (base ${buyInAmount}) para: ${buyInResult.insufficient.map((p) => `${formatMentionTag(p)}`).join(" ")}`,
@@ -1023,57 +780,7 @@ async function handleGameCommands(ctx) {
       return true
     }
 
-    if (session.gameType === "embaralhado") {
-      if (session.players.length < 3) {
-        await sock.sendMessage(from, { text: "Precisamos de pelo menos 3 jogadores para Embaralhado!" })
-        return true
-      }
-      gameManager.clearOptInSession(from, lobbyId)
-      const startResult = await startPeriodicGame("embaralhado", {
-        triggeredBy: sender,
-        automatic: false,
-      })
-      if (!startResult.ok) {
-        await sock.sendMessage(from, { text: startResult.message })
-      }
-      return true
-    }
-
-    if (session.gameType === "reação") {
-      if (session.players.length < 3) {
-        await sock.sendMessage(from, { text: "Precisamos de pelo menos 3 jogadores para Reação!" })
-        return true
-      }
-      gameManager.clearOptInSession(from, lobbyId)
-      const startResult = await startPeriodicGame("reação", {
-        triggeredBy: sender,
-        automatic: false,
-        reactionParticipants: session.players,
-      })
-      if (!startResult.ok) {
-        await sock.sendMessage(from, { text: startResult.message })
-      }
-      return true
-    }
-
-    if (session.gameType === "comando") {
-      if (session.players.length < 3) {
-        await sock.sendMessage(from, { text: "Precisamos de pelo menos 3 jogadores para Comando!" })
-        return true
-      }
-      gameManager.clearOptInSession(from, lobbyId)
-      const startResult = await startPeriodicGame("comando", {
-        triggeredBy: sender,
-        automatic: false,
-        comandoParticipants: session.players,
-      })
-      if (!startResult.ok) {
-        await sock.sendMessage(from, { text: startResult.message })
-      }
-      return true
-    }
-
-    await sock.sendMessage(from, { text: "Esse lobby deve ser iniciado com !começar <jogo> (ou !comecar / !start)." })
+    await sock.sendMessage(from, { text: "Esse lobby não é suportado. Use !lobbies para criar/entrar em jogos válidos." })
     return true
   }
 
@@ -1594,105 +1301,9 @@ async function handleGameCommands(ctx) {
     return true
   }
 
-  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "embaralhado") && isGroup) {
-    const blockedReason = getLobbyCreateBlockMessage("embaralhado", "Embaralhado")
-    if (blockedReason) {
-      await sock.sendMessage(from, { text: blockedReason })
-      return true
-    }
-
-    const lobbyId = gameManager.createOptInSession(from, "embaralhado", 3, null, 120000, {
-      initialPlayers: [sender],
-      onLobbyWarning: createLobbyWarningCallback,
-      onLobbyTimeout: createLobbyTimeoutCallback,
-    })
-    incrementUserStat(sender, "lobbiesCreated", 1)
-    incrementUserStat(sender, "lobbiesJoined", 1)
-    await sock.sendMessage(from, {
-      text:
-        `🔤 Embaralhado criado!\n` +
-        `Lobby ID: *${lobbyId}*\n\n` +
-        `Criador já entrou automaticamente no lobby.\n` +
-        `Para entrar: *!entrar ${lobbyId}*\n` +
-        `Para iniciar: *!começar ${lobbyId}*\n` +
-        `Mínimo de 3 jogadores.`,
-    })
-    return true
-  }
-
-  if ((isStartCommand && ["memoria", "memória"].includes(normalizeUnifiedGameType(cmdArg1))) && isGroup) {
-    const participants = await getCommandParticipants()
-    if (participants.length < 3) {
-      await sock.sendMessage(from, { text: "São necessários pelo menos 3 participantes para iniciar a Memória por comando." })
-      return true
-    }
-
-    const startResult = await startPeriodicGame("memória", {
-      triggeredBy: sender,
-      automatic: false,
-    })
-    if (!startResult.ok) {
-      await sock.sendMessage(from, { text: startResult.message })
-    }
-    return true
-  }
-
-  if ((isStartCommand && ["reacao", "reação"].includes(normalizeUnifiedGameType(cmdArg1))) && isGroup) {
-    const blockedReason = getLobbyCreateBlockMessage("reação", "Reação")
-    if (blockedReason) {
-      await sock.sendMessage(from, { text: blockedReason })
-      return true
-    }
-
-    const lobbyId = gameManager.createOptInSession(from, "reação", 3, null, 120000, {
-      initialPlayers: [sender],
-      onLobbyWarning: createLobbyWarningCallback,
-      onLobbyTimeout: createLobbyTimeoutCallback,
-    })
-    incrementUserStat(sender, "lobbiesCreated", 1)
-    incrementUserStat(sender, "lobbiesJoined", 1)
-    await sock.sendMessage(from, {
-      text:
-        `⚡ Reação criada!\n` +
-        `Lobby ID: *${lobbyId}*\n\n` +
-        `Criador já entrou automaticamente no lobby.\n` +
-        `Para entrar: *!entrar ${lobbyId}*\n` +
-        `Para iniciar: *!começar ${lobbyId}*\n` +
-        `Mínimo de 3 jogadores.`,
-    })
-    return true
-  }
-
-  if ((isStartCommand && normalizeUnifiedGameType(cmdArg1) === "comando") && isGroup) {
-    const blockedReason = getLobbyCreateBlockMessage("comando", "Comando")
-    if (blockedReason) {
-      await sock.sendMessage(from, { text: blockedReason })
-      return true
-    }
-
-    const lobbyId = gameManager.createOptInSession(from, "comando", 3, null, 120000, {
-      initialPlayers: [sender],
-      onLobbyWarning: createLobbyWarningCallback,
-      onLobbyTimeout: createLobbyTimeoutCallback,
-    })
-    incrementUserStat(sender, "lobbiesCreated", 1)
-    incrementUserStat(sender, "lobbiesJoined", 1)
-    await sock.sendMessage(from, {
-      text:
-        `🎯 Comando criado!\n` +
-        `Lobby ID: *${lobbyId}*\n\n` +
-        `Criador já entrou automaticamente no lobby.\n` +
-        `Para entrar: *!entrar ${lobbyId}*\n` +
-        `Para iniciar: *!começar ${lobbyId}*\n` +
-        `Mínimo de 3 jogadores.`,
-    })
-    return true
-  }
-
   if (isPrefixedCommand) {
     logGameFlow("unhandled", {
       isGroup,
-      quickStartTarget: isQuickGameStartTarget,
     })
   }
 
@@ -1701,153 +1312,14 @@ async function handleGameCommands(ctx) {
 
 async function handleGameMessageFlow(ctx) {
   const {
-    sock,
-    from,
-    sender,
-    text,
-    msg,
-    mentioned,
     isGroup,
-    isCommand,
-    storage,
-    gameManager,
     caraOuCoroa,
-    reacao,
-    reação,
-    embaralhado,
-    memoria,
-    memória,
-    comando,
-    startPeriodicGame,
-    GAME_REWARDS,
-    isResenhaModeEnabled,
-    rewardPlayer,
-    incrementUserStat,
-    economyService, // NOTE: Assuming this is passed in context for Dobro ou Nada
-    createPendingTargetForWinner,
   } = ctx
-
-  const reactionGame = reacao || reação
-  const memoryGame = memoria || memória
 
   if (!isGroup) return false
 
   if (typeof caraOuCoroa?.handleDobroGuess === "function" && await caraOuCoroa.handleDobroGuess(ctx)) {
     return true
-  }
-
-  if (isCommand) return false
-
-  gameManager.incrementMessageCounter(from, sender)
-
-  const reactionActive = storage.getGameState(from, "reacaoActive") || storage.getGameState(from, "reaçãoActive")
-  if (reactionActive && reactionActive.started && !reactionActive.winner) {
-    const reactionResult = reactionGame?.recordReaction(reactionActive, sender)
-    if (!reactionResult) return false
-    if (reactionResult.valid) {
-      reactionActive.winner = sender
-      storage.setGameState(from, "reacaoActive", reactionActive)
-      storage.setGameState(from, "reaçãoActive", reactionActive)
-      const results = reactionGame.getResults(reactionActive)
-      const resenhaOn = isResenhaModeEnabled()
-
-      await sock.sendMessage(from, {
-        text: reactionGame.formatResults(reactionActive, results, resenhaOn),
-        mentions: Array.from(new Set((results.reactions || []).map((r) => r.playerId))),
-      })
-
-      await rewardPlayer(sender, GAME_REWARDS.REACAO, 1, "Reação")
-      incrementUserStat(sender, "gameReacaoWin", 1)
-      const reactionLosers = (reactionActive.players || []).filter((playerId) => playerId !== sender)
-      reactionLosers.forEach((playerId) => incrementUserStat(playerId, "gameReacaoLoss", 1))
-
-      storage.clearGameState(from, "reacaoActive")
-      storage.clearGameState(from, "reaçãoActive")
-      return true
-    }
-  }
-
-  const wsActive = storage.getGameState(from, "embaralhadoActive")
-  if (wsActive && !wsActive.winner) {
-    const result = embaralhado.checkAnswer(wsActive, sender, text)
-    if (result.correct) {
-      storage.setGameState(from, "embaralhadoActive", wsActive)
-      const resenhaOn = isResenhaModeEnabled()
-      await sock.sendMessage(from, {
-        text: embaralhado.formatResults(wsActive, resenhaOn),
-      })
-
-      await rewardPlayer(sender, GAME_REWARDS.EMBARALHADO, 1, "Embaralhado")
-      incrementUserStat(sender, "gameEmbaralhadoWin", 1)
-      const embaralhadoLosers = (wsActive.players || []).filter((playerId) => playerId !== sender)
-      embaralhadoLosers.forEach((playerId) => incrementUserStat(playerId, "gameEmbaralhadoLoss", 1))
-
-      storage.clearGameState(from, "embaralhadoActive")
-      return true
-    }
-  }
-
-  const memActive = storage.getGameState(from, "memoriaActive") || storage.getGameState(from, "memóriaActive")
-  if (memActive && !memActive.winner) {
-    const memoryAnswerText = text.trim()
-    const memoryAnswerOnlyPattern = /^[A-Za-z0-9]{12}$/
-    if (memoryAnswerOnlyPattern.test(memoryAnswerText)) {
-      const result = memoryGame?.recordAttempt(memActive, sender, memoryAnswerText)
-      if (!result) return false
-      if (result.correct) {
-        storage.setGameState(from, "memoriaActive", memActive)
-        storage.setGameState(from, "memóriaActive", memActive)
-        const resenhaOn = isResenhaModeEnabled()
-        await sock.sendMessage(from, {
-          text: memoryGame.formatResults(memActive, resenhaOn),
-          mentions: normalizeMentionArray([result.winner]),
-        })
-
-        await rewardPlayer(result.winner, GAME_REWARDS.MEMORIA, 1, "Memória")
-        incrementUserStat(result.winner, "gameMemoriaWin", 1)
-        const memoriaLosers = (memActive.players || []).filter((playerId) => playerId !== result.winner)
-        memoriaLosers.forEach((playerId) => incrementUserStat(playerId, "gameMemoriaLoss", 1))
-
-        storage.clearGameState(from, "memoriaActive")
-        storage.clearGameState(from, "memóriaActive")
-        return true
-      }
-    }
-  }
-
-  const uaActive = storage.getGameState(from, "comandoActive")
-  if (uaActive) {
-    comando.recordParticipant(uaActive, sender)
-    storage.setGameState(from, "comandoActive", uaActive)
-  }
-
-  if (uaActive && uaActive.instruction.cmd === "silence") {
-    comando.recordSilenceBreaker(uaActive, sender)
-    storage.setGameState(from, "comandoActive", uaActive)
-  } else if (uaActive && uaActive.instruction.cmd !== "silence") {
-    const isCompliant = comando.isValidCompliance(uaActive, {
-      text,
-      mentioned,
-      rawMsg: msg,
-    })
-    if (isCompliant) {
-      comando.recordCompliance(uaActive, sender)
-      storage.setGameState(from, "comandoActive", uaActive)
-    }
-  }
-
-  if (gameManager.shouldTriggerPeriodicGame(from)) {
-    const gameType = gameManager.pickRandom(["embaralhado", "reação", "comando", "memória"])
-    const startResult = await startPeriodicGame(gameType, {
-      triggeredBy: sender,
-      automatic: true,
-    })
-
-    if (startResult.ok) {
-      gameManager.recordPeriodicTrigger(from)
-    } else {
-      gameManager.resetMessageCounter(from)
-    }
   }
 
   return false

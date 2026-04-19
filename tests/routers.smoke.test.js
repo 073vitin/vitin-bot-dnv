@@ -2620,7 +2620,7 @@ test("games router handles !jogos submenu", async () => {
   assert.match(sent[0].payload.text, /SUBMENU: JOGOS/)
 })
 
-test("games router blocks !começar reação with fewer than 3 participants", async () => {
+test("games router no longer starts removed quick games", async () => {
   const sent = []
   let started = false
   const sock = {
@@ -2696,31 +2696,17 @@ test("games router blocks !começar reação with fewer than 3 participants", as
       takeShotAt: () => ({ hit: false }),
       formatStatus: () => "",
     },
-    startPeriodicGame: async () => {
-      started = true
-      return { ok: true }
-    },
-    GAME_REWARDS: {
-      ADIVINHACAO_EXACT: 60,
-      ADIVINHACAO_CLOSEST: 30,
-      DADOS_WIN: 35,
-      BATATA_WIN: 20,
-      ROLETA_WIN: 45,
-      ROLETA_WIN_GUARANTEED: 30,
-    },
     BASE_GAME_REWARD: 30,
-    normalizeUnifiedGameType: (v) => v,
+    normalizeUnifiedGameType: () => null,
     normalizeLobbyId: () => "",
     activeGameKey: () => "",
     resolveActiveLobbyForPlayer: () => ({ ok: false, reason: "not-found" }),
     getLobbyCreateBlockMessage: () => null,
     getGameBuyIn: () => 0,
-    collectLobbyBuyIn: () => ({ ok: true, pool: 0 }),
     distributeLobbyBuyInPool: async () => {},
     parsePositiveInt: () => 1,
     isResenhaModeEnabled: () => false,
     rewardPlayer: async () => {},
-    rewardPlayers: async () => {},
     incrementUserStat: () => {},
     applyRandomGamePunishment: async () => {},
     createPendingTargetForWinner: async () => {},
@@ -2732,10 +2718,10 @@ test("games router blocks !começar reação with fewer than 3 participants", as
   assert.equal(handled, true)
   assert.equal(started, false)
   assert.equal(sent.length, 1)
-  assert.match(sent[0].payload.text, /Mínimo de 3 jogadores/i)
+  assert.match(sent[0].payload.text, /Use: !começar <LobbyID>/i)
 })
 
-test("games router starts 10s lobby bet grace on !começar <LobbyID>", async () => {
+test("games router starts lobby immediately on !começar <LobbyID>", async () => {
   const { sock, sent } = createSockCapture()
   let clearCalled = false
   const setGameStateCalls = []
@@ -2801,15 +2787,6 @@ test("games router starts 10s lobby bet grace on !começar <LobbyID>", async () 
       takeShotAt: () => ({ hit: false }),
       formatStatus: () => "",
     },
-    startPeriodicGame: async () => ({ ok: true }),
-    GAME_REWARDS: {
-      ADIVINHACAO_EXACT: 60,
-      ADIVINHACAO_CLOSEST: 30,
-      DADOS_WIN: 35,
-      BATATA_WIN: 20,
-      ROLETA_WIN: 45,
-      ROLETA_WIN_GUARANTEED: 30,
-    },
     BASE_GAME_REWARD: 30,
     normalizeUnifiedGameType: () => null,
     normalizeLobbyId: (v) => String(v || "").toUpperCase(),
@@ -2817,7 +2794,6 @@ test("games router starts 10s lobby bet grace on !começar <LobbyID>", async () 
     resolveActiveLobbyForPlayer: () => ({ ok: false, reason: "not-found" }),
     getLobbyCreateBlockMessage: () => null,
     getGameBuyIn: () => 100,
-    collectLobbyBuyIn: () => ({ ok: true, pool: 0 }),
     distributeLobbyBuyInPool: async () => {},
     parsePositiveInt: (value, fallback = 1) => {
       const n = Number.parseInt(String(value ?? ""), 10)
@@ -2825,7 +2801,6 @@ test("games router starts 10s lobby bet grace on !começar <LobbyID>", async () 
     },
     isResenhaModeEnabled: () => false,
     rewardPlayer: async () => {},
-    rewardPlayers: async () => {},
     incrementUserStat: () => {},
     applyRandomGamePunishment: async () => {},
     createPendingTargetForWinner: async () => {},
@@ -2836,12 +2811,13 @@ test("games router starts 10s lobby bet grace on !começar <LobbyID>", async () 
   })
 
   assert.equal(handled, true)
-  assert.equal(clearCalled, false)
+  assert.equal(clearCalled, true)
   assert.equal(setGameStateCalls.length >= 1, true)
-  assert.match(String(sent[0]?.payload?.text || ""), /período de aposta por 10s/i)
+  assert.match(String(sent[0]?.payload?.text || ""), /Duelo de Dados iniciado/i)
+  assert.doesNotMatch(String(sent[0]?.payload?.text || ""), /período de aposta por 10s/i)
 })
 
-test("games router updates player lobby bet with !aposta during grace", async () => {
+test("games router ignores removed !aposta command", async () => {
   const { sock, sent } = createSockCapture()
   const sender = "starter@s.whatsapp.net"
   const graceState = {
@@ -2912,15 +2888,6 @@ test("games router updates player lobby bet with !aposta during grace", async ()
       takeShotAt: () => ({ hit: false }),
       formatStatus: () => "",
     },
-    startPeriodicGame: async () => ({ ok: true }),
-    GAME_REWARDS: {
-      ADIVINHACAO_EXACT: 60,
-      ADIVINHACAO_CLOSEST: 30,
-      DADOS_WIN: 35,
-      BATATA_WIN: 20,
-      ROLETA_WIN: 45,
-      ROLETA_WIN_GUARANTEED: 30,
-    },
     BASE_GAME_REWARD: 30,
     normalizeUnifiedGameType: () => null,
     normalizeLobbyId: (v) => String(v || "").toUpperCase(),
@@ -2928,7 +2895,6 @@ test("games router updates player lobby bet with !aposta during grace", async ()
     resolveActiveLobbyForPlayer: () => ({ ok: false, reason: "not-found" }),
     getLobbyCreateBlockMessage: () => null,
     getGameBuyIn: () => 100,
-    collectLobbyBuyIn: () => ({ ok: true, pool: 0 }),
     distributeLobbyBuyInPool: async () => {},
     parsePositiveInt: (value, fallback = 1) => {
       const n = Number.parseInt(String(value ?? ""), 10)
@@ -2936,7 +2902,6 @@ test("games router updates player lobby bet with !aposta during grace", async ()
     },
     isResenhaModeEnabled: () => false,
     rewardPlayer: async () => {},
-    rewardPlayers: async () => {},
     incrementUserStat: () => {},
     applyRandomGamePunishment: async () => {},
     createPendingTargetForWinner: async () => {},
@@ -2946,9 +2911,9 @@ test("games router updates player lobby bet with !aposta during grace", async ()
     buildGameStatsText: () => "",
   })
 
-  assert.equal(handled, true)
-  assert.equal(savedState.playerBetByPlayer[sender], 5)
-  assert.match(String(sent[0]?.payload?.text || ""), /5x/)
+  assert.equal(handled, false)
+  assert.equal(savedState, null)
+  assert.equal(sent.length, 0)
 })
 
 test("games router excludes shot player from rr allWin rewards", async () => {
@@ -3726,9 +3691,8 @@ test("economy router applies lootbox punishment effects", async () => {
   assert.match(sent[0].payload.text, /Lootbox/)
 })
 
-test("games message flow triggers periodic game and records trigger", async () => {
+test("games message flow no longer triggers periodic quick games", async () => {
   const { sock } = createSockCapture()
-  let recorded = false
 
   const handled = await handleGameMessageFlow({
     sock,
@@ -3739,53 +3703,10 @@ test("games message flow triggers periodic game and records trigger", async () =
     mentioned: [],
     isGroup: true,
     isCommand: false,
-    storage: {
-      getGameState: () => null,
-      setGameState: () => {},
-      clearGameState: () => {},
-    },
-    gameManager: {
-      incrementMessageCounter: () => {},
-      shouldTriggerPeriodicGame: () => true,
-      pickRandom: () => "embaralhado",
-      recordPeriodicTrigger: () => {
-        recorded = true
-      },
-      resetMessageCounter: () => {},
-    },
-    reação: {
-      recordReaction: () => ({ valid: false }),
-      getResults: () => ({}),
-      formatResults: () => "",
-    },
-    embaralhado: {
-      checkAnswer: () => ({ correct: false }),
-      formatResults: () => "",
-    },
-    memória: {
-      recordAttempt: () => ({ correct: false }),
-      formatResults: () => "",
-    },
-    comando: {
-      recordParticipant: () => {},
-      recordSilenceBreaker: () => {},
-      isValidCompliance: () => false,
-      recordCompliance: () => {},
-    },
-    startPeriodicGame: async () => ({ ok: true }),
-    GAME_REWARDS: {
-      REACAO: 30,
-      EMBARALHADO: 30,
-      MEMORIA: 30,
-    },
-    isResenhaModeEnabled: () => false,
-    rewardPlayer: async () => {},
-    incrementUserStat: () => {},
-    createPendingTargetForWinner: async () => {},
+    caraOuCoroa: {},
   })
 
   assert.equal(handled, false)
-  assert.equal(recorded, true)
 })
 
 test("games message flow handles dobro guess before command gating", async () => {
@@ -3802,44 +3723,12 @@ test("games message flow handles dobro guess before command gating", async () =>
     isGroup: true,
     isCommand: true,
     storage: {},
-    gameManager: {
-      incrementMessageCounter: () => {},
-    },
     caraOuCoroa: {
       handleDobroGuess: async () => {
         dobroCalls += 1
         return true
       },
     },
-    reação: {
-      recordReaction: () => ({ valid: false }),
-      getResults: () => ({}),
-      formatResults: () => "",
-    },
-    embaralhado: {
-      checkAnswer: () => ({ correct: false }),
-      formatResults: () => "",
-    },
-    memória: {
-      recordAttempt: () => ({ correct: false }),
-      formatResults: () => "",
-    },
-    comando: {
-      recordParticipant: () => {},
-      recordSilenceBreaker: () => {},
-      isValidCompliance: () => false,
-      recordCompliance: () => {},
-    },
-    startPeriodicGame: async () => ({ ok: false }),
-    GAME_REWARDS: {
-      REACAO: 30,
-      EMBARALHADO: 30,
-      MEMORIA: 30,
-    },
-    isResenhaModeEnabled: () => false,
-    rewardPlayer: async () => {},
-    incrementUserStat: () => {},
-    createPendingTargetForWinner: async () => {},
   })
 
   assert.equal(handled, true)

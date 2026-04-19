@@ -2,7 +2,7 @@ const { normalizeMentionArray } = require("../services/mentionService")
 const storage = require("../storage");
 const economyService = require("../services/economyService");
 
-const APOSTA_BASE = 25; 
+const APOSTA_BASE = 50;
 
 function getBlackjackStateKey(from) {
   return `blackjack:lobby:${from}`;
@@ -84,6 +84,7 @@ const acao = String(textParts || "").toLowerCase();
     creator: null,
     isPovertyMode: false,
     multiplier: 1,
+    betConfigured: false,
     totalPot: 0,
     playersStanding: []
   };
@@ -129,7 +130,7 @@ const acao = String(textParts || "").toLowerCase();
 💸 !21 aposta [x]
 ➥ Define multiplicador (criador)
 
-💵 Aposta base: 25 coins
+💵 Aposta base: ${APOSTA_BASE} coins
 📈 Multiplicador: 1x até 100x
 
 🏆 Blackjack (21 com 2 cartas)
@@ -198,6 +199,7 @@ const acao = String(textParts || "").toLowerCase();
       creator: numero,
       isPovertyMode: false,
       multiplier: 1,
+      betConfigured: false,
       totalPot: 0,
       playersStanding: []
     };
@@ -235,6 +237,7 @@ const acao = String(textParts || "").toLowerCase();
     }
 
     lobby.multiplier = multiplier;
+    lobby.betConfigured = true;
     storage.setGameState(from, stateKey, lobby);
     const apostaPorJogador = APOSTA_BASE * multiplier;
     await sock.sendMessage(from, { 
@@ -265,6 +268,7 @@ const acao = String(textParts || "").toLowerCase();
       creator: numero,
       isPovertyMode: true,
       multiplier: 0,
+      betConfigured: false,
       totalPot: 0,
       playersStanding: []
     };
@@ -352,9 +356,13 @@ const acao = String(textParts || "").toLowerCase();
     }
 
     if (blackjackWinner) {
+      const payoutPool = (!lobby.isPovertyMode && !lobby.betConfigured)
+        ? Math.max(100, lobby.totalPot)
+        : lobby.totalPot;
+
       const winnerStats = initStats(blackjackWinner + '@s.whatsapp.net');
       winnerStats.wins++;
-      winnerStats.profit += lobby.totalPot - lobby.playerBets[blackjackWinner];
+      winnerStats.profit += payoutPool - lobby.playerBets[blackjackWinner];
       storage.setGameState("global", getBlackjackStatsKey(blackjackWinner + '@s.whatsapp.net'), winnerStats);
 
       for (let player of lobby.players) {
@@ -367,14 +375,14 @@ const acao = String(textParts || "").toLowerCase();
       }
 
       if (!lobby.isPovertyMode) {
-        economyService.creditCoins(blackjackWinner + '@s.whatsapp.net', lobby.totalPot, { type: "blackjack_blackjack_win", group: from });
+        economyService.creditCoins(blackjackWinner + '@s.whatsapp.net', payoutPool, { type: "blackjack_blackjack_win", group: from });
       }
 
       let msg = `🎯 *BLACKJACK!* 🎯\n\n`;
       msg += `@${blackjackWinner} tirou 21 com as 2 primeiras cartas!\n\n`;
       msg += `${formatHand(lobby.playerHands[blackjackWinner])}\n\n`;
       if (!lobby.isPovertyMode) {
-        msg += `💰 @${blackjackWinner} ganhou toda a bolada: *${lobby.totalPot}* EpsteinCoins!\n\n`;
+        msg += `💰 @${blackjackWinner} ganhou toda a bolada: *${payoutPool}* EpsteinCoins!\n\n`;
       } else {
         msg += `🎉 @${blackjackWinner} ganhou a mão!\n\n`;
       }
@@ -395,6 +403,7 @@ const acao = String(textParts || "").toLowerCase();
         creator: null,
         isPovertyMode: false,
         multiplier: 1,
+        betConfigured: false,
         totalPot: 0,
         playersStanding: []
       };
@@ -572,12 +581,15 @@ async function handleFinalizarGame({ sock, from, sender, lobby, stateKey, storag
 
   const dealerValue = getHandValue(lobby.dealerCards);
   const dealerTaxPercentage = getDealerTaxPercentage(lobby.players.length);
-  const dealerTax = Math.floor(lobby.totalPot * dealerTaxPercentage);
-  const remainingPot = lobby.totalPot - dealerTax;
+  const payoutPoolBase = (!lobby.isPovertyMode && !lobby.betConfigured)
+    ? Math.max(100, lobby.totalPot)
+    : lobby.totalPot;
+  const dealerTax = Math.floor(payoutPoolBase * dealerTaxPercentage);
+  const remainingPot = payoutPoolBase - dealerTax;
 
   let msg = `🎰 *Resultado Final do Blackjack* 🎰\n\n`;
   msg += `Dealer: ${formatHand(lobby.dealerCards)} (Valor: ${dealerValue})\n`;
-  msg += `💰 Bolada: ${lobby.totalPot} | Taxa do dealer: ${dealerTax} (${(dealerTaxPercentage * 100).toFixed(1)}%)\n\n`;
+  msg += `💰 Bolada: ${payoutPoolBase} | Taxa do dealer: ${dealerTax} (${(dealerTaxPercentage * 100).toFixed(1)}%)\n\n`;
 
   const playerResults = [];
   for (let player of lobby.players) {

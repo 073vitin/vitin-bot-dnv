@@ -8,10 +8,6 @@ function getWeeklyGameWins(user) {
     getRawStatValue(user, "gameBatataWin") +
     getRawStatValue(user, "gameDadosWin") +
     getRawStatValue(user, "gameRrWin") +
-    getRawStatValue(user, "gameComandoWin") +
-    getRawStatValue(user, "gameMemoriaWin") +
-    getRawStatValue(user, "gameReacaoWin") +
-    getRawStatValue(user, "gameEmbaralhadoWin") +
     getRawStatValue(user, "gameGuessExact")
   )
 }
@@ -22,10 +18,6 @@ function getWeeklyGameLosses(user) {
     getRawStatValue(user, "gameBatataLoss") +
     getRawStatValue(user, "gameDadosLoss") +
     getRawStatValue(user, "gameRrShotLoss") +
-    getRawStatValue(user, "gameComandoLoss") +
-    getRawStatValue(user, "gameMemoriaLoss") +
-    getRawStatValue(user, "gameReacaoLoss") +
-    getRawStatValue(user, "gameEmbaralhadoLoss") +
     getRawStatValue(user, "gameGuessLoss")
   )
 }

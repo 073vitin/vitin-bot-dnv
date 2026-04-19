@@ -443,14 +443,13 @@ const COMMAND_HELP = {
   começar: {
     name: "Começar Jogo",
     aliases: ["começar", "comecar", "start"],
-    description: "Inicia um jogo de lobby ou rápido",
+    description: "Cria ou inicia jogos de lobby",
     usage: "!começar <tipo|LobbyID> [args]",
     commonUsage: [
       "!começar adivinhacao - Criar lobby de adivinhação",
       "!começar LOBBY123 - Iniciar lobby existente",
-      "!começar embaralhado - Iniciar jogo rápido",
     ],
-    details: "Diferentes sintaxes para jogos de lobby vs. rápidos.",
+    details: "Use para criar lobbies de adivinhação, batata, dados e roleta russa, ou iniciar um LobbyID existente.",
   },
 
   entrar: {
@@ -481,12 +480,12 @@ const COMMAND_HELP = {
     description: "Jogo Cara ou Coroa com apostas e modo Dobro ou Nada",
     usage: "!moeda [2-10] | !moeda dobro | !moeda continua | !moeda sair",
     commonUsage: [
-      "!moeda 2 - Jogar com buy-in fixo de 25 (risco 2x para regras de punição)",
+      "!moeda 2 - Jogar com buy-in fixo de 50",
       "!moeda dobro - Iniciar Dobro ou Nada (modo contínuo)",
       "!moeda continua - Continuar Dobro ou Nada",
       "!moeda sair - Coletar ganhos do Dobro ou Nada",
     ],
-    details: "Buy-in fixo de 25 e prêmio fixo de 50 por vitória. O multiplicador 2-10x é usado para regras de risco/punição (ex.: modo resenha). Existem limites de uso (5 jogadas por 30 minutos por grupo) e suporte a streaks e modo Dobro ou Nada.",
+    details: "Buy-in fixo de 50 e prêmio fixo de 50 por vitória. Existem limites de uso (5 jogadas por 30 minutos por grupo) e suporte a streaks e modo Dobro ou Nada.",
   },
 
   streak: {
@@ -509,7 +508,7 @@ blackjack: {
     commonUsage: [
       "!21 - Mostra menu do Blackjack",
       "!21 criar - Cria um novo jogo",
-      "!21 aposta 2 - Define multiplicador de aposta (2x = 50 moedas)",
+      "!21 aposta 2 - Define multiplicador de aposta (2x = 100 moedas)",
       "!21 entrar - Entra no jogo com aposta",
       "!21 começar - Inicia o jogo (2+ jogadores)",
       "!21 pedir - Pede mais uma carta",
@@ -531,51 +530,6 @@ blackjack: {
       "!streakranking - Ver top streaks do grupo",
     ],
     details: "Lista os maiores streaks registrados no grupo (máximo histórico e valores atuais).",
-  },
-
-  aposta: {
-    name: "Aposta (Lobby)",
-    aliases: ["aposta"],
-    description: "Define a aposta por jogador em um lobby (fase de preparação)",
-    usage: "!aposta <LobbyID> <1-10|skip>",
-    commonUsage: [
-      "!aposta LOBBY123 3 - Definir aposta 3x para você no lobby",
-      "!aposta LOBBY123 skip - Pular fase de apostas",
-    ],
-    details: "Usado durante a fase de preparação do lobby para ajustar multiplicadores de aposta por jogador antes do início.",
-  },
-
-  memoria: {
-    name: "Memória",
-    aliases: ["memoria", "memória"],
-    description: "Jogo rápido de memória: memorize a sequência e envie de volta",
-    usage: "!comecar memoria (ou !começar memoria)",
-    commonUsage: [
-      "!comecar memoria - Iniciar jogo rápido de memória",
-    ],
-    details: "O bot mostra uma sequência de 12 caracteres por 5 segundos; o primeiro jogador a reproduzir corretamente vence.",
-  },
-
-  reacao: {
-    name: "Reação",
-    aliases: ["reacao", "reação"],
-    description: "Teste de reação: quem reagir mais rápido vence",
-    usage: "!comecar reacao (ou !começar reacao)",
-    commonUsage: [
-      "!comecar reacao - Iniciar teste de reação rápido",
-    ],
-    details: "O bot libera o início e mede o tempo de reação de quem enviar mensagens; o mais rápido vence.",
-  },
-
-  comando: {
-    name: "Comando",
-    aliases: ["comando"],
-    description: "Jogo 'Comando' (Último a obedecer): siga instruções sorteadas",
-    usage: "!comecar comando (ou !começar comando)",
-    commonUsage: [
-      "!comecar comando - Iniciar o jogo 'Comando'",
-    ],
-    details: "O bot dará instruções aleatórias (emoji, foto, silêncio etc.). O último a obedecer (ou o primeiro a quebrar o silêncio) perde e pode receber punição.",
   },
 
   // ===== MODERATION COMMANDS =====
@@ -988,17 +942,6 @@ blackjack: {
       "!atirar - Disparar revólver",
     ],
     details: "Ação para jogar roleta russa. Risco de morte!",
-  },
-
-  embaralhado: {
-    name: "Embaralhado",
-    aliases: ["embaralhado"],
-    description: "Jogo de palavras embaralhadas",
-    usage: "!embaralhado",
-    commonUsage: [
-      "!embaralhado - Iniciar jogo rápido",
-    ],
-    details: "Descifre palavras embaralhadas em tempo real.",
   },
 
   usaritem: {
@@ -1425,6 +1368,17 @@ blackjack: {
       "!resenha - Ativar ou desativar punições nos jogos deste grupo",
     ],
     details: "Admins e override users podem habilitar/desabilitar o modo resenha (punições) por grupo. Quando ativo, os jogos aplicam punições aos perdedores. Quando inativo, apenas XP e coins são distribuídos.",
+  },
+
+  admonly: {
+    name: "Admin Only",
+    aliases: ["admonly"],
+    description: "[Admin/Override] Alterna modo somente admin",
+    usage: "!admonly",
+    commonUsage: [
+      "!admonly - Ativar ou desativar o modo onde apenas admins podem usar comandos",
+    ],
+    details: "Admins podem alternar o modo 'admin only' por grupo. Quando ativado, apenas administradores podem usar comandos (exceto comandos de help como !ajuda, !menu, etc). Quando desativado, todos podem usar os comandos normalmente.",
   },
 };
 

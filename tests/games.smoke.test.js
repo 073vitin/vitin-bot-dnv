@@ -137,7 +137,7 @@ test("startCoinRound enforces rate limit of 5 plays per 30 minutes", async () =>
   assert.ok(sent.some((m) => /atingiu o limite/.test(String(m.payload?.text || ""))))
 })
 
-test("coin guess does not apply punishment when bet is below threshold", async () => {
+test("coin guess loss does not apply punishment on low bet", async () => {
   const groupId = `__coin_threshold_${Date.now()}@g.us`
   const sender = "loser@s.whatsapp.net"
   const { sock, sent } = createSockCapture()
@@ -172,10 +172,10 @@ test("coin guess does not apply punishment when bet is below threshold", async (
 
   assert.equal(handled, true)
   assert.equal(punishmentCalls, 0)
-  assert.ok(sent.some((m) => /abaixo do m[ií]nimo/i.test(String(m.payload?.text || ""))))
+  assert.ok(sent.some((m) => /Se fudeu/i.test(String(m.payload?.text || ""))))
 })
 
-test("coin guess applies punishment when bet reaches default threshold", async () => {
+test("coin guess loss does not apply punishment on high bet", async () => {
   const groupId = `__coin_threshold_hit_${Date.now()}@g.us`
   const sender = "loser@s.whatsapp.net"
   const { sock } = createSockCapture()
@@ -209,7 +209,7 @@ test("coin guess applies punishment when bet reaches default threshold", async (
   })
 
   assert.equal(handled, true)
-  assert.equal(punishmentCalls, 1)
+  assert.equal(punishmentCalls, 0)
 })
 
 test("pending punishment choice is rejected when eligibility metadata is invalid", async () => {

@@ -147,8 +147,8 @@ const gameManager = {
 
   pickRandom: (arr) => arr[Math.floor(Math.random() * arr.length)],
 
-  // Lógica de disparo dos jogos periódicos (embaralhado, memória, último a obedecer)
-  // Rastreia contagem de mensagens por grupo pras ativações periódicas
+  // Contadores de mensagens por grupo.
+  // Mantidos para compatibilidade de telemetria e possíveis gatilhos futuros.
   messageCounters: {}, // [groupId]: { count: N, users: Set, lastReset: timestamp }
 
   incrementMessageCounter: (groupId, userId) => {

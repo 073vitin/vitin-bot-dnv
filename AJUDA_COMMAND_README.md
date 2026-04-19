@@ -55,15 +55,13 @@ A economia é o sistema de progressão principal. Você ganha coins, XP e itens 
 ## Comandos Documentados
 ### Visão geral
 - Economia: comandos de perfil, loja, missões, trabalho, cupons e administração financeira
-- Jogos: lobbies, jogos rápidos (memória, reação, embaralhado, comando) e jogos de lobby (adivinhação, batata, dados, roleta russa, moeda)
+- Jogos: jogos de lobby (adivinhação, batata, dados, roleta russa), cara ou coroa e blackjack
 - Moderação: administração, filtros e sistema de punições
 - Utilitários: ajuda, menu, feedback e ferramentas administrativas/override
 
 ### Novos / Atualizados (últimas mudanças)
 - `moeda` — Cara ou Coroa com apostas e modo Dobro ou Nada
 - `streak`, `streakranking` — estatísticas e ranking de streaks do Cara ou Coroa
-- `memoria`, `reacao`, `comando` — jogos rápidos ativáveis por `!comecar <tipo>`
-- `aposta` — configuração de aposta por jogador em lobbies
 - `mudarapelido` (override) — ajuste de apelido público via override
 - `cooldowns` (override) — listar/resetar cooldowns econômicos
 - `comandosfull` — manual completo por seção (oculto/override)

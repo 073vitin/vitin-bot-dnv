@@ -86,10 +86,6 @@ const adivinhacao = require("./games/adivinhacao")
 const batataquente = require("./games/batataquente")
 const dueloDados = require("./games/dueloDados")
 const roletaRussa = require("./games/roletaRussa")
-const reacaoGame = require("./games/reacao")
-const embaralhado = require("./games/embaralhado")
-const comando = require("./games/comando")
-const memoriaGame = require("./games/memoria")
 const economyService = require("./services/economyService")
 const registrationService = require("./services/registrationService")
 const {
@@ -107,7 +103,8 @@ const { handleUtilityCommands } = require("./routers/utilityRouter")
 const { handleModerationCommands } = require("./routers/moderationRouter")
 const { handleEconomyCommands, cleanupUserLinkedState, parseTradeOffer, getTradeBracketForOffer } = require("./routers/economyRouter")
 const { registerDashboardRoutes } = require("./routers/dashboardRouter")
-const { handleWeaponsCommand } = require("./routers/weaponsRouter");
+const { handleWeaponsCommand } = require("./routers/weaponsRouter")
+const { isCommandBlocked, normalizeCommand } = require("./services/blockCommandService")
 
 const app = express()
 const logger = pino({ level: "silent" })
@@ -116,23 +113,10 @@ const prefix = "!"
 
 const BASE_GAME_REWARD = 25
 const GAME_BUY_INS = {
-  adivinhacao: 10,
-  batata: 15,
-  dados: 20,
-  rr: 25,
-}
-
-const GAME_REWARDS = {
-  REACAO: BASE_GAME_REWARD,
-  EMBARALHADO: BASE_GAME_REWARD,
-  MEMORIA: BASE_GAME_REWARD,
-  ADIVINHACAO_CLOSEST: BASE_GAME_REWARD,
-  ADIVINHACAO_EXACT: 60,
-  DADOS_WIN: 35,
-  COMANDO_SUCCESS: 20,
-  ROLETA_WIN: 40,
-  ROLETA_WIN_GUARANTEED: 50,
-  BATATA_WIN: 20,
+  adivinhacao: 50,
+  batata: 50,
+  dados: 50,
+  rr: 50,
 }
 
 let qrImage = null
@@ -1511,6 +1495,7 @@ function collectKnownGroupsFromStorage() {
   scanKeys(cache.coinGames)
   scanKeys(cache.coinPunishmentPending)
   scanKeys(cache.resenhaAveriguada)
+  scanKeys(cache.adminOnly)
   scanKeys(cache.coinStreaks)
   scanKeys(cache.coinStreakMax)
   scanKeys(cache.coinHistoricalMax)
@@ -4034,6 +4019,39 @@ setTimeout(() => {
     }
 
     // =========================
+    // VERIFICAÇÃO DE ADMIN ONLY MODE
+    // =========================
+    if (isCommand && isGroup && isCommand) {
+      const adminOnlyMap = storage.getAdminOnly()
+      const isAdminOnlyEnabled = adminOnlyMap[from] || false
+      
+      if (isAdminOnlyEnabled && !senderIsAdmin && !(isOverrideSenderAnyState && isCommand)) {
+        // Comandos que são permitidos mesmo em admin only
+        const admitExemptCommands = new Set([
+          prefix + "ajuda",
+          prefix + "duvida",
+          prefix + "menu",
+          prefix + "punicoeslista",
+          prefix + "puniçõeslista",
+          prefix + "perf",
+          prefix + "feedback",
+          prefix + "feedbackpriv",
+          prefix + "pergunta",
+          prefix + "bugbounty",
+        ])
+
+        const isExemptCommand = admitExemptCommands.has(cmd) || cmd.startsWith(prefix + "ajuda ") || cmd.startsWith(prefix + "duvida ")
+        
+        if (!isExemptCommand) {
+          await sock.sendMessage(from, {
+            text: "🔒 Modo *ADMIN ONLY* está ativado. Com exceção de alguns comandos (os de suporte, como !feedbackpriv e !pergunta), apenas administradores podem usar comandos neste momento.",
+          })
+          return
+        }
+      }
+    }
+
+    // =========================
     // RESPOSTA PENDENTE DO CARA OU COROA
     // =========================
     const handledCoinGuess = await measureStage("coinGuess", async () =>
@@ -4099,37 +4117,6 @@ setTimeout(() => {
     const activePrefix = (gameType) => `${gameType}Active:`
     const getGroupGameStates = () => storage.getGameStates(from)
 
-    const PERIODIC_CONTROL_STATE_KEY = "periodicControl"
-    const PERIODIC_AUTO_COOLDOWN_MS = 30 * 60_000
-    const PERIODIC_GAMES = [
-      { type: "embaralhado", key: "embaralhadoActive", label: "Embaralhado" },
-      { type: "reação", key: "reaçãoActive", label: "Reação" },
-      { type: "comando", key: "comandoActive", label: "Comando" },
-      { type: "memória", key: "memóriaActive", label: "Memória" },
-    ]
-
-    function getActivePeriodicGame() {
-      for (const game of PERIODIC_GAMES) {
-        const state = storage.getGameState(from, game.key)
-        if (state) return game
-      }
-      return null
-    }
-
-    function getPeriodicControlState() {
-      return storage.getGameState(from, PERIODIC_CONTROL_STATE_KEY) || { lastAutoStartedAt: 0 }
-    }
-
-    function setPeriodicControlState(nextState) {
-      storage.setGameState(from, PERIODIC_CONTROL_STATE_KEY, nextState)
-    }
-
-    function getRemainingPeriodicAutoCooldownMs() {
-      const control = getPeriodicControlState()
-      const elapsed = Date.now() - (control.lastAutoStartedAt || 0)
-      return Math.max(0, PERIODIC_AUTO_COOLDOWN_MS - elapsed)
-    }
-
     function hasOpenLobbyOfType(gameType) {
       const sessions = gameManager.optInSessions[from] || {}
       return Object.values(sessions).some((session) => session.gameType === gameType)
@@ -4153,8 +4140,6 @@ setTimeout(() => {
     function isResenhaModeEnabled() {
       return storage.isResenhaEnabled(from)
     }
-
-    // GAME_REWARDS defined earlier to avoid TDZ during forced command dispatch
 
     function parsePositiveInt(value, fallback = 1) {
       const parsed = Number.parseInt(String(value || ""), 10)
@@ -4180,46 +4165,8 @@ setTimeout(() => {
       return amount
     }
 
-    async function rewardPlayers(playerIds, baseAmount = BASE_GAME_REWARD, multiplier = 1, reasonLabel = "jogo") {
-      if (!Array.isArray(playerIds) || playerIds.length === 0) return
-      for (const playerId of playerIds) {
-        await rewardPlayer(playerId, baseAmount, multiplier, reasonLabel)
-      }
-    }
-
     function getGameBuyIn(gameType) {
       return Math.max(0, parsePositiveInt(GAME_BUY_INS[gameType], 0))
-    }
-
-    function getInsufficientBuyInPlayers(playerIds, buyInAmount) {
-      if (!Array.isArray(playerIds) || playerIds.length === 0) return []
-      if (buyInAmount <= 0) return []
-      return playerIds.filter((playerId) => economyService.getCoins(playerId) < buyInAmount)
-    }
-
-    function collectLobbyBuyIn(playerIds, buyInAmount, gameType) {
-      if (!Array.isArray(playerIds) || playerIds.length === 0) return { ok: true, pool: 0 }
-      if (buyInAmount <= 0) return { ok: true, pool: 0 }
-
-      const insufficient = getInsufficientBuyInPlayers(playerIds, buyInAmount)
-      if (insufficient.length > 0) {
-        return { ok: false, insufficient }
-      }
-
-      let pool = 0
-      for (const playerId of playerIds) {
-        const debited = economyService.debitCoins(playerId, buyInAmount, {
-          type: "game-buyin",
-          details: `Entrada para ${gameType}`,
-          meta: { game: gameType, buyInAmount },
-        })
-        if (debited) {
-          pool += buyInAmount
-          incrementUserStat(playerId, "moneyGameLost", buyInAmount)
-        }
-      }
-
-      return { ok: true, pool }
     }
 
     async function distributeLobbyBuyInPool(playerIds, poolAmount, gameLabel = "jogo", options = {}) {
@@ -4232,12 +4179,14 @@ setTimeout(() => {
 
       if (options?.payoutMode === "lobby-bet-formula") {
         const playerBetByPlayer = options?.playerBetByPlayer || {}
+        const minimumPoolBeforeFormula = Math.max(0, Math.floor(Number(options?.minimumPoolBeforeFormula) || 0))
+        const effectivePool = Math.max(safePool, minimumPoolBeforeFormula)
 
         for (const playerId of uniquePlayers) {
           const betRaw = Number.parseInt(String(playerBetByPlayer[playerId] ?? 1), 10)
           const bet = Number.isFinite(betRaw) ? Math.max(1, Math.min(10, betRaw)) : 1
 
-          const amount = safePool * bet
+          const amount = effectivePool * bet
           if (amount <= 0) continue
 
           economyService.creditCoins(playerId, amount, {
@@ -4245,7 +4194,9 @@ setTimeout(() => {
             details: `Partilha de entrada (${gameLabel})`,
             meta: {
               game: gameLabel.toLowerCase(),
-              poolAmount: safePool,
+              poolAmount: effectivePool,
+              originalPoolAmount: safePool,
+              minimumPoolBeforeFormula,
               playerBet: bet,
               formula: "pool*bet",
             },
@@ -4254,7 +4205,7 @@ setTimeout(() => {
           await sock.sendMessage(from, {
             text:
               `🏦 ${formatMentionTag(playerId)} recebeu *${amount}* Epsteincoins da pool (${gameLabel}).\n` +
-              `Fórmula: pool ${safePool} x bet ${bet}.`,
+              `Fórmula: pool ${effectivePool} x bet ${bet}.`,
             mentions: normalizeMentionArray([playerId]),
           })
         }
@@ -4331,10 +4282,6 @@ setTimeout(() => {
       if (["batata"].includes(t)) return "batata"
       if (["dados"].includes(t)) return "dados"
       if (["rr", "roleta", "roletarussa"].includes(t)) return "rr"
-      if (["embaralhado"].includes(t)) return "embaralhado"
-      if (["memoria", "memória"].includes(t)) return "memória"
-      if (["reacao", "reação"].includes(t)) return "reação"
-      if (["comando"].includes(t)) return "comando"
       return null
     }
 
@@ -4389,15 +4336,10 @@ setTimeout(() => {
         `- Derrotas no dobro ou nada: *${getUserStat(profile, "gameDobroLoss")}*`,
         `- Vitórias no duelo de dados: *${getUserStat(profile, "gameDadosWin")}*`,
         `- Derrotas no duelo de dados: *${getUserStat(profile, "gameDadosLoss")}*`,
-        `- Acertos no embaralhado: *${getUserStat(profile, "gameEmbaralhadoWin")}*`,
-        `- Vitórias na memória: *${getUserStat(profile, "gameMemoriaWin")}*`,
-        `- Vitórias no teste de reação: *${getUserStat(profile, "gameReacaoWin")}*`,
         `- Vezes que puxou o gatilho na roleta russa: *${getUserStat(profile, "gameRrTrigger")}*`,
         `- Vezes que ganhou aposta na roleta russa: *${getUserStat(profile, "gameRrBetWin")}*`,
         `- Vezes que tomou tiro na roleta russa: *${getUserStat(profile, "gameRrShotLoss")}*`,
         `- Vitórias totais na roleta russa: *${getUserStat(profile, "gameRrWin")}*`,
-        `- Vitórias no último a obedecer: *${getUserStat(profile, "gameComandoWin")}*`,
-        `- Derrotas no último a obedecer: *${getUserStat(profile, "gameComandoLoss")}*`,
       ].join("\n")
     }
 
@@ -4482,225 +4424,6 @@ setTimeout(() => {
       return true
     }
 
-    async function startPeriodicGame(gameType, options = {}) {
-      const { triggeredBy = null, automatic = false, reactionParticipants = null, comandoParticipants = null } = options
-
-      const activePeriodic = getActivePeriodicGame()
-      if (activePeriodic) {
-        return { ok: false, reason: "active", message: `Já existe um jogo periódico ativo: ${activePeriodic.label}.` }
-      }
-
-      if (automatic) {
-        const remainingMs = getRemainingPeriodicAutoCooldownMs()
-        if (remainingMs > 0) {
-          return { ok: false, reason: "cooldown", message: `Aguardando cooldown do gatilho periódico (${Math.ceil(remainingMs / 60_000)} min).` }
-        }
-
-        setPeriodicControlState({
-          ...getPeriodicControlState(),
-          lastAutoStartedAt: Date.now(),
-        })
-      }
-
-      if (gameType === "embaralhado") {
-        const state = embaralhado.start(from, triggeredBy)
-        storage.setGameState(from, "embaralhadoActive", state)
-        await sock.sendMessage(from, {
-          text: embaralhado.formatGame(state)
-        })
-
-        setTimeout(async () => {
-          const finalState = storage.getGameState(from, "embaralhadoActive")
-          if (finalState && !finalState.winner) {
-            await sock.sendMessage(from, {
-              text: embaralhado.formatResults(finalState),
-              mentions: finalState.winner ? [finalState.winner] : [],
-            })
-            storage.clearGameState(from, "embaralhadoActive")
-          }
-        }, 30_000)
-
-        return { ok: true }
-      }
-
-      if (gameType === "reação") {
-        const participants = Array.isArray(reactionParticipants) ? reactionParticipants : []
-        const restrictToPlayers = participants.length > 0
-        const state = reacaoGame.start(from, participants, { restrictToPlayers })
-        storage.setGameState(from, "reaçãoActive", state)
-
-        const participantText = restrictToPlayers
-          ? `\nParticipantes: ${participants.length} (somente lista definida).`
-          : "\nSem lista fixa: qualquer pessoa pode participar."
-
-        await sock.sendMessage(from, {
-          text: `⚡ Teste de Reação iniciado! Aguarde o *início*...${participantText}`,
-        })
-
-        const goDelayMs = 3000 + Math.floor(Math.random() * 4000)
-        setTimeout(async () => {
-          const currentState = storage.getGameState(from, "reaçãoActive")
-          if (!currentState || currentState.started || currentState.winner) return
-
-          reacaoGame.markStarted(currentState)
-          storage.setGameState(from, "reaçãoActive", currentState)
-
-          await sock.sendMessage(from, {
-            text: "🟢 VAI! Mande uma mensagem AGORA. O primeiro vence!",
-          })
-
-          setTimeout(async () => {
-            const finalState = storage.getGameState(from, "reaçãoActive")
-            if (!finalState || finalState.winner) return
-
-            const results = reacaoGame.getResults(finalState)
-            const resenhaOn = isResenhaModeEnabled()
-            const reactionMentions = Array.from(new Set((results.reactions || []).map((r) => r.playerId)))
-            await sock.sendMessage(from, {
-              text: reacaoGame.formatResults(finalState, results, resenhaOn),
-              mentions: reactionMentions,
-            })
-
-            if (results.winner) {
-              await rewardPlayer(results.winner, GAME_REWARDS.REACAO, 1, "Reação")
-              incrementUserStat(results.winner, "gameReacaoWin", 1)
-            }
-
-            storage.clearGameState(from, "reaçãoActive")
-          }, 20_000)
-        }, goDelayMs)
-
-        return { ok: true }
-      }
-
-      if (gameType === "comando") {
-        const participants = Array.isArray(comandoParticipants) ? comandoParticipants : []
-        const restrictToPlayers = participants.length > 0
-        const state = comando.start(from, triggeredBy, { players: participants, restrictToPlayers })
-        storage.setGameState(from, "comandoActive", state)
-        await sock.sendMessage(from, {
-          text: "⚠️ O desafio *Comando* vai começar em 10 segundos. Preparem-se para obedecer na hora certa!"
-        })
-
-        setTimeout(async () => {
-          const currentState = storage.getGameState(from, "comandoActive")
-          if (!currentState) return
-
-          currentState.instructionStartedAt = Date.now()
-          storage.setGameState(from, "comandoActive", currentState)
-
-          const resenhaOn = isResenhaModeEnabled()
-          await sock.sendMessage(from, {
-            text: comando.formatInstruction(currentState, resenhaOn)
-          })
-
-          let comandoFinalized = false
-          const finalizeComandoRound = async () => {
-            if (comandoFinalized) return
-            comandoFinalized = true
-
-            const finalState = storage.getGameState(from, "comandoActive")
-            if (!finalState) return
-
-            const participants = Array.from(new Set((finalState.participants || []).filter(Boolean)))
-            const finalResenhaOn = isResenhaModeEnabled()
-            const loser = comando.getLoser(finalState)
-            await sock.sendMessage(from, {
-              text: comando.formatResults(finalState, finalResenhaOn),
-              mentions: loser ? [loser] : [],
-            })
-
-            if (loser) {
-              const rewardedPlayers = finalState.instruction?.cmd === "silence"
-                ? (() => {
-                    const startedAt = Number(finalState.instructionStartedAt) || 0
-                    const endedAt = Date.now()
-                    const participantLastMessageAt = finalState.participantLastMessageAt || {}
-                    return (finalState.participants || []).filter((playerId) => {
-                      if (!playerId || playerId === loser) return false
-                      const lastAt = Number(participantLastMessageAt[playerId]) || 0
-                      return lastAt >= startedAt && lastAt <= endedAt
-                    })
-                  })()
-                : (finalState.compliers || [])
-                    .map((entry) => entry.playerId)
-                    .filter((playerId) => playerId && playerId !== loser)
-              rewardedPlayers.forEach((playerId) => incrementUserStat(playerId, "gameComandoWin", 1))
-              incrementUserStat(loser, "gameComandoLoss", 1)
-              if (rewardedPlayers.length > 0) {
-                await rewardPlayers(rewardedPlayers, GAME_REWARDS.COMANDO_SUCCESS, 1, "Comando")
-              }
-              await applyRandomGamePunishment(loser)
-            }
-
-            storage.clearGameState(from, "comandoActive")
-          }
-
-          if (currentState.instruction?.cmd === "silence") {
-            const silenceStopwatch = setInterval(async () => {
-              const liveState = storage.getGameState(from, "comandoActive")
-              if (!liveState || comandoFinalized) {
-                clearInterval(silenceStopwatch)
-                return
-              }
-              if (liveState.silenceBreaker) {
-                clearInterval(silenceStopwatch)
-                await finalizeComandoRound()
-              }
-            }, 500)
-          }
-
-          setTimeout(async () => {
-            await finalizeComandoRound()
-          }, 20_000)
-        }, 10_000)
-
-        return { ok: true }
-      }
-
-      if (gameType === "memória") {
-        const state = memoriaGame.start(from, triggeredBy)
-        storage.setGameState(from, "memóriaActive", state)
-        const sequenceMessage = await sock.sendMessage(from, {
-          text: memoriaGame.formatSequence(state)
-        })
-
-        setTimeout(async () => {
-          const finalState = storage.getGameState(from, "memóriaActive")
-          if (finalState) {
-            if (sequenceMessage?.key) {
-              const sequenceDeleteOk = await deleteMessageWithRetry(sock, from, sequenceMessage.key, {
-                context: "memoria.sequenceDelete",
-              })
-              if (!sequenceDeleteOk) {
-                console.error("Erro ao apagar mensagem da sequência da memória")
-              }
-            }
-            await sock.sendMessage(from, {
-              text: memoriaGame.formatHidden(finalState)
-            })
-          }
-        }, 5000)
-
-        setTimeout(async () => {
-          const finalState = storage.getGameState(from, "memóriaActive")
-          if (finalState && !finalState.winner) {
-            await sock.sendMessage(from, {
-              text:
-                `⏰ Tempo do Jogo da Memória encerrado (60s).\n` +
-                `Ninguém acertou a sequência a tempo.\n` +
-                `Sequência correta: ${finalState.sequence}`,
-            })
-            storage.clearGameState(from, "memóriaActive")
-          }
-        }, 60_000)
-
-        return { ok: true }
-      }
-
-      return { ok: false, reason: "unknown", message: "Tipo de jogo periódico inválido." }
-    }
-
     // Função de aviso para lobbies que estão prestes a fechar
     function createLobbyWarningCallback(groupId) {
       return (grpId, gameId, gameType, players) => {
@@ -4714,10 +4437,6 @@ setTimeout(() => {
           batata: "Batata Quente",
           dados: "Duelo de Dados",
           rr: "Roleta Russa",
-          embaralhado: "Embaralhado",
-          memoria: "Memória",
-          reacao: "Reação",
-          comando: "Último a Obedecer",
         }
         const gameName = gameNames[gameType] || gameType
 
@@ -4985,6 +4704,19 @@ setTimeout(() => {
       }
     }
 
+    // ===== VERIFICAÇÃO DE BLOQUEIO DE COMANDOS =====
+    // Checar se o comando está bloqueado neste grupo
+    if (isGroup && isCommand) {
+      const normalizedCmd = normalizeCommand(cmd, prefix)
+      if (isCommandBlocked(storage, from, normalizedCmd, prefix)) {
+        // Comando está bloqueado
+        await sock.sendMessage(from, {
+          text: `🚫 O comando *${cmd}* está bloqueado neste grupo.\nUse ${prefix}listblockcmd para ver todos os comandos bloqueados.`,
+        })
+        return
+      }
+    }
+
     const handledGameCommand = await measureStage("router.games.command", async () =>
       handleGameCommands({
         sock,
@@ -5007,8 +4739,6 @@ setTimeout(() => {
         batataquente,
         dueloDados,
         roletaRussa,
-        startPeriodicGame,
-        GAME_REWARDS,
         BASE_GAME_REWARD,
         normalizeUnifiedGameType,
         normalizeLobbyId,
@@ -5016,12 +4746,10 @@ setTimeout(() => {
         resolveActiveLobbyForPlayer,
         getLobbyCreateBlockMessage,
         getGameBuyIn,
-        collectLobbyBuyIn,
         distributeLobbyBuyInPool,
         parsePositiveInt,
         isResenhaModeEnabled,
         rewardPlayer,
-        rewardPlayers,
         incrementUserStat,
         applyRandomGamePunishment,
         createPendingTargetForWinner,
@@ -5044,15 +4772,6 @@ setTimeout(() => {
         isGroup,
         isCommand,
         storage,
-        gameManager,
-        reacao: reacaoGame,
-        "reação": reacaoGame,
-        embaralhado,
-        memoria: memoriaGame,
-        "memória": memoriaGame,
-        comando,
-        startPeriodicGame,
-        GAME_REWARDS,
         caraOuCoroa,
         economyService,
         isResenhaModeEnabled,

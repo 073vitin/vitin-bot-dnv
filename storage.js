@@ -20,6 +20,7 @@ let stateCache = {
   coinGames: {},
   coinPunishmentPending: {},
   resenhaAveriguada: {},
+  adminOnly: {},
   coinStreaks: {},
   coinStreakMax: {},
   coinHistoricalMax: {},
@@ -37,6 +38,7 @@ let stateCache = {
   teams: {}, // [teamId]: { name, createdBy, lieutenants:[userId], members: [userId], createdAt, poolCoins, poolItems: {}, lastWithdrawAtByUser:{} }
   teamMembers: {}, // [userId]: teamId (for quick lookup)
   teamInvites: {}, // [teamId]: { [userId]: inviteStatus }
+  blockedCommands: {}, // [groupId]: { [commandOrSubmenu]: true }
   profilerLifetimeStats: {
     sinceAt: Date.now(),
     bootCount: 0,
@@ -297,6 +299,18 @@ const storage = {
   isResenhaEnabled: (groupId) => stateCache.resenhaAveriguada[groupId] || false,
   setResenhaEnabled: (groupId, enabled) => {
     stateCache.resenhaAveriguada[groupId] = enabled
+    saveState()
+  },
+
+  // Admin Only Mode
+  getAdminOnly: () => stateCache.adminOnly,
+  setAdminOnly: (map) => {
+    stateCache.adminOnly = map || {}
+    saveState()
+  },
+  isAdminOnlyEnabled: (groupId) => stateCache.adminOnly[groupId] || false,
+  setAdminOnlyEnabled: (groupId, enabled) => {
+    stateCache.adminOnly[groupId] = enabled
     saveState()
   },
 
@@ -774,6 +788,77 @@ const storage = {
   setCache: (newCache) => {
     stateCache = newCache
     saveState(true)
+  },
+
+  // Bloqueio de comandos/submenus por grupo
+  getBlockedCommands: (groupId) => {
+    if (groupId === undefined) return stateCache.blockedCommands || {}
+    const key = String(groupId || "").trim()
+    if (!key) return {}
+    const blocked = stateCache.blockedCommands?.[key]
+    if (!blocked || typeof blocked !== "object") return {}
+    return { ...blocked }
+  },
+  setBlockedCommands: (groupIdOrData, maybeData) => {
+    if (maybeData === undefined) {
+      stateCache.blockedCommands = groupIdOrData || {}
+      saveState()
+      return
+    }
+    const key = String(groupIdOrData || "").trim()
+    if (!key) return
+    stateCache.blockedCommands[key] = maybeData || {}
+    saveState()
+  },
+  toggleBlockedCommand: (groupId, commandOrSubmenu = "") => {
+    const key = String(groupId || "").trim()
+    const cmdKey = String(commandOrSubmenu || "").trim().toLowerCase()
+    if (!key || !cmdKey) return { ok: false, reason: "invalid-params" }
+
+    if (!stateCache.blockedCommands || typeof stateCache.blockedCommands !== "object") {
+      stateCache.blockedCommands = {}
+    }
+    if (!stateCache.blockedCommands[key]) {
+      stateCache.blockedCommands[key] = {}
+    }
+
+    const isCurrentlyBlocked = Boolean(stateCache.blockedCommands[key][cmdKey])
+    const nextState = !isCurrentlyBlocked
+
+    if (nextState) {
+      stateCache.blockedCommands[key][cmdKey] = {
+        blockedAt: Date.now(),
+      }
+    } else {
+      delete stateCache.blockedCommands[key][cmdKey]
+    }
+
+    // Limpar grupos vazios
+    if (Object.keys(stateCache.blockedCommands[key]).length === 0) {
+      delete stateCache.blockedCommands[key]
+    }
+
+    saveState()
+
+    return {
+      ok: true,
+      commandOrSubmenu: cmdKey,
+      blocked: nextState,
+      totalBlocked: stateCache.blockedCommands[key] ? Object.keys(stateCache.blockedCommands[key]).length : 0,
+    }
+  },
+  isCommandBlocked: (groupId, commandOrSubmenu = "") => {
+    const key = String(groupId || "").trim()
+    const cmdKey = String(commandOrSubmenu || "").trim().toLowerCase()
+    if (!key || !cmdKey) return false
+    return Boolean(stateCache.blockedCommands?.[key]?.[cmdKey])
+  },
+  getBlockedCommandsList: (groupId) => {
+    const key = String(groupId || "").trim()
+    if (!key) return []
+    const blocked = stateCache.blockedCommands?.[key]
+    if (!blocked || typeof blocked !== "object") return []
+    return Object.keys(blocked).sort()
   },
 
   // Persistência

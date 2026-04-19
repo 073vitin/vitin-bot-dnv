@@ -280,7 +280,6 @@ async function handleCoinGuess({
   const coinStreaks = storage.getCoinStreaks()
   const coinStreakMax = storage.getCoinStreakMax()
   const coinHistoricalMax = storage.getCoinHistoricalMax()
-  const resenhaAveriguada = storage.getResenhaAveriguada()
 
   const playerGame = isGroup ? coinGames[from]?.[sender] : null
   const guess = parseCoinGuess(cmd)
@@ -303,61 +302,6 @@ async function handleCoinGuess({
   const resolvedResult = isOverride ? guess : game.resultado
   const acertou = (guess === resolvedResult)
   const wagerMultiplier = Math.max(1, Math.floor(Number(game?.betMultiplier) || 1))
-  const canTriggerPunishment = Boolean(resenhaAveriguada[from]) && wagerMultiplier >= minPunishmentBet
-  const canChooseTargetPunishment = Boolean(resenhaAveriguada[from]) && wagerMultiplier >= minWinnerTargetBet
-
-  if (acertou && canChooseTargetPunishment) {
-    if (!coinStreaks[from]) coinStreaks[from] = {}
-    coinStreaks[from][sender] = (coinStreaks[from][sender] || 0) + 1
-    const streak = coinStreaks[from][sender]
-
-    if (!coinStreakMax[from]) coinStreakMax[from] = {}
-    coinStreakMax[from][sender] = Math.max(coinStreakMax[from][sender] || 0, streak)
-    if (!coinHistoricalMax[from]) coinHistoricalMax[from] = 0
-    coinHistoricalMax[from] = Math.max(coinHistoricalMax[from], streak)
-
-    storage.setCoinStreaks(coinStreaks)
-    storage.setCoinStreakMax(coinStreakMax)
-    storage.setCoinHistoricalMax(coinHistoricalMax)
-
-    if (typeof rewardWinner === "function") await rewardWinner(sender, wagerMultiplier)
-
-    let winText =
-      `Você acertou! A moeda caiu em *${resolvedResult}*.\n` +
-      `Streak: *${streak}*`
-
-    await sock.sendMessage(from, { text: winText, mentions: normalizeMentionArray([sender]) })
-
-    await sock.sendMessage(from, {
-      text:
-        `Escolha um alvo e a punição dele em até 30 segundos.\n` +
-        `${getPunishmentMenuText()}\n` +
-        `Formato: @mention <número da punição>`,
-      mentions: normalizeMentionArray([sender]),
-    })
-
-    const coinPunishmentPending = storage.getCoinPunishmentPending()
-    if (!coinPunishmentPending[from]) coinPunishmentPending[from] = {}
-    coinPunishmentPending[from][sender] = {
-      mode: "target",
-      target: null,
-      createdAt: Date.now(),
-      origin: "game",
-      punishmentEligible: true,
-      minPunishmentBet,
-      roundBet: wagerMultiplier,
-    }
-    storage.setCoinPunishmentPending(coinPunishmentPending)
-
-    setTimeout(() => {
-      const coinPunishmentPendingTimeout = storage.getCoinPunishmentPending()
-      if (coinPunishmentPendingTimeout[from]?.[sender]) {
-        clearPendingPunishment(from, sender)
-      }
-    }, 30_000)
-
-    return true
-  }
 
   if (acertou) {
     if (!coinStreaks[from]) coinStreaks[from] = {}
@@ -403,25 +347,6 @@ async function handleCoinGuess({
       (usedStreakSaver ? "\n🛟 Salva-streak consumido: sua sequência foi preservada." : ""),
     mentions: normalizeMentionArray([sender])
   })
-
-  if (resenhaAveriguada[from]) {
-    if (!canTriggerPunishment) {
-      await sock.sendMessage(from, {
-        text:
-          `Aposta de *${wagerMultiplier}x* abaixo do minimo de *${minPunishmentBet}x* para punicoes no Cara ou Coroa.\n` +
-          `Sem punicao nesta rodada.`,
-        mentions: normalizeMentionArray([sender]),
-      })
-      return true
-    }
-
-    const randomPunishment = getRandomPunishmentChoice()
-    await sock.sendMessage(from, {
-      text: `Punição sorteada: *${getPunishmentNameById(randomPunishment)}*`,
-      mentions: normalizeMentionArray([sender])
-    })
-    await applyPunishment(sock, from, sender, randomPunishment, { origin: "game" })
-  }
 
   return true
 }

@@ -15,6 +15,12 @@ const {
   formatMentionTag,
   resolveSingleTargetFromMentionOrReply,
 } = require("../services/mentionService")
+const {
+  getSubmenuIfKnown,
+  getBlockedCommandsList,
+  toggleCommandBlock,
+  isValidCommandOrSubmenu,
+} = require("../services/blockCommandService")
 
 const pendingPrivateFeedbackBySender = new Map()
 const pendingQuestionBySender = new Map()
@@ -621,14 +627,9 @@ async function handleUtilityCommands(ctx) {
       ],
       partidas: [
         { cmd: `${prefix}resposta`, usage: `${prefix}resposta <numero>`, effect: "chute na adivinhacao", badges: ["GRUPO"] },
-        { cmd: `${prefix}aposta`, usage: `${prefix}aposta <LobbyID> <1-10|skip>`, effect: "define bet por jogador no lobby", badges: ["GRUPO"] },
         { cmd: `${prefix}passa`, usage: `${prefix}passa @usuario`, effect: "passa batata", badges: ["GRUPO"] },
         { cmd: `${prefix}rolar`, usage: `${prefix}rolar`, effect: "rola dado", badges: ["GRUPO"] },
         { cmd: `${prefix}atirar`, usage: `${prefix}atirar`, effect: "turno da roleta russa", badges: ["GRUPO"] },
-        { cmd: `${prefix}embaralhado`, usage: `${prefix}embaralhado`, effect: "inicia jogo embaralhado", badges: ["GRUPO"] },
-        { cmd: `${prefix}comecar memoria`, aliases: [`${prefix}começar memória`], usage: `${prefix}comecar memoria`, effect: "inicia memoria", badges: ["GRUPO"] },
-        { cmd: `${prefix}comecar reacao`, aliases: [`${prefix}começar reação`], usage: `${prefix}comecar reacao`, effect: "inicia reacao", badges: ["GRUPO"] },
-        { cmd: `${prefix}comecar comando`, aliases: [`${prefix}começar comando`], usage: `${prefix}comecar comando`, effect: "inicia comando", badges: ["GRUPO"] },
       ],
       economia: [
         { cmd: `${prefix}economia`, usage: `${prefix}economia`, effect: "menu de economia", badges: ["GERAL"] },
@@ -1359,6 +1360,74 @@ Uso override:
 │ ${prefix}adm
 │ ${prefix}admeconomia (apenas donos)
 ╰━━━━━━━━━━━━━━━━━━━━╯`,
+    })
+    return true
+  }
+
+  if (cmd === prefix + "admonly") {
+    if (!isGroup) {
+      trackUtility("admonly", "rejected", { reason: "group-only" })
+      await sock.sendMessage(from, {
+        text: "Esse comando só funciona em grupo.",
+      })
+      return true
+    }
+
+    const dmSenderIsAdmin = typeof storage?.isDelegatedAdmin === "function"
+      ? storage.isDelegatedAdmin(from, sender)
+      : false
+
+    let senderIsNativeAdmin = dmSenderIsAdmin
+    try {
+      const metadata = await sock.groupMetadata(from)
+      const admins = (metadata?.participants || [])
+        .filter((p) => p.admin)
+        .map((p) => String(p?.id || "").trim())
+
+      const senderNormalized = typeof jidNormalizedUser === "function"
+        ? jidNormalizedUser(sender)
+        : String(sender || "").trim().toLowerCase()
+
+      senderIsNativeAdmin = dmSenderIsAdmin || admins.some((adminId) => {
+        const adminNormalized = typeof jidNormalizedUser === "function"
+          ? jidNormalizedUser(adminId)
+          : String(adminId || "").trim().toLowerCase()
+        return adminNormalized === senderNormalized || adminNormalized === sender
+      })
+    } catch (err) {
+      console.error("[router:utility] failed to resolve group metadata for admonly", {
+        groupId: from,
+        error: String(err?.message || err),
+      })
+    }
+
+    if (!senderIsNativeAdmin) {
+      trackUtility("admonly", "rejected", { reason: "not-admin" })
+      await sock.sendMessage(from, {
+        text: "Apenas administradores do grupo podem usar esse comando.",
+      })
+      return true
+    }
+
+    const adminOnlyMap = typeof storage?.getAdminOnly === "function"
+      ? storage.getAdminOnly()
+      : {}
+    const wasEnabled = adminOnlyMap[from] || false
+    adminOnlyMap[from] = !wasEnabled
+    
+    if (typeof storage?.setAdminOnly === "function") {
+      storage.setAdminOnly(adminOnlyMap)
+    }
+
+    await sock.sendMessage(from, {
+      text: adminOnlyMap[from]
+        ? "🔒 Modo *ADMIN ONLY* ativado: apenas administradores podem usar os comandos."
+        : "🔓 Modo *ADMIN ONLY* desativado: todos podem usar os comandos novamente.",
+    })
+
+    trackUtility("admonly", "success", {
+      groupId: from,
+      enabled: adminOnlyMap[from],
     })
     return true
   }
@@ -2654,6 +2723,129 @@ if (cmd === prefix + "transmutar") {
       mentions: normalizeMentionArray([p1, p2]),
     })
     trackUtility("treta", "success", { players: [p1, p2] })
+    return true
+  }
+
+  // ===== BLOQUEIO DE COMANDOS =====
+  if (cmd.startsWith(prefix + "listblockcmd")) {
+    if (!isGroup) {
+      trackUtility("listblockcmd", "rejected", { reason: "group-only" })
+      return false
+    }
+
+    const blocked = getBlockedCommandsList(storage, from, prefix)
+
+    if (blocked.total === 0) {
+      await sock.sendMessage(from, {
+        text: `✅ Nenhum comando ou submenu está bloqueado neste grupo.`,
+      })
+      trackUtility("listblockcmd", "success", { blockedCount: 0 })
+      return true
+    }
+
+    const lines = ["🚫 *Comandos e Submenus Bloqueados*:\n"]
+
+    if (blocked.submenus.length > 0) {
+      lines.push("📌 *Submenus:*")
+      for (const submenu of blocked.submenus) {
+        lines.push(`- ${submenu.displayName} (${submenu.commandCount} comandos)`)
+      }
+      lines.push("")
+    }
+
+    if (blocked.commands.length > 0) {
+      lines.push("📌 *Comandos:*")
+      for (const cmd of blocked.commands) {
+        lines.push(`- ${cmd.displayName}`)
+      }
+      lines.push("")
+    }
+
+    lines.push(`Total: ${blocked.total} item(ns) bloqueado(s)`)
+    lines.push(`\nUse ${prefix}blockcmd <comando|submenu> para alternar o bloqueio.`)
+
+    await sock.sendMessage(from, { text: lines.join("\n") })
+    trackUtility("listblockcmd", "success", { blockedCount: blocked.total })
+    return true
+  }
+
+  if (cmd.startsWith(prefix + "blockcmd")) {
+    if (!isGroup) {
+      trackUtility("blockcmd", "rejected", { reason: "group-only" })
+      return false
+    }
+
+    // Apenas admins do grupo ou senderIsAdmin
+    if (!senderIsAdmin) {
+      await sock.sendMessage(from, {
+        text: `❌ Apenas administradores do grupo podem usar este comando.`,
+      })
+      trackUtility("blockcmd", "rejected", { reason: "not-admin" })
+      return true
+    }
+
+    const cmdTokens = cmd.split(/\s+/).filter(Boolean)
+    if (cmdTokens.length < 2) {
+      await sock.sendMessage(from, {
+        text: `Use: ${prefix}blockcmd <economia|jogos|moderacao|comando>\n\nExemplos:\n- ${prefix}blockcmd economia\n- ${prefix}blockcmd perfil\n- ${prefix}blockcmd jogos`,
+      })
+      trackUtility("blockcmd", "rejected", { reason: "missing-argument" })
+      return true
+    }
+
+    const targetArg = String(cmdTokens[1] || "").trim().toLowerCase()
+
+    // Validar o argumento
+    if (!isValidCommandOrSubmenu(targetArg)) {
+      const suggestion = `"${targetArg}" não é um comando ou submenu válido.`
+      const submenus = "economia, jogos, moderacao"
+      await sock.sendMessage(from, {
+        text: `❌ ${suggestion}\n\nSubmenus disponíveis: ${submenus}\n\nOu use um nome de comando válido.`,
+      })
+      trackUtility("blockcmd", "rejected", { reason: "invalid-target", target: targetArg })
+      return true
+    }
+
+    // Executar o toggle
+    const toggleResult = toggleCommandBlock(storage, from, targetArg, prefix)
+
+    if (!toggleResult.ok) {
+      if (toggleResult.reason === "cannot-block-blockcmd") {
+        await sock.sendMessage(from, {
+          text: `❌ O comando ${prefix}blockcmd não pode ser bloqueado a si mesmo!`,
+        })
+        trackUtility("blockcmd", "rejected", { reason: "cannot-block-self", target: targetArg })
+        return true
+      }
+
+      await sock.sendMessage(from, {
+        text: `❌ Erro ao processar bloqueio de "${targetArg}".`,
+      })
+      trackUtility("blockcmd", "error", { reason: toggleResult.reason, target: targetArg })
+      return true
+    }
+
+    // Preparar resposta
+    const action = toggleResult.blocked ? "🚫 BLOQUEADO" : "✅ DESBLOQUEADO"
+    let message = ""
+
+    if (toggleResult.isSubmenu) {
+      const submenuDisplay = targetArg.charAt(0).toUpperCase() + targetArg.slice(1)
+      message = `${action}\n\nSubmenu: *${submenuDisplay}*\nTodos os comandos deste submenu foram ${toggleResult.blocked ? "bloqueados" : "desbloqueados"}.`
+    } else {
+      message = `${action}\n\nComando: *${prefix}${targetArg}*`
+    }
+
+    message += `\n\nComandos/submenus bloqueados no grupo: ${toggleResult.totalBlocked || 0}`
+
+    await sock.sendMessage(from, { text: message })
+
+    trackUtility("blockcmd", "success", {
+      target: targetArg,
+      isSubmenu: toggleResult.isSubmenu,
+      action: toggleResult.blocked ? "block" : "unblock",
+      totalBlocked: toggleResult.totalBlocked || 0,
+    })
     return true
   }
 
