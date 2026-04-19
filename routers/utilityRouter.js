@@ -2514,8 +2514,8 @@ ${feedbackText}`,
   
 if (cmd === prefix + "transmutar") {
   try {
-    let target = quoted || msg
-    let content = target?.message || target
+    const m = quoted ? quoted : msg
+    let content = m.message
 
     let isViewOnce = false
 
@@ -2536,10 +2536,19 @@ if (cmd === prefix + "transmutar") {
       react: { text: isViewOnce ? "💾" : "🧪", key: msg.key }
     })
 
-    const buffer = await downloadMediaMessage(target, "buffer")
+    // 🔥 DOWNLOAD CORRETO
+    const buffer = await downloadMediaMessage(
+      m,
+      "buffer",
+      {},
+      {
+        logger,
+        reuploadRequest: sock.updateMediaMessage
+      }
+    )
 
     // =========================
-    // VIEWONCE → MIDIA NORMAL
+    // VIEWONCE
     // =========================
     if (isViewOnce) {
       if (content?.imageMessage) {
@@ -2548,7 +2557,9 @@ if (cmd === prefix + "transmutar") {
       }
 
       if (content?.videoMessage) {
-        await sock.sendMessage(from, { video: buffer }, { quoted: msg })
+        await sock.sendMessage(from, {
+          text: "Não sou escravo não irmão"
+        }, { quoted: msg })
         return true
       }
     }
@@ -2568,7 +2579,7 @@ if (cmd === prefix + "transmutar") {
         await new Promise((resolve, reject) => {
           ffmpeg(input)
             .outputOptions([
-              "-vf scale=512:512,fps=20",
+              "-vf scale=512:512:force_original_aspect_ratio=disable,fps=20",
               "-pix_fmt yuv420p"
             ])
             .toFormat("mp4")
@@ -2603,7 +2614,7 @@ if (cmd === prefix + "transmutar") {
     }
 
     // =========================
-    // GIF → TRATAR COMO VIDEO
+    // GIF → VIDEO
     // =========================
     if (content?.videoMessage?.gifPlayback) {
       await sock.sendMessage(from, { video: buffer }, { quoted: msg })
