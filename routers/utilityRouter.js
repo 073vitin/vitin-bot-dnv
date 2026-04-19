@@ -2439,7 +2439,7 @@ ${feedbackText}`,
     return true
   }
   
-if (cmdName === prefix + "transmutar") {
+if (cmd === prefix + "transmutar") {
   try {
     let target = quoted || msg
     let content = target?.message || target
