@@ -551,6 +551,7 @@ async function handleUtilityCommands(ctx) {
     cmd,
     prefix,
     isGroup,
+    senderIsAdmin,
     senderIsRegistered,
     msg,
     quoted,
