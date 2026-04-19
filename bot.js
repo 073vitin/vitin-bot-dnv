@@ -4792,6 +4792,7 @@ setTimeout(() => {
         cmd,
         prefix,
         isGroup,
+        senderIsAdmin,
         isOverrideSender,
         isKnownOverrideSender,
         overrideJid: overrideCompat.overrideJid,

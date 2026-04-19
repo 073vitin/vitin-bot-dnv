@@ -243,7 +243,9 @@ function normalizeCommand(command = "", prefix = "!") {
     cmd = cmd.slice(prefixStr.length)
   }
   
-  return cmd
+  // Retorna apenas o nome do comando, sem argumentos
+  const commandName = cmd.split(/\s+/)[0]
+  return commandName
 }
 
 /**
