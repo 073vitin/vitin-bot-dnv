@@ -1966,15 +1966,15 @@ async function videoToSticker(buffer){
       ffmpeg(input)
         .outputOptions([
           "-t 6",
-          "-vf scale=512:512,fps=20",
+          "-vf scale=512:512:force_original_aspect_ratio=disable,setsar=1,setdar=1",
+          "-r 20",
           "-loop 0",
           "-an",
           "-vcodec libwebp",
           "-preset default",
           "-qscale 50",
           "-lossless 0",
-          "-compression_level 6",
-          "-metadata:s:v:0 alpha_mode=1"
+          "-compression_level 6"
         ])
         .toFormat("webp")
         .save(outputWebp)
