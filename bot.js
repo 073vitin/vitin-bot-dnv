@@ -1960,15 +1960,13 @@ async function videoToSticker(buffer){
   const outputWebp = "./output.webp"
 
   try {
-    console.log("[videoToSticker] Iniciando conversão, tamanho do buffer:", buffer.length)
     fs.writeFileSync(input, buffer)
-    console.log("[videoToSticker] Arquivo salvo em:", input)
 
     await new Promise((resolve, reject) => {
       ffmpeg(input)
         .outputOptions([
           "-t 6",
-          "-vf scale=512:512:force_original_aspect_ratio=decrease,fps=20,pad=512:512:-1:-1:color=0x00000000",
+          "-vf scale=512:512,fps=20",
           "-loop 0",
           "-an",
           "-vcodec libwebp",
@@ -1980,26 +1978,17 @@ async function videoToSticker(buffer){
         ])
         .toFormat("webp")
         .save(outputWebp)
-        .on("end", () => {
-          console.log("[videoToSticker] WEBP gerado com sucesso")
-          resolve()
-        })
-        .on("error", (err) => {
-          console.error("[videoToSticker] Erro ao gerar WEBP:", err)
-          reject(err)
-        })
+        .on("end", resolve)
+        .on("error", reject)
     })
 
-    console.log("[videoToSticker] Lendo arquivo de saída:", outputWebp)
     const sticker = fs.readFileSync(outputWebp)
-    console.log("[videoToSticker] Sticker WEBP criado com sucesso, tamanho:", sticker.length)
-    
+
     fs.unlinkSync(input)
     fs.unlinkSync(outputWebp)
     return sticker
 
   } catch (err) {
-    console.error("[videoToSticker] Erro completo:", err.message, err.stack)
     if (fs.existsSync(input)) fs.unlinkSync(input)
     if (fs.existsSync(outputWebp)) fs.unlinkSync(outputWebp)
     throw err
