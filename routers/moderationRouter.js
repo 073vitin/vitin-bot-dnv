@@ -421,11 +421,11 @@ async function handleModerationCommands(ctx) {
     }
 
     // Extract punishment type from arguments (M for mute, B for ban), default to M.
-    let punishmentType = "mute"
+    let punishmentTypeArg = "mute"
     const voteTokens = String(text || "").trim().split(/\s+/).filter(Boolean)
     const punishmentTokenIndex = targetResolution.source === "mention" ? 2 : 1
     const punishmentArg = String(voteTokens[punishmentTokenIndex] || cmdArg2 || "").toUpperCase()
-    if (punishmentArg === "B") punishmentType = "ban"
+    if (punishmentArg === "B") punishmentTypeArg = "ban"
 
     const now = Date.now()
     const threshold = storage.getGroupVoteThreshold(from)
@@ -446,7 +446,7 @@ async function handleModerationCommands(ctx) {
         createdAt: now,
         expiresAt: now + VOTE_SESSION_TTL_MS,
         createdBy: sender,
-        punishmentType,
+        punishmentType: punishmentTypeArg,
         votesBy: {},
       }
       sessions[target] = session
@@ -472,7 +472,7 @@ async function handleModerationCommands(ctx) {
         text: `🗳️ Voto registrado para ${formatMentionTag(target)}: *${totalVotes}/${threshold}*`,
         mentions: normalizeMentionArray([target]),
       })
-      trackModeration("vote", "success", { target, totalVotes, threshold, resolved: false, punishmentType })
+      trackModeration("vote", "success", { target, totalVotes, threshold, resolved: false, punishmentType: session.punishmentType })
       return true
     }
 
@@ -480,7 +480,7 @@ async function handleModerationCommands(ctx) {
     delete sessions[target]
     storage.setGroupVoteSessions(from, sessions)
 
-    if (punishmentType === "mute") {
+    if (session.punishmentType === "mute") {
       // Apply mute using the same mechanism as !mute command
       const mutedUsers = storage.getMutedUsers()
       if (!mutedUsers[from]) mutedUsers[from] = {}
@@ -494,7 +494,7 @@ async function handleModerationCommands(ctx) {
       return true
     }
 
-    // punishmentType === "ban"
+    // session.punishmentType === "ban"
     try {
       await sock.groupParticipantsUpdate(from, [target], "remove")
       await sock.sendMessage(from, {
@@ -579,6 +579,16 @@ async function handleModerationCommands(ctx) {
       return true
     }
     const alvo = targetResolution.target
+    
+    // Double-check to prevent self-ban
+    const targetNormalized = String(jidNormalizedUser(alvo || "") || "").trim().toLowerCase().split(":")[0]
+    const botNormalized = String(botJid || "").trim().toLowerCase().split(":")[0]
+    if (targetNormalized && botNormalized && targetNormalized === botNormalized) {
+      trackModeration("ban", "rejected", { reason: "self-ban-attempt" })
+      await sock.sendMessage(from, { text: "🤖 Não posso me banir!" })
+      return true
+    }
+    
     if (isProtectedOverrideJid(alvo)) {
       trackModeration("ban", "rejected", { reason: "target-override" })
       await sock.sendMessage(from, { text: "Esse usuário não pode ser banido." })

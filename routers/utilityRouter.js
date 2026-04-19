@@ -3,6 +3,9 @@ const { getCommandHelp, getPublicCommandNames } = require("../commandHelp")
 const fs = require("fs")
 const os = require("os")
 const child_process = require("child_process")
+const ffmpeg = require("fluent-ffmpeg")
+const ffmpegPath = require("ffmpeg-static")
+ffmpeg.setFfmpegPath(ffmpegPath)
 const { normalizeUserId } = require("../services/registrationService")
 const {
   normalizeMentionJid,
