@@ -86,6 +86,7 @@ const adivinhacao = require("./games/adivinhacao")
 const batataquente = require("./games/batataquente")
 const dueloDados = require("./games/dueloDados")
 const roletaRussa = require("./games/roletaRussa")
+const handleDamas = require("./games/damas")
 const economyService = require("./services/economyService")
 const registrationService = require("./services/registrationService")
 const {
@@ -3000,7 +3001,31 @@ setTimeout(() => {
       })
       return
     }
+        
+if (cmd === prefix + "damas") {
+  try {
+    await sock.sendMessage(from, {
+      react: { text: "♟️", key: msg.key }
+    })
 
+    const args = body.trim().split(/ +/).slice(1)
+
+    return await handleDamas({
+      sock,
+      msg,
+      from,
+      sender,
+      args
+    })
+
+  } catch (err) {
+    console.error("Erro no damas:", err)
+
+    await sock.sendMessage(from, {
+      text: "❌ Erro ao executar o jogo de damas."
+    })
+  }
+}
     if (cmdName === ECONOMY_WIPE_COMMAND || cmdName === ECONOMY_WIPE_COMMAND_ALIAS) {
       if (isGroup) {
         await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
