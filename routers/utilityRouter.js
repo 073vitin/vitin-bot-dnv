@@ -16,10 +16,10 @@ const {
   resolveSingleTargetFromMentionOrReply,
 } = require("../services/mentionService")
 const {
-  getSubmenuIfKnown,
   getBlockedCommandsList,
   toggleCommandBlock,
-  isValidCommandOrSubmenu,
+  normalizeCommand,
+  isValidCommand,
 } = require("../services/blockCommandService")
 
 const pendingPrivateFeedbackBySender = new Map()
@@ -2749,32 +2749,20 @@ if (cmd === prefix + "transmutar") {
 
     if (blocked.total === 0) {
       await sock.sendMessage(from, {
-        text: `✅ Nenhum comando ou submenu está bloqueado neste grupo.`,
+        text: `✅ Nenhum comando está bloqueado neste grupo.`,
       })
       trackUtility("listblockcmd", "success", { blockedCount: 0 })
       return true
     }
 
-    const lines = ["🚫 *Comandos e Submenus Bloqueados*:\n"]
+    const lines = ["🚫 *Comandos Bloqueados*:\n"]
 
-    if (blocked.submenus.length > 0) {
-      lines.push("📌 *Submenus:*")
-      for (const submenu of blocked.submenus) {
-        lines.push(`- ${submenu.displayName} (${submenu.commandCount} comandos)`)
-      }
-      lines.push("")
+    for (const cmd of blocked.commands) {
+      lines.push(`- ${cmd.displayName}`)
     }
 
-    if (blocked.commands.length > 0) {
-      lines.push("📌 *Comandos:*")
-      for (const cmd of blocked.commands) {
-        lines.push(`- ${cmd.displayName}`)
-      }
-      lines.push("")
-    }
-
-    lines.push(`Total: ${blocked.total} item(ns) bloqueado(s)`)
-    lines.push(`\nUse ${prefix}blockcmd <comando|submenu> para alternar o bloqueio.`)
+    lines.push(`\nTotal: ${blocked.total} comando(s) bloqueado(s)`)
+    lines.push(`\nUse ${prefix}blockcmd <cmd1> <cmd2> ... para alternar o bloqueio.`)
 
     await sock.sendMessage(from, { text: lines.join("\n") })
     trackUtility("listblockcmd", "success", { blockedCount: blocked.total })
@@ -2799,64 +2787,99 @@ if (cmd === prefix + "transmutar") {
     const cmdTokens = cmd.split(/\s+/).filter(Boolean)
     if (cmdTokens.length < 2) {
       await sock.sendMessage(from, {
-        text: `Use: ${prefix}blockcmd <economia|jogos|moderacao|comando>\n\nExemplos:\n- ${prefix}blockcmd economia\n- ${prefix}blockcmd perfil\n- ${prefix}blockcmd jogos`,
+        text: `Use: ${prefix}blockcmd <cmd1> [cmd2] [cmd3] ...\n\nExemplos:\n- ${prefix}blockcmd perfil\n- ${prefix}blockcmd perfil xp economia\n- ${prefix}blockcmd blackjack cassino`,
       })
       trackUtility("blockcmd", "rejected", { reason: "missing-argument" })
       return true
     }
 
-    const targetArg = String(cmdTokens[1] || "").trim().toLowerCase()
+    // Processar todos os comandos passados
+    const results = []
+    const commandsToProcess = cmdTokens.slice(1) // Remove o primeiro token que é "blockcmd"
 
-    // Validar o argumento
-    if (!isValidCommandOrSubmenu(targetArg)) {
-      const suggestion = `"${targetArg}" não é um comando ou submenu válido.`
-      const submenus = "economia, jogos, moderacao"
-      await sock.sendMessage(from, {
-        text: `❌ ${suggestion}\n\nSubmenus disponíveis: ${submenus}\n\nOu use um nome de comando válido.`,
-      })
-      trackUtility("blockcmd", "rejected", { reason: "invalid-target", target: targetArg })
-      return true
-    }
-
-    // Executar o toggle
-    const toggleResult = toggleCommandBlock(storage, from, targetArg, prefix)
-
-    if (!toggleResult.ok) {
-      if (toggleResult.reason === "cannot-block-blockcmd") {
-        await sock.sendMessage(from, {
-          text: `❌ O comando ${prefix}blockcmd não pode ser bloqueado a si mesmo!`,
+    for (const targetArg of commandsToProcess) {
+      const normalizedCmd = normalizeCommand(targetArg, prefix)
+      
+      // Validar o comando
+      if (!isValidCommand(normalizedCmd)) {
+        results.push({
+          command: targetArg,
+          ok: false,
+          reason: "invalid",
         })
-        trackUtility("blockcmd", "rejected", { reason: "cannot-block-self", target: targetArg })
-        return true
+        continue
       }
 
-      await sock.sendMessage(from, {
-        text: `❌ Erro ao processar bloqueio de "${targetArg}".`,
-      })
-      trackUtility("blockcmd", "error", { reason: toggleResult.reason, target: targetArg })
-      return true
+      // Executar o toggle
+      const toggleResult = toggleCommandBlock(storage, from, normalizedCmd, prefix)
+
+      if (!toggleResult.ok) {
+        if (toggleResult.reason === "cannot-block-blockcmd") {
+          results.push({
+            command: targetArg,
+            ok: false,
+            reason: "cannot-block-self",
+          })
+        } else {
+          results.push({
+            command: targetArg,
+            ok: false,
+            reason: toggleResult.reason,
+          })
+        }
+      } else {
+        results.push({
+          command: normalizedCmd,
+          ok: true,
+          blocked: toggleResult.blocked,
+        })
+      }
     }
 
     // Preparar resposta
-    const action = toggleResult.blocked ? "🚫 BLOQUEADO" : "✅ DESBLOQUEADO"
-    let message = ""
+    const lines = []
+    const successfulBlocks = results.filter(r => r.ok && r.blocked)
+    const successfulUnblocks = results.filter(r => r.ok && !r.blocked)
+    const failures = results.filter(r => !r.ok)
 
-    if (toggleResult.isSubmenu) {
-      const submenuDisplay = targetArg.charAt(0).toUpperCase() + targetArg.slice(1)
-      message = `${action}\n\nSubmenu: *${submenuDisplay}*\nTodos os comandos deste submenu foram ${toggleResult.blocked ? "bloqueados" : "desbloqueados"}.`
-    } else {
-      message = `${action}\n\nComando: *${prefix}${targetArg}*`
+    if (successfulBlocks.length > 0) {
+      lines.push("🚫 *Bloqueados:*")
+      for (const result of successfulBlocks) {
+        lines.push(`- ${prefix}${result.command}`)
+      }
     }
 
-    message += `\n\nComandos/submenus bloqueados no grupo: ${toggleResult.totalBlocked || 0}`
+    if (successfulUnblocks.length > 0) {
+      lines.push("✅ *Desbloqueados:*")
+      for (const result of successfulUnblocks) {
+        lines.push(`- ${prefix}${result.command}`)
+      }
+    }
 
-    await sock.sendMessage(from, { text: message })
+    if (failures.length > 0) {
+      lines.push("⚠️ *Erros:*")
+      for (const result of failures) {
+        if (result.reason === "invalid") {
+          lines.push(`- "${result.command}" não é um comando válido`)
+        } else if (result.reason === "cannot-block-self") {
+          lines.push(`- ${prefix}${result.command} não pode ser bloqueado a si mesmo`)
+        } else {
+          lines.push(`- Erro ao processar ${prefix}${result.command}`)
+        }
+      }
+    }
+
+    if (lines.length === 0) {
+      lines.push("❌ Nenhum comando foi processado corretamente.")
+    }
+
+    await sock.sendMessage(from, { text: lines.join("\n") })
 
     trackUtility("blockcmd", "success", {
-      target: targetArg,
-      isSubmenu: toggleResult.isSubmenu,
-      action: toggleResult.blocked ? "block" : "unblock",
-      totalBlocked: toggleResult.totalBlocked || 0,
+      successful: results.filter(r => r.ok).length,
+      blocked: successfulBlocks.length,
+      unblocked: successfulUnblocks.length,
+      failed: failures.length,
     })
     return true
   }
