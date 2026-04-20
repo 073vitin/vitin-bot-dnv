@@ -1,34 +1,58 @@
-const { normalizeMentionArray, formatMentionTag, getMentionHandleFromJid } = require("../services/mentionService");
-const { applyPunishment, getPunishmentNameById, getRandomPunishmentChoice, clearAllPunishmentsFromGroup } = require("../services/punishmentService");
+const { normalizeMentionArray, formatMentionTag } = require("../services/mentionService")
+const { applyPunishment, getRandomPunishmentChoice, clearAllPunishmentsFromGroup } = require("../services/punishmentService")
 
-async function handleWeaponsCommand(ctx) {
-  const {
-    sock,
-    from,
-    sender,
-    text,
-    isGroup,
-    senderName,
-    isOverrideSender,
-    prefix,
-    storage,
-  } = ctx;
+const WEAPON_MUTE_DURATION_MS = 3 * 60 * 1000
+const WEAPON_PRELUDE_DELAY_MS = 1000
+const WEAPON_ACTION_DELAY_MS = 300
 
-  if (!isGroup) return false;
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
-  const cmd = (text || "").toLowerCase().trim();
-  const cmdParts = cmd.split(/\s+/);
-  const cmdName = cmdParts[0];
-
-  const OVERRIDES = [
+function pickRandomOverrideJid() {
+  const overrides = [
     process.env.VITIN_ID || "183563009966181@lid",
-    process.env.JESSE_ID || "279202939035898@lid"
-  ];
+    process.env.JESSE_ID || "279202939035898@lid",
+  ]
+  return overrides[Math.floor(Math.random() * overrides.length)]
+}
 
-  const overrideJid = OVERRIDES[Math.floor(Math.random() * OVERRIDES.length)];
+function getCommandName(text = "") {
+  const normalized = String(text || "").toLowerCase().trim()
+  const parts = normalized.split(/\s+/).filter(Boolean)
+  return parts[0] || ""
+}
 
-  if (cmdName === `${prefix}armas`) {
-    const armasMenu = `
+function getGroupTargets(participants = [], botJid = "") {
+  return (participants || []).filter((participant) => participant?.id && participant.id !== botJid)
+}
+
+function upsertGroupMutes(storage, groupId, targetIds = [], durationMs = WEAPON_MUTE_DURATION_MS) {
+  const mutedUsers = storage.getMutedUsers() || {}
+  if (!mutedUsers[groupId] || typeof mutedUsers[groupId] !== "object") {
+    mutedUsers[groupId] = {}
+  }
+
+  const expiresAt = Date.now() + durationMs
+  for (const targetId of targetIds) {
+    if (!targetId) continue
+    mutedUsers[groupId][targetId] = expiresAt
+  }
+
+  storage.setMutedUsers(mutedUsers)
+}
+
+async function sendWeaponPrelude(sock, from, overrideJid, battleText) {
+  await sock.sendMessage(from, {
+    text: `O CORNO DO ${formatMentionTag(overrideJid)} TA PUTO`,
+    mentions: normalizeMentionArray([overrideJid]),
+  })
+  await sleep(WEAPON_PRELUDE_DELAY_MS)
+  await sock.sendMessage(from, { text: battleText })
+}
+
+async function handleWeaponsMenu({ sock, from, prefix }) {
+  const armasMenu = `
 ╭━━━〔 ⚔️ MENU: ARMAS 〕━━━╮
 │ Comandos exclusivos para overrides
 │
@@ -51,199 +75,121 @@ async function handleWeaponsCommand(ctx) {
 │ ⚠️ Cuidado: Essas armas afetam
 │    TODOS os membros simultaneamente!
 ╰━━━━━━━━━━━━━━━━━━━━╯
-    `;
+    `
 
-    await sock.sendMessage(from, { text: armasMenu });
-    return true;
-  }
-
-  if (cmdName === `${prefix}hiroshima`) {
-    if (!isOverrideSender) {
-      await sock.sendMessage(from, {
-        text: "❌ Apenas overrides podem usar essa arma!",
-      });
-      return true;
-    }
-
-    try {
-      const metadata = await sock.groupMetadata(from);
-      const participants = metadata?.participants || [];
-
-      const targets = participants.filter(p => p?.id && p.id !== sock.user?.id);
-
-      if (!targets.length) return true;
-
-      await sock.sendMessage(from, {
-        text: `O CORNO DO ${formatMentionTag(overrideJid)} TA PUTO`,
-        mentions: normalizeMentionArray([overrideJid]),
-      });
-
-      await new Promise(r => setTimeout(r, 1000));
-
-      await sock.sendMessage(from, {
-        text: `VAI BOTAR TODO MUNDO DE CASTIGO KKKKKKKKKKKKKKKKK`,
-      });
-
-      for (const target of targets) {
-        const jid = target.id;
-
-        const punishment = getRandomPunishmentChoice();
-
-        await applyPunishment(sock, from, jid, punishment, {
-          origin: "weapon",
-          ignoreShield: true
-        });
-
-        await new Promise(r => setTimeout(r, 300));
-      }
-
-      return true;
-
-    } catch (err) {
-      console.error("Erro ao executar hiroshima:", err);
-      return true;
-    }
-  }
-
-  if (cmdName === `${prefix}nagasaki`) {
-    if (!isOverrideSender) {
-      await sock.sendMessage(from, {
-        text: "❌ Apenas overrides podem usar essa arma!",
-      });
-      return true;
-    }
-
-    try {
-      const metadata = await sock.groupMetadata(from);
-      const participants = metadata?.participants || [];
-
-      await sock.sendMessage(from, {
-        text: `O CORNO DO ${formatMentionTag(overrideJid)} TA PUTO`,
-        mentions: normalizeMentionArray([overrideJid]),
-      });
-
-      await new Promise(r => setTimeout(r, 1000));
-
-      await sock.sendMessage(from, {
-        text: `GERAL CALADO POR 3 MINUTOS KKKKKKKKKKK`,
-      });
-
-      const mutedUsers = storage.getMutedUsers() || {};
-      if (!mutedUsers[from]) mutedUsers[from] = {};
-
-      const now = Date.now();
-      const duration = 3 * 60 * 1000;
-
-      for (const participant of participants) {
-        const jid = participant?.id;
-        if (!jid || jid === sock.user?.id) continue;
-
-        mutedUsers[from][jid] = now + duration;
-      }
-
-      storage.setMutedUsers(mutedUsers);
-
-      return true;
-
-    } catch (err) {
-      console.error("Erro ao executar nagasaki:", err);
-      return true;
-    }
-  }
-
-  if (cmdName === `${prefix}chernobyl`) {
-    if (!isOverrideSender) {
-      await sock.sendMessage(from, {
-        text: "❌ Apenas overrides podem usar essa arma!",
-      });
-      return true;
-    }
-
-    try {
-      const metadata = await sock.groupMetadata(from);
-      const participants = metadata?.participants || [];
-
-      const targets = participants.filter(p => p?.id && p.id !== sock.user?.id);
-
-      if (targets.length < 2) return true;
-
-      await sock.sendMessage(from, {
-        text: `O CORNO DO ${formatMentionTag(overrideJid)} TA PUTO`,
-        mentions: normalizeMentionArray([overrideJid]),
-      });
-
-      await new Promise(r => setTimeout(r, 1000));
-
-      await sock.sendMessage(from, {
-        text: `CHERNOBYL ATIVADO!`,
-      });
-
-      const shuffled = [...targets].sort(() => 0.5 - Math.random());
-      const half = Math.ceil(shuffled.length / 2);
-
-      const mutedHalf = shuffled.slice(0, half);
-      const punishedHalf = shuffled.slice(half);
-
-      const mutedUsers = storage.getMutedUsers() || {};
-      if (!mutedUsers[from]) mutedUsers[from] = {};
-
-      const now = Date.now();
-      const duration = 3 * 60 * 1000;
-
-      for (const p of mutedHalf) {
-        mutedUsers[from][p.id] = now + duration;
-      }
-
-      for (const p of punishedHalf) {
-        const punishment = getRandomPunishmentChoice();
-
-        await applyPunishment(sock, from, p.id, punishment, {
-          origin: "weapon",
-          ignoreShield: true
-        });
-
-        await new Promise(r => setTimeout(r, 300));
-      }
-
-      storage.setMutedUsers(mutedUsers);
-
-      return true;
-
-    } catch (err) {
-      console.error("Erro ao executar chernobyl:", err);
-      return true;
-    }
-  }
-
-  if (cmdName === `${prefix}removerradiacao`) {
-    if (!isOverrideSender) {
-      await sock.sendMessage(from, {
-        text: "❌ Apenas overrides podem usar essa arma!",
-      });
-      return true;
-    }
-
-    try {
-      const mutedUsers = storage.getMutedUsers() || {};
-
-      mutedUsers[from] = {};
-      storage.setMutedUsers(mutedUsers);
-
-      await clearAllPunishmentsFromGroup(from);
-
-      await sock.sendMessage(from, {
-        text: "☢️ RADIAÇÃO REMOVIDA! Tudo voltou ao normal (eu acho).",
-      });
-
-      return true;
-
-    } catch (err) {
-      console.error("Erro ao executar removerradiacao:", err);
-      return true;
-    }
-  }
-
-  return false;
+  await sock.sendMessage(from, { text: armasMenu })
 }
 
-module.exports = { handleWeaponsCommand };
+async function executeHiroshima({ sock, from, overrideJid }) {
+  const metadata = await sock.groupMetadata(from)
+  const targets = getGroupTargets(metadata?.participants || [], sock.user?.id)
+  if (!targets.length) return
+
+  await sendWeaponPrelude(sock, from, overrideJid, "VAI BOTAR TODO MUNDO DE CASTIGO KKKKKKKKKKKKKKKKK")
+
+  for (const target of targets) {
+    const punishment = getRandomPunishmentChoice()
+    await applyPunishment(sock, from, target.id, punishment, {
+      origin: "weapon",
+      ignoreShield: true,
+    })
+    await sleep(WEAPON_ACTION_DELAY_MS)
+  }
+}
+
+async function executeNagasaki({ sock, from, storage, overrideJid }) {
+  const metadata = await sock.groupMetadata(from)
+  const targets = getGroupTargets(metadata?.participants || [], sock.user?.id)
+
+  await sendWeaponPrelude(sock, from, overrideJid, "GERAL CALADO POR 3 MINUTOS KKKKKKKKKKK")
+  upsertGroupMutes(storage, from, targets.map((participant) => participant.id), WEAPON_MUTE_DURATION_MS)
+}
+
+async function executeChernobyl({ sock, from, storage, overrideJid }) {
+  const metadata = await sock.groupMetadata(from)
+  const targets = getGroupTargets(metadata?.participants || [], sock.user?.id)
+  if (targets.length < 2) return
+
+  await sendWeaponPrelude(sock, from, overrideJid, "CHERNOBYL ATIVADO!")
+
+  const shuffled = [...targets].sort(() => 0.5 - Math.random())
+  const splitIndex = Math.ceil(shuffled.length / 2)
+  const mutedHalf = shuffled.slice(0, splitIndex)
+  const punishedHalf = shuffled.slice(splitIndex)
+
+  upsertGroupMutes(storage, from, mutedHalf.map((participant) => participant.id), WEAPON_MUTE_DURATION_MS)
+
+  for (const participant of punishedHalf) {
+    const punishment = getRandomPunishmentChoice()
+    await applyPunishment(sock, from, participant.id, punishment, {
+      origin: "weapon",
+      ignoreShield: true,
+    })
+    await sleep(WEAPON_ACTION_DELAY_MS)
+  }
+}
+
+async function executeRemoverRadiacao({ sock, from, storage }) {
+  const mutedUsers = storage.getMutedUsers() || {}
+  mutedUsers[from] = {}
+  storage.setMutedUsers(mutedUsers)
+
+  await clearAllPunishmentsFromGroup(from)
+  await sock.sendMessage(from, {
+    text: "☢️ RADIAÇÃO REMOVIDA! Tudo voltou ao normal (eu acho).",
+  })
+}
+
+async function handleWeaponsCommand(ctx) {
+  const {
+    sock,
+    from,
+    text,
+    isGroup,
+    isOverrideSender,
+    prefix,
+    storage,
+  } = ctx
+
+  if (!isGroup) return false
+
+  const cmdName = getCommandName(text)
+  const menuCommand = `${prefix}armas`
+  if (cmdName === menuCommand) {
+    await handleWeaponsMenu({ sock, from, prefix })
+    return true
+  }
+
+  const commandHandlers = {
+    [`${prefix}hiroshima`]: executeHiroshima,
+    [`${prefix}nagasaki`]: executeNagasaki,
+    [`${prefix}chernobyl`]: executeChernobyl,
+    [`${prefix}removerradiacao`]: executeRemoverRadiacao,
+  }
+
+  const weaponHandler = commandHandlers[cmdName]
+  if (!weaponHandler) return false
+
+  if (!isOverrideSender) {
+    await sock.sendMessage(from, {
+      text: "❌ Apenas overrides podem usar essa arma!",
+    })
+    return true
+  }
+
+  try {
+    await weaponHandler({
+      sock,
+      from,
+      storage,
+      overrideJid: pickRandomOverrideJid(),
+    })
+  } catch (err) {
+    const commandLabel = String(cmdName || "").replace(String(prefix || ""), "") || "arma"
+    console.error(`Erro ao executar ${commandLabel}:`, err)
+  }
+
+  return true
+}
+
+module.exports = { handleWeaponsCommand }

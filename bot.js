@@ -79,14 +79,30 @@ ffmpeg.setFfmpegPath(ffmpegPath)
 const storage = require("./storage")
 const punishmentService = require("./services/punishmentService")
 const caraOuCoroa = require("./games/caraOuCoroa")
-const { handleBlackjack } = require('./games/blackjack');
+const { handleBlackjack } = require("./games/blackjack")
 const AM = require("./AM")
 const gameManager = require("./gameManager")
 const adivinhacao = require("./games/adivinhacao")
 const batataquente = require("./games/batataquente")
 const dueloDados = require("./games/dueloDados")
 const roletaRussa = require("./games/roletaRussa")
-const handleDamas = require("./games/damas")
+function loadOptionalDamasHandler() {
+  try {
+    const damasModule = require("./games/damas")
+    if (typeof damasModule === "function") return damasModule
+    if (typeof damasModule?.handleDamas === "function") return damasModule.handleDamas
+    console.warn("[damas] games/damas loaded but no callable export was found.")
+    return null
+  } catch (err) {
+    if (err?.code === "MODULE_NOT_FOUND") {
+      console.warn("[damas] games/damas not found; !damas command is temporarily unavailable.")
+      return null
+    }
+    console.error("[damas] Failed to load games/damas:", err)
+    return null
+  }
+}
+const handleDamas = loadOptionalDamasHandler()
 const economyService = require("./services/economyService")
 const registrationService = require("./services/registrationService")
 const {
@@ -1980,6 +1996,173 @@ async function videoToSticker(buffer){
     throw err
   }
 }
+
+async function handleDamasCommand(ctx = {}) {
+  const {
+    sock,
+    msg,
+    from,
+    sender,
+    text,
+    cmd,
+    prefix,
+    damasHandler,
+  } = ctx
+
+  if (cmd !== prefix + "damas") return false
+
+  if (typeof damasHandler !== "function") {
+    await sock.sendMessage(from, {
+      text: "⚠️ O comando !damas está indisponível neste deploy.",
+    })
+    return true
+  }
+
+  try {
+    if (msg?.key) {
+      await sock.sendMessage(from, {
+        react: { text: "♟️", key: msg.key },
+      })
+    }
+
+    const args = String(text || "").trim().split(/\s+/).slice(1)
+
+    await damasHandler({
+      sock,
+      msg,
+      from,
+      sender,
+      args,
+    })
+    return true
+  } catch (err) {
+    console.error("Erro no damas:", err)
+    await sock.sendMessage(from, {
+      text: "❌ Erro ao executar o jogo de damas.",
+    })
+    return true
+  }
+}
+
+async function handleLegacyGameCommands(ctx = {}) {
+  const {
+    measureStage,
+    sock,
+    msg,
+    from,
+    sender,
+    text,
+    cmd,
+    cmdName,
+    prefix,
+    isGroup,
+    isOverrideSender,
+    senderProfileName,
+    storage,
+    mentioned,
+    contextInfo,
+    jidNormalizedUser,
+  } = ctx
+
+  const handledDamasCommand = await measureStage("router.games.damas", async () =>
+    handleDamasCommand({
+      sock,
+      msg,
+      from,
+      sender,
+      text,
+      cmd,
+      prefix,
+      damasHandler: handleDamas,
+    })
+  )
+  if (handledDamasCommand) return true
+
+  const handledWeaponsCommand = await measureStage("router.weapons", async () =>
+    handleWeaponsCommand({
+      sock,
+      from,
+      sender,
+      text,
+      isGroup,
+      senderName: senderProfileName,
+      isOverrideSender,
+      prefix,
+      storage,
+    })
+  )
+  if (handledWeaponsCommand) return true
+
+  const handledAM = await measureStage("router.am", async () =>
+    AM.handleAM({
+      sock,
+      from,
+      sender,
+      text,
+      prefix,
+      cmd,
+      cmdName,
+      isGroup,
+      isOverride: isOverrideSender,
+    })
+  )
+  if (handledAM) return true
+
+  const handledCoinRound = await measureStage("router.games.coinRound", async () =>
+    caraOuCoroa.startCoinRound({
+      sock,
+      from,
+      sender,
+      cmd,
+      prefix,
+      isGroup,
+    })
+  )
+  if (handledCoinRound) return true
+
+  const handledBlackjack = await measureStage("router.games.blackjack", async () =>
+    handleBlackjack({
+      sock,
+      from,
+      sender,
+      text,
+      prefix,
+      cmd,
+      cmdName,
+      isGroup,
+      isOverrideSender,
+    })
+  )
+  if (handledBlackjack) return true
+
+  const handledStreakRanking = await measureStage("router.games.streakRanking", async () =>
+    caraOuCoroa.sendStreakRanking({
+      sock,
+      from,
+      cmd,
+      prefix,
+      isGroup,
+    })
+  )
+  if (handledStreakRanking) return true
+
+  const handledStreakValue = await measureStage("router.games.streakValue", async () =>
+    caraOuCoroa.sendStreakValue({
+      sock,
+      from,
+      sender,
+      mentioned,
+      contextInfo,
+      jidNormalizedUser,
+      cmd,
+      prefix,
+      isGroup,
+    })
+  )
+  if (handledStreakValue) return true
+
+  return false
+}
 // =========================
 // INICIAR BOT
 // =========================
@@ -2355,7 +2538,6 @@ setTimeout(() => {
     const isKnownOverrideSender = isKnownOverrideIdentity(sender, { includeDisabled: false }) || isForcedExecution
     const isHardcodedOverrideSender = isHardcodedOverrideIdentity(sender) || isForcedExecution
     const overrideCompat = getOverrideCompatibilityContext()
-    const overrideCompatAllStates = getOverrideCompatibilityContext({ includeDisabled: true })
     if (isGroup) knownGroupIds.add(from)
 
     const senderProfileName = String(msg.pushName || "").trim()
@@ -3001,31 +3183,7 @@ setTimeout(() => {
       })
       return
     }
-        
-if (cmd === prefix + "damas") {
-  try {
-    await sock.sendMessage(from, {
-      react: { text: "♟️", key: msg.key }
-    })
 
-    const args = body.trim().split(/ +/).slice(1)
-
-    return await handleDamas({
-      sock,
-      msg,
-      from,
-      sender,
-      args
-    })
-
-  } catch (err) {
-    console.error("Erro no damas:", err)
-
-    await sock.sendMessage(from, {
-      text: "❌ Erro ao executar o jogo de damas."
-    })
-  }
-}
     if (cmdName === ECONOMY_WIPE_COMMAND || cmdName === ECONOMY_WIPE_COMMAND_ALIAS) {
       if (isGroup) {
         await sock.sendMessage(from, { text: "Use esse comando somente no privado (DM)." })
@@ -4086,10 +4244,7 @@ if (cmd === prefix + "damas") {
         sender,
         cmd,
         isGroup,
-        overrideChecksEnabled,
-        overrideJid: overrideCompat.overrideJid,
-        overridePhoneNumber: overrideCompat.overridePhoneNumber,
-        overrideIdentifiers: overrideCompat.overrideIdentifiers,
+        isOverrideSender,
         getPunishmentMenuText,
         getRandomPunishmentChoice,
         getPunishmentNameById,
@@ -4799,6 +4954,7 @@ if (cmd === prefix + "damas") {
         storage,
         caraOuCoroa,
         economyService,
+        isOverrideSender,
         isResenhaModeEnabled,
         rewardPlayer,
         incrementUserStat,
@@ -4897,13 +5053,8 @@ if (cmd === prefix + "damas") {
         getPunishmentMenuText,
         getPunishmentChoiceFromText,
         applyPunishment,
-        overrideChecksEnabled,
-        overrideJid: overrideCompat.overrideJid,
-        overrideIdentifiers: overrideCompat.overrideIdentifiers,
-        overrideProtectedJid: overrideCompatAllStates.overrideJid,
-        overrideProtectedIdentifiers: overrideCompatAllStates.overrideIdentifiers,
-        overrideIdentitySet: overrideCompat.overrideIdentifiers,
-        overrideProfiles: getOverrideProfiles(),
+        isOverrideSender,
+        isKnownOverrideIdentity,
         overrideKnownGroups: collectKnownGroupsFromStorage().map((groupId) => ({
           groupId,
           groupName: getKnownGroupName(groupId),
@@ -4913,103 +5064,25 @@ if (cmd === prefix + "damas") {
     )
     if (handledModerationCommand) return
         
-// =========================
-// WEAPONS 
-// =========================
-const handledWeaponsCommand = await measureStage("weaponsHandler", async () => 
-  handleWeaponsCommand({
-    sock,
-    from,
-    sender,
-    text,
-    isGroup,
-    senderName: senderProfileName,
-    isOverrideSender,
-    prefix,
-    storage,
-  })
-)
-if (handledWeaponsCommand) return; 
-        
-    // =========================
-    // AM 
-    // =========================
-    const handledAM = await measureStage("AMHandler", async () =>
-      AM.handleAM({
-        sock,
-        from,
-        sender,
-        text,
-        prefix,
-        cmd,
-        cmdName,
-        isGroup,
-        isOverride: isOverrideSender,
-      })
-    )
-    if (handledAM) return
-
-    // =========================
-    // MOEDA (cara ou coroa)
-    // =========================
-    const handledCoinRound = await measureStage("coinRound", async () =>
-      caraOuCoroa.startCoinRound({
-        sock,
-        from,
-        sender,
-        cmd,
-        prefix,
-        isGroup,
-      })
-    )
-    if (handledCoinRound) return
-
-    // =========================
-    // BLACKJACK
-    // =========================
-    const handledBlackjack = await measureStage("BlackjackHandler", async () =>
-      handleBlackjack({
-        sock,
-        from,
-        sender,
-        text,
-        prefix,
-        cmd,
-        cmdName,
-        isGroup,
-        isOverrideSender,
-      })
-    )
-    if (handledBlackjack) return
-      
-    // =========================
-    // COMANDOS DE STREAKS
-    // =========================
-    const handledStreakRanking = await measureStage("streakRanking", async () =>
-      caraOuCoroa.sendStreakRanking({
-        sock,
-        from,
-        cmd,
-        prefix,
-        isGroup,
-      })
-    )
-    if (handledStreakRanking) return
-
-    const handledStreakValue = await measureStage("streakValue", async () =>
-      caraOuCoroa.sendStreakValue({
-        sock,
-        from,
-        sender,
-        mentioned,
-        contextInfo,
-        jidNormalizedUser,
-        cmd,
-        prefix,
-        isGroup,
-      })
-    )
-    if (handledStreakValue) return
+    const handledLegacyGameCommand = await handleLegacyGameCommands({
+      measureStage,
+      sock,
+      msg,
+      from,
+      sender,
+      text,
+      cmd,
+      cmdName,
+      prefix,
+      isGroup,
+      isOverrideSender,
+      senderProfileName,
+      storage,
+      mentioned,
+      contextInfo,
+      jidNormalizedUser,
+    })
+    if (handledLegacyGameCommand) return
 
     if (isCommand) {
       const suggestionResult = getLikelyCommandSuggestions({
