@@ -5,12 +5,6 @@ const {
   resolveSingleTargetFromMentionOrReply,
 } = require("./services/mentionService")
 // =========================
-// DONOS
-// =========================
-const VITIN = process.env.VITIN_ID || "183563009966181@lid"
-const JESSE = process.env.JESSE_ID || "279202939035898@lid"
-
-// =========================
 // CONTROLE
 // =========================
 let AM_ATIVO = false
@@ -2056,11 +2050,7 @@ async function handleAM(ctx) {
     messageTimestamp
   } = ctx
 
-  // VERIFICAÇÃO DE DONOS (VITIN E JESSE)
-  const VITIN = process.env.VITIN_ID || "183563009966181@lid"
-  const JESSE = process.env.JESSE_ID || "279202939035898@lid"
-  const ehDono = sender === VITIN || sender === JESSE
-  const override = isOverride || ehDono
+  const override = Boolean(isOverride)
 
   try {
     registrarMensagem(from, sender)

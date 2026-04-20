@@ -4889,9 +4889,7 @@ test("moderation router applies !punicoesadd severity right after punishment num
     applyPunishment: async (_sock, _from, userId, punishmentId, options) => {
       applied.push({ userId, punishmentId, options })
     },
-    overrideChecksEnabled: false,
-    overrideJid: "",
-    overrideIdentifiers: [],
+    isOverrideSender: false,
   })
 
   assert.equal(handled, true)
@@ -4931,9 +4929,7 @@ test("moderation router blocks user globally with !block", async () => {
     getPunishmentMenuText: () => "MENU",
     getPunishmentChoiceFromText: () => null,
     applyPunishment: async () => {},
-    overrideChecksEnabled: true,
-    overrideJid: "override@s.whatsapp.net",
-    overrideIdentifiers: ["override@s.whatsapp.net"],
+    isOverrideSender: true,
   })
 
   assert.equal(handled, true)
@@ -4973,9 +4969,7 @@ test("moderation router rejects !block for non-override sender", async () => {
     getPunishmentMenuText: () => "MENU",
     getPunishmentChoiceFromText: () => null,
     applyPunishment: async () => {},
-    overrideChecksEnabled: true,
-    overrideJid: "override@s.whatsapp.net",
-    overrideIdentifiers: ["override@s.whatsapp.net"],
+    isOverrideSender: false,
   })
 
   assert.equal(handled, true)
@@ -5013,9 +5007,7 @@ test("moderation router unblocks user globally with !unblock", async () => {
     getPunishmentMenuText: () => "MENU",
     getPunishmentChoiceFromText: () => null,
     applyPunishment: async () => {},
-    overrideChecksEnabled: true,
-    overrideJid: "override@s.whatsapp.net",
-    overrideIdentifiers: ["override@s.whatsapp.net"],
+    isOverrideSender: true,
   })
 
   assert.equal(handled, true)
@@ -5055,9 +5047,7 @@ test("moderation router rejects !unblock for non-override sender", async () => {
     getPunishmentMenuText: () => "MENU",
     getPunishmentChoiceFromText: () => null,
     applyPunishment: async () => {},
-    overrideChecksEnabled: true,
-    overrideJid: "override@s.whatsapp.net",
-    overrideIdentifiers: ["override@s.whatsapp.net"],
+    isOverrideSender: false,
   })
 
   assert.equal(handled, true)
@@ -5095,9 +5085,7 @@ test("moderation router lists blocked phone numbers with !bloqueadosfones", asyn
     getPunishmentMenuText: () => "MENU",
     getPunishmentChoiceFromText: () => null,
     applyPunishment: async () => {},
-    overrideChecksEnabled: true,
-    overrideJid: "override@s.whatsapp.net",
-    overrideIdentifiers: ["override@s.whatsapp.net"],
+    isOverrideSender: true,
   })
 
   assert.equal(handled, true)
@@ -5142,9 +5130,7 @@ test("moderation router resolves !vote at threshold", async () => {
     getPunishmentMenuText: () => "MENU",
     getPunishmentChoiceFromText: () => null,
     applyPunishment: async () => {},
-    overrideChecksEnabled: false,
-    overrideJid: "",
-    overrideIdentifiers: [],
+    isOverrideSender: false,
   })
 
   const randomOriginal = Math.random
@@ -5205,10 +5191,7 @@ test("moderation router resolves !vote target from replied message", async () =>
     getPunishmentMenuText: () => "MENU",
     getPunishmentChoiceFromText: () => null,
     applyPunishment: async () => {},
-    overrideChecksEnabled: false,
-    overrideJid: "",
-    overrideIdentifiers: [],
-    overrideProtectedIdentifiers: [],
+    isOverrideSender: false,
   })
 
   assert.equal(handled, true)
@@ -5244,10 +5227,8 @@ test("moderation router protects override target even with priorities disabled",
     getPunishmentMenuText: () => "MENU",
     getPunishmentChoiceFromText: () => null,
     applyPunishment: async () => {},
-    overrideChecksEnabled: false,
-    overrideJid: "",
-    overrideIdentifiers: [],
-    overrideProtectedIdentifiers: [protectedTarget],
+    isOverrideSender: false,
+    isKnownOverrideIdentity: (identity, options = {}) => Boolean(options.includeDisabled && identity === protectedTarget),
   })
 
   assert.equal(handled, true)
@@ -5293,10 +5274,7 @@ test("moderation router resolves !mute target from replied message", async () =>
     getPunishmentMenuText: () => "MENU",
     getPunishmentChoiceFromText: () => null,
     applyPunishment: async () => {},
-    overrideChecksEnabled: false,
-    overrideJid: "",
-    overrideIdentifiers: [],
-    overrideProtectedIdentifiers: [],
+    isOverrideSender: false,
   })
 
   assert.equal(handled, true)
@@ -5332,10 +5310,7 @@ test("moderation router rejects !mute with multiple mentions", async () => {
     getPunishmentMenuText: () => "MENU",
     getPunishmentChoiceFromText: () => null,
     applyPunishment: async () => {},
-    overrideChecksEnabled: false,
-    overrideJid: "",
-    overrideIdentifiers: [],
-    overrideProtectedIdentifiers: [],
+    isOverrideSender: false,
   })
 
   assert.equal(handled, true)
@@ -5373,9 +5348,7 @@ test("moderation router handles !jidsgrupo and sends JIDs in sender DM", async (
     getPunishmentMenuText: () => "MENU",
     getPunishmentChoiceFromText: () => null,
     applyPunishment: async () => {},
-    overrideChecksEnabled: true,
-    overrideJid: sender,
-    overrideIdentifiers: [sender],
+    isOverrideSender: true,
   })
 
   assert.equal(handled, true)

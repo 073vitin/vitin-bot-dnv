@@ -1,6 +1,5 @@
 const {
   normalizeMentionArray,
-  getMentionHandleFromJid,
   formatMentionTag,
   resolveSingleTargetFromMentionOrReply,
 } = require("../services/mentionService")
@@ -262,10 +261,7 @@ async function handleCoinGuess({
   sender,
   cmd,
   isGroup,
-  overrideChecksEnabled = true,
-  overrideJid,
-  overridePhoneNumber,
-  overrideIdentifiers,
+  isOverrideSender = false,
   getPunishmentMenuText,
   getRandomPunishmentChoice,
   getPunishmentNameById,
@@ -290,15 +286,7 @@ async function handleCoinGuess({
   if (Object.keys(coinGames[from]).length === 0) delete coinGames[from]
   storage.setCoinGames(coinGames)
 
-  const overrideIdentitySet = new Set(
-    [overrideJid, overridePhoneNumber, ...(overrideIdentifiers || [])]
-      .map((value) => String(value || "").trim().toLowerCase().split(":")[0])
-      .filter(Boolean)
-  )
-  const normalizedSender = String(sender || "").trim().toLowerCase().split(":")[0]
-  const senderUserPart = normalizedSender.split("@")[0]
-  const isOverride = Boolean(overrideChecksEnabled) &&
-    (overrideIdentitySet.has(normalizedSender) || overrideIdentitySet.has(senderUserPart))
+  const isOverride = Boolean(isOverrideSender)
   const resolvedResult = isOverride ? guess : game.resultado
   const acertou = (guess === resolvedResult)
   const wagerMultiplier = Math.max(1, Math.floor(Number(game?.betMultiplier) || 1))
@@ -533,10 +521,7 @@ async function handleDobroGuess(ctx) {
     storage,
     economyService,
     incrementUserStat,
-    overrideChecksEnabled,
-    overrideJid,
-    overridePhoneNumber,
-    overrideIdentifiers,
+    isOverrideSender,
   } = ctx
 
   const stateKey = getDobroStateKey(from, sender)
@@ -544,15 +529,7 @@ async function handleDobroGuess(ctx) {
   const guess = parseCoinGuess(text)
 
   if (state && state.status === "waiting_for_guess" && guess) {
-    const overrideIdentitySet = new Set(
-      [overrideJid, overridePhoneNumber, ...(overrideIdentifiers || [])]
-        .map((value) => String(value || "").trim().toLowerCase().split(":")[0])
-        .filter(Boolean)
-    )
-    const normalizedSender = String(sender || "").trim().toLowerCase().split(":")[0]
-    const senderUserPart = getMentionHandleFromJid(normalizedSender)
-    const isOverride = Boolean(overrideChecksEnabled) &&
-      (overrideIdentitySet.has(normalizedSender) || overrideIdentitySet.has(senderUserPart))
+    const isOverride = Boolean(isOverrideSender)
 
     const coin = Math.random() < 0.5 ? "cara" : "coroa"
     const resolvedResult = isOverride ? guess : coin
