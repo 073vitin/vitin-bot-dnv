@@ -2,7 +2,7 @@ const storage = require("../storage");
 const economyService = require("../services/economyService");
 const { normalizeMentionArray } = require("../services/mentionService");
 
-const APOSTA_BASE = 25;
+const APOSTA_BASE = 50;
 const TURN_TIMEOUT = 30000;
 
 function getKey(from) {
