@@ -36,6 +36,11 @@ const WORD_LIST_POOL = [
 const REPOST_REACTION_EMOJIS = ["🍆", "🔥", "🔞", "🤤", "😈"]
 const PUNISHMENT_DELETE_TIMEOUT_MS = 3000
 const PUNISHMENT_DELETE_RETRY_DELAYS_MS = [150, 350]
+const PUNISHMENT_DELETE_RATE_LIMIT_DETECTION_WINDOW_MS = 5000
+const PUNISHMENT_DELETE_RATE_LIMIT_FAILURE_THRESHOLD = 3
+const PUNISHMENT_DELETE_OVERLIMIT_DELAY_MS = 1000
+const PUNISHMENT_DELETE_JITTER_MIN_MS = 50
+const PUNISHMENT_DELETE_JITTER_MAX_MS = 200
 const LETTER_DUMP_STATE_KEY = "letterDumpDetector"
 const LETTER_DUMP_WHITELIST = new Set(["a", "i", "k", "q"])
 const LEET_MULTI_CHAR_REPLACERS = [
@@ -72,6 +77,42 @@ const PUNISHMENT_TYPE_TO_ID = {
   sexualReaction: "11",
   randomDeleteChance: "12",
   max3wordsStrict: "13",
+}
+
+const punishmentDeleteFailureTrackerByChat = new Map()
+
+function recordPunishmentDeleteFailure(chatId) {
+  const now = Date.now()
+  const tracker = punishmentDeleteFailureTrackerByChat.get(chatId) || { failures: [] }
+  tracker.failures = (tracker.failures || [])
+    .filter(ts => now - ts < PUNISHMENT_DELETE_RATE_LIMIT_DETECTION_WINDOW_MS)
+    .concat(now)
+  punishmentDeleteFailureTrackerByChat.set(chatId, tracker)
+}
+
+function recordPunishmentDeleteSuccess(chatId) {
+  const tracker = punishmentDeleteFailureTrackerByChat.get(chatId)
+  if (tracker) {
+    tracker.failures = []
+    punishmentDeleteFailureTrackerByChat.set(chatId, tracker)
+  }
+}
+
+function isPunishmentDeleteRateLimitDetected(chatId) {
+  const tracker = punishmentDeleteFailureTrackerByChat.get(chatId)
+  if (!tracker) return false
+  const now = Date.now()
+  const recentFailures = (tracker.failures || [])
+    .filter(ts => now - ts < PUNISHMENT_DELETE_RATE_LIMIT_DETECTION_WINDOW_MS)
+  return recentFailures.length >= PUNISHMENT_DELETE_RATE_LIMIT_FAILURE_THRESHOLD
+}
+
+function getPunishmentDeletePreDelay(chatId) {
+  if (isPunishmentDeleteRateLimitDetected(chatId)) {
+    return PUNISHMENT_DELETE_OVERLIMIT_DELAY_MS
+  }
+  const jitter = Math.random() * (PUNISHMENT_DELETE_JITTER_MAX_MS - PUNISHMENT_DELETE_JITTER_MIN_MS) + PUNISHMENT_DELETE_JITTER_MIN_MS
+  return jitter
 }
 
 function waitMs(ms = 0) {
@@ -130,6 +171,12 @@ async function deleteMessageWithRetry(sock, from, messageKey, options = {}) {
     : PUNISHMENT_DELETE_TIMEOUT_MS
   const maxAttempts = Math.max(1, retryDelays.length + 1)
 
+  // Apply pre-deletion delay based on rate-limit detection
+  const preDelayMs = getPunishmentDeletePreDelay(from)
+  if (preDelayMs > 0) {
+    await waitMs(preDelayMs)
+  }
+
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       await withTimeout(
@@ -137,8 +184,10 @@ async function deleteMessageWithRetry(sock, from, messageKey, options = {}) {
         effectiveTimeoutMs,
         "punishment.delete"
       )
+      recordPunishmentDeleteSuccess(from)
       return true
     } catch (err) {
+      recordPunishmentDeleteFailure(from)
       if (attempt >= maxAttempts) {
         console.error("[punishment] deleteMessageWithRetry exhausted", {
           from,

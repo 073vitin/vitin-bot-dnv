@@ -176,8 +176,14 @@ const MESSAGE_DELETE_RETRY_DELAYS_MS = [150, 350]
 const GROUP_METADATA_CACHE_TTL_MS = 20 * 1000
 const GROUP_METADATA_TIMEOUT_MS = 5000
 const QUEST_RESET_AUTOGEN_INTERVAL_MS = 60 * 1000
+const MESSAGE_DELETE_RATE_LIMIT_DETECTION_WINDOW_MS = 5000
+const MESSAGE_DELETE_RATE_LIMIT_FAILURE_THRESHOLD = 3
+const MESSAGE_DELETE_OVERLIMIT_DELAY_MS = 1000
+const MESSAGE_DELETE_JITTER_MIN_MS = 50
+const MESSAGE_DELETE_JITTER_MAX_MS = 200
 let questResetAutogenInterval = null
 let questResetAutogenInFlight = false
+const deleteFailureTrackerByChat = new Map()
 
 async function triggerQuestResetAutogeneration(reason = "interval") {
   if (questResetAutogenInFlight) return
@@ -496,6 +502,40 @@ async function withTimeout(taskPromise, timeoutMs = 0, label = "operation") {
   }
 }
 
+function recordDeleteFailure(chatId) {
+  const now = Date.now()
+  const tracker = deleteFailureTrackerByChat.get(chatId) || { failures: [] }
+  tracker.failures = (tracker.failures || [])
+    .filter(ts => now - ts < MESSAGE_DELETE_RATE_LIMIT_DETECTION_WINDOW_MS)
+    .concat(now)
+  deleteFailureTrackerByChat.set(chatId, tracker)
+}
+
+function recordDeleteSuccess(chatId) {
+  const tracker = deleteFailureTrackerByChat.get(chatId)
+  if (tracker) {
+    tracker.failures = []
+    deleteFailureTrackerByChat.set(chatId, tracker)
+  }
+}
+
+function isDeleteRateLimitDetected(chatId) {
+  const tracker = deleteFailureTrackerByChat.get(chatId)
+  if (!tracker) return false
+  const now = Date.now()
+  const recentFailures = (tracker.failures || [])
+    .filter(ts => now - ts < MESSAGE_DELETE_RATE_LIMIT_DETECTION_WINDOW_MS)
+  return recentFailures.length >= MESSAGE_DELETE_RATE_LIMIT_FAILURE_THRESHOLD
+}
+
+function getDeletePreDelay(chatId) {
+  if (isDeleteRateLimitDetected(chatId)) {
+    return MESSAGE_DELETE_OVERLIMIT_DELAY_MS
+  }
+  const jitter = Math.random() * (MESSAGE_DELETE_JITTER_MAX_MS - MESSAGE_DELETE_JITTER_MIN_MS) + MESSAGE_DELETE_JITTER_MIN_MS
+  return jitter
+}
+
 async function deleteMessageWithRetry(sock, chatId = "", messageKey = null, options = {}) {
   if (!chatId || !messageKey || typeof sock?.sendMessage !== "function") {
     return false
@@ -511,6 +551,12 @@ async function deleteMessageWithRetry(sock, chatId = "", messageKey = null, opti
   const maxAttempts = Math.max(1, retryDelays.length + 1)
   const context = String(options.context || "message-delete")
 
+  // Apply pre-deletion delay based on rate-limit detection
+  const preDelayMs = getDeletePreDelay(chatId)
+  if (preDelayMs > 0) {
+    await waitMs(preDelayMs)
+  }
+
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       await withTimeout(
@@ -518,8 +564,10 @@ async function deleteMessageWithRetry(sock, chatId = "", messageKey = null, opti
         effectiveTimeoutMs,
         `${context}:sendMessage(delete)`
       )
+      recordDeleteSuccess(chatId)
       return true
     } catch (err) {
+      recordDeleteFailure(chatId)
       if (attempt >= maxAttempts) {
         console.error("[bot] deleteMessageWithRetry exhausted", {
           context,
