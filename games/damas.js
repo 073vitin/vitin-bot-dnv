@@ -1,204 +1,297 @@
 const storage = require("../storage")
 
-function getKey(from) {
+// =========================
+// KEY
+// =========================
+function getGameKey(from) {
   return `damas:${from}`
 }
 
 // =========================
-// TABULEIRO
+// MENU
 // =========================
-function createBoard() {
-  const board = []
-
-  for (let i = 0; i < 8; i++) {
-    board[i] = []
-
-    for (let j = 0; j < 8; j++) {
-      const dark = (i + j) % 2 === 0
-
-      if (!dark) {
-        board[i][j] = "⬜"
-      } else {
-        if (i < 3) board[i][j] = "⚫"
-        else if (i > 4) board[i][j] = "⚪"
-        else board[i][j] = "⬛"
-      }
-    }
-  }
-
-  return board
-}
-
-function render(board) {
-  let txt = "╔══════════════════════╗\n"
-  txt += "     🎮 𝑫𝑨𝑴𝑨𝑺 🎮\n"
-  txt += "╚══════════════════════╝\n\n"
-
-  for (let i = 0; i < 8; i++) {
-    txt += (8 - i) + " "
-    for (let j = 0; j < 8; j++) {
-      txt += board[i][j] + " "
-    }
-    txt += "\n"
-  }
-
-  txt += "\n  a  b  c  d  e  f  g  h"
-  return txt
-}
-
-// =========================
-// MENU  
-// =========================
-function menu() {
-  return `╔══════════════════════╗
-   🎮 𝑫𝑨𝑴𝑨𝑺  🎮
-╚══════════════════════╝
+function buildMenu() {
+  return `╔══════════════════════════╗
+        🎮 𝑫𝑨𝑴𝑨𝑺  🎮
+╚══════════════════════════╝
 
 🎲 COMANDOS:
 
 🎮 !damas criar
-→ cria uma mesa
-
 👥 !damas entrar
-→ entra na mesa
-
+🤖 !damas pve
 🚀 !damas iniciar
-→ inicia partida
-(solo = vs BOT 🤖)
-
 ♟ !damas mover a3 b4
-→ move peça
-
-👁 !damas
-→ ver tabuleiro
-
+👁 !damas tabuleiro
 📜 !damas menu
-→ ver esse menu
 
-━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━
 
-🎯 REGRAS:
+🎯 OBJETIVO:
+Eliminar todas as peças inimigas (quem n sabe disso é burro pra krlh)
 
-• captura é obrigatória
-• peças viram 👑 ao chegar no fim
-• múltiplas capturas possíveis
-• quem eliminar tudo vence
+━━━━━━━━━━━━━━━━━━━━━━
 
-━━━━━━━━━━━━━━━━━━━
+⚔️ REGRAS:
 
-🤖 MODO SOLO:
-• bot agressivo
-• prioriza capturas
-• tenta combar jogadas
+❗ Captura obrigatória
+🔥 Possibilidade de múltiplas capturas
+👑 Promoção para rei
+👑 Reis andam livre
 
-━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━
 
-💀 DICA:
-"quem não captura… perde"
+🎨 PEÇAS:
+
+⚫ Quem criou a sala (ou seja, você)
+⚪ Oponente/BOT
+♛ Rei (preto)
+♕ Rei (branco)
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+💡 DICA:
+
+"quem não captura… perde."
 `
+}
+
+// =========================
+// BOARD
+// =========================
+function createBoard() {
+  const b = []
+  for (let i = 0; i < 8; i++) {
+    b[i] = []
+    for (let j = 0; j < 8; j++) {
+      const dark = (i + j) % 2 === 0
+
+      if (!dark) b[i][j] = "⬜"
+      else if (i < 3) b[i][j] = "⚫"
+      else if (i > 4) b[i][j] = "⚪"
+      else b[i][j] = "⬛"
+    }
+  }
+  return b
+}
+
+// =========================
+// RENDER
+// =========================
+function renderBoard(board) {
+  let t = "╔══════════════════╗\n"
+  t += "   🎮 DAMAS\n"
+  t += "╚══════════════════╝\n\n"
+
+  for (let i = 0; i < 8; i++) {
+    t += (8 - i) + " "
+    for (let j = 0; j < 8; j++) {
+      t += board[i][j] + " "
+    }
+    t += "\n"
+  }
+
+  t += "\n  a b c d e f g h"
+  return t
+}
+
+// =========================
+// HUD
+// =========================
+function hud(game, sender) {
+  if (!game.started) return "⌛ Jogo não iniciado"
+
+  if (game.vsBot) {
+    return game.turn === 0 ? "🎯 Sua vez" : "🤖 Bot pensando..."
+  }
+
+  return sender === game.players[game.turn]
+    ? "🎯 Sua vez"
+    : "⏳ Aguarde o oponente"
 }
 
 // =========================
 // PARSE
 // =========================
-function pos(str) {
+function parsePos(str) {
+  if (!str || str.length < 2) return null
   const cols = "abcdefgh"
-  return {
-    x: 8 - Number(str[1]),
-    y: cols.indexOf(str[0])
-  }
+  const x = 8 - Number(str[1])
+  const y = cols.indexOf(str[0])
+  if (x < 0 || x > 7 || y < 0 || y > 7) return null
+  return { x, y }
 }
 
 // =========================
-// CHECK
+// HELPERS
 // =========================
-function isEnemy(piece, target) {
+function isEnemy(p, t) {
   return (
-    (piece === "⚫" && (target === "⚪" || target === "👑")) ||
-    (piece === "⚪" && (target === "⚫" || target === "👑"))
+    (p === "⚫" || p === "♛") && (t === "⚪" || t === "♕") ||
+    (p === "⚪" || p === "♕") && (t === "⚫" || t === "♛")
   )
 }
 
-function isKing(piece) {
-  return piece === "👑"
+function dirs(p) {
+  if (p === "⚫") return [[1,1],[1,-1]]
+  if (p === "⚪") return [[-1,1],[-1,-1]]
+  return [[1,1],[1,-1],[-1,1],[-1,-1]]
+}
+
+// =========================
+// CAPTURE EM CADEIA
+// =========================
+function getCaptures(board, x, y, piece, path = [], visited = []) {
+  let moves = []
+  let found = false
+
+  for (let [dx, dy] of dirs(piece)) {
+    const x1 = x + dx
+    const y1 = y + dy
+    const x2 = x + dx * 2
+    const y2 = y + dy * 2
+
+    if (
+      board[x2]?.[y2] === "⬛" &&
+      isEnemy(piece, board[x1]?.[y1]) &&
+      !visited.some(v => v[0] === x1 && v[1] === y1)
+    ) {
+      found = true
+
+      const clone = JSON.parse(JSON.stringify(board))
+      clone[x][y] = "⬛"
+      clone[x1][y1] = "⬛"
+      clone[x2][y2] = piece
+
+      const deeper = getCaptures(
+        clone,
+        x2,
+        y2,
+        piece,
+        [...path, { from:[x,y], to:[x2,y2], mid:[x1,y1] }],
+        [...visited, [x1,y1]]
+      )
+
+      if (deeper.length) moves.push(...deeper)
+      else moves.push([...path, { from:[x,y], to:[x2,y2], mid:[x1,y1] }])
+    }
+  }
+
+  return found ? moves : []
 }
 
 // =========================
 // MOVES
 // =========================
-function getDirections(piece) {
-  if (piece === "⚫") return [[1,1],[1,-1]]
-  if (piece === "⚪") return [[-1,1],[-1,-1]]
-  return [[1,1],[1,-1],[-1,1],[-1,-1]] // dama
-}
-
-// =========================
-// GERAR JOGADAS
-// =========================
-function getAllMoves(board, piece) {
-  const moves = []
+function getMoves(board, side) {
+  let all = []
+  let captures = []
 
   for (let i = 0; i < 8; i++) {
     for (let j = 0; j < 8; j++) {
-      if (board[i][j] !== piece && !(isKing(board[i][j]) && piece === "⚪")) continue
+      const p = board[i][j]
 
-      const dirs = getDirections(board[i][j])
+      if (side === "⚫" && p !== "⚫" && p !== "♛") continue
+      if (side === "⚪" && p !== "⚪" && p !== "♕") continue
 
-      for (let [dx, dy] of dirs) {
-        const x1 = i + dx
-        const y1 = j + dy
-        const x2 = i + dx * 2
-        const y2 = j + dy * 2
+      const caps = getCaptures(board, i, j, p)
 
-        if (board[x1]?.[y1] === "⬛") {
-          moves.push({ type: "move", from:[i,j], to:[x1,y1] })
-        }
-
-        if (board[x2]?.[y2] === "⬛" && isEnemy(board[i][j], board[x1]?.[y1])) {
-          moves.push({ type:"capture", from:[i,j], to:[x2,y2], mid:[x1,y1] })
+      if (caps.length) captures.push(...caps)
+      else {
+        for (let [dx, dy] of dirs(p)) {
+          const x1 = i + dx
+          const y1 = j + dy
+          if (board[x1]?.[y1] === "⬛") {
+            all.push([{ from:[i,j], to:[x1,y1] }])
+          }
         }
       }
     }
   }
 
-  return moves
+  return captures.length ? captures : all
 }
 
 // =========================
-// APLICAR
+// APPLY
 // =========================
-function applyMove(board, move) {
-  const piece = board[move.from[0]][move.from[1]]
-
-  board[move.to[0]][move.to[1]] = piece
-  board[move.from[0]][move.from[1]] = "⬛"
-
-  if (move.type === "capture") {
-    board[move.mid[0]][move.mid[1]] = "⬛"
+function applySeq(board, seq) {
+  for (let m of seq) {
+    const p = board[m.from[0]][m.from[1]]
+    board[m.from[0]][m.from[1]] = "⬛"
+    board[m.to[0]][m.to[1]] = p
+    if (m.mid) board[m.mid[0]][m.mid[1]] = "⬛"
   }
 
-  // virar dama
-  if (piece === "⚫" && move.to[0] === 7) {
-    board[move.to[0]][move.to[1]] = "👑"
-  }
-  if (piece === "⚪" && move.to[0] === 0) {
-    board[move.to[0]][move.to[1]] = "👑"
-  }
+  const last = seq[seq.length - 1]
+  const p = board[last.to[0]][last.to[1]]
+
+  if (p === "⚫" && last.to[0] === 7) board[last.to[0]][last.to[1]] = "♛"
+  if (p === "⚪" && last.to[0] === 0) board[last.to[0]][last.to[1]] = "♕"
 }
 
 // =========================
-// BOT
+// AI (MINIMAX)
 // =========================
-function botPlay(board) {
-  const moves = getAllMoves(board, "⚪")
+function evaluate(board) {
+  let score = 0
 
-  if (!moves.length) return null
+  for (let r of board) {
+    for (let c of r) {
+      if (c === "⚪") score += 3
+      if (c === "♕") score += 6
+      if (c === "⚫") score -= 3
+      if (c === "♛") score -= 6
+    }
+  }
 
-  const captures = moves.filter(m => m.type === "capture")
+  return score
+}
 
-  return captures.length
-    ? captures[Math.floor(Math.random()*captures.length)]
-    : moves[Math.floor(Math.random()*moves.length)]
+function minimax(board, depth, max) {
+  if (depth === 0) return evaluate(board)
+
+  const side = max ? "⚪" : "⚫"
+  const moves = getMoves(board, side)
+
+  if (!moves.length) return evaluate(board)
+
+  if (max) {
+    let best = -Infinity
+    for (let m of moves) {
+      const b = JSON.parse(JSON.stringify(board))
+      applySeq(b, m)
+      best = Math.max(best, minimax(b, depth - 1, false))
+    }
+    return best
+  } else {
+    let best = Infinity
+    for (let m of moves) {
+      const b = JSON.parse(JSON.stringify(board))
+      applySeq(b, m)
+      best = Math.min(best, minimax(b, depth - 1, true))
+    }
+    return best
+  }
+}
+
+function botMove(board) {
+  const moves = getMoves(board, "⚪")
+  let best = null
+  let score = -Infinity
+
+  for (let m of moves) {
+    const b = JSON.parse(JSON.stringify(board))
+    applySeq(b, m)
+    const val = minimax(b, 3, false)
+
+    if (val > score) {
+      score = val
+      best = m
+    }
+  }
+
+  return best
 }
 
 // =========================
@@ -209,8 +302,8 @@ function checkWin(board) {
 
   for (let r of board) {
     for (let c of r) {
-      if (c === "⚪" || c === "👑") w++
-      if (c === "⚫") b++
+      if (c === "⚪" || c === "♕") w++
+      if (c === "⚫" || c === "♛") b++
     }
   }
 
@@ -222,19 +315,44 @@ function checkWin(board) {
 // =========================
 // HANDLER
 // =========================
-async function handleDamas(ctx) {
+async function handleDamasGame(ctx) {
   const { sock, from, sender, args } = ctx
   const action = args[0]
-  const key = getKey(from)
 
+  const key = getGameKey(from)
   let game = storage.getGameState(from, key)
 
   if (action === "menu") {
-    return sock.sendMessage(from, { text: menu() })
+    return sock.sendMessage(from, { text: buildMenu() })
+  }
+
+  if (action === "pve") {
+    const g = {
+      players: [sender],
+      board: createBoard(),
+      turn: 0,
+      started: true,
+      vsBot: true
+    }
+    storage.setGameState(from, key, g)
+
+    return sock.sendMessage(from, {
+      text: `🤖 PVE iniciado\n\n🎯 Sua vez\n\n${renderBoard(g.board)}`
+    })
+  }
+
+  if (action === "tabuleiro") {
+    if (!game) return false
+
+    return sock.sendMessage(from, {
+      text: `${hud(game, sender)}\n\n${renderBoard(game.board)}\n\n❗ Captura obrigatória`
+    })
   }
 
   if (action === "criar") {
-    game = {
+    if (game) return sock.sendMessage(from, { text: "⚠️ Já existe jogo." })
+
+    const g = {
       players: [sender],
       board: createBoard(),
       turn: 0,
@@ -242,91 +360,100 @@ async function handleDamas(ctx) {
       vsBot: false
     }
 
-    storage.setGameState(from, key, game)
+    storage.setGameState(from, key, g)
 
-    return sock.sendMessage(from, {
-      text: "🎮 Mesa criada! !damas iniciar ou !damas entrar"
-    })
+    return sock.sendMessage(from, { text: "🎮 Jogo criado!" })
   }
 
   if (action === "entrar") {
-    if (!game || game.players.length >= 2) return
+    if (!game) return false
+    if (game.players.length >= 2) return sock.sendMessage(from, { text: "⚠️ Jogo cheio." })
 
     game.players.push(sender)
     storage.setGameState(from, key, game)
 
-    return sock.sendMessage(from, { text: "👥 Player entrou!" })
+    return sock.sendMessage(from, { text: "👥 Jogador entrou!" })
   }
 
   if (action === "iniciar") {
-    if (!game) return
-
-    if (game.players.length === 1) game.vsBot = true
-    if (!game.vsBot && game.players.length < 2) {
-      return sock.sendMessage(from, { text: "❌ Precisa de 2 players." })
+    if (!game) return false
+    if (game.players.length < 2 && !game.vsBot) {
+      return sock.sendMessage(from, { text: "⚠️ Precisa de 2 jogadores." })
     }
 
     game.started = true
     storage.setGameState(from, key, game)
 
-    return sock.sendMessage(from, { text: render(game.board) })
+    return sock.sendMessage(from, {
+      text: `${hud(game, sender)}\n\n${renderBoard(game.board)}`
+    })
   }
 
   if (action === "mover") {
-    if (!game || !game.started) return
+    if (!game || !game.started) return false
 
-    const playerIndex = game.players.indexOf(sender)
-    if (playerIndex !== game.turn) {
-      return sock.sendMessage(from, { text: "⏳ Não é seu turno." })
+    if (!args[1] || !args[2]) {
+      return sock.sendMessage(from, { text: "❌ Use: !damas mover a3 b4" })
     }
 
-    const from = pos(args[1])
-    const to = pos(args[2])
+    const fromPos = parsePos(args[1])
+    const toPos = parsePos(args[2])
+    if (!fromPos || !toPos) return false
 
-    const piece = playerIndex === 0 ? "⚫" : "⚪"
+    const moves = getMoves(game.board, game.turn === 0 ? "⚫" : "⚪")
 
-    const move = getAllMoves(game.board, piece).find(m =>
-      m.from[0] === from.x &&
-      m.from[1] === from.y &&
-      m.to[0] === to.x &&
-      m.to[1] === to.y
+    const chosen = moves.find(seq =>
+      seq[0].from[0] === fromPos.x &&
+      seq[0].from[1] === fromPos.y &&
+      seq[seq.length - 1].to[0] === toPos.x &&
+      seq[seq.length - 1].to[1] === toPos.y
     )
 
-    if (!move) {
-      return sock.sendMessage(from, { text: "❌ Jogada inválida." })
+    if (!chosen) {
+      return sock.sendMessage(from, {
+        text: "❌ Jogada inválida.\n❗ Captura obrigatória."
+      })
     }
 
-    applyMove(game.board, move)
+    applySeq(game.board, chosen)
 
     let win = checkWin(game.board)
     if (win) {
       storage.deleteGameState(from, key)
       return sock.sendMessage(from, {
-        text: `🏆 ${win} venceu!\n\n${render(game.board)}`
+        text: `🏆 Vitória de ${win}\n\n${renderBoard(game.board)}`
       })
     }
 
-    // BOT
-    if (game.vsBot) {
-      const botMove = botPlay(game.board)
-      if (botMove) applyMove(game.board, botMove)
-
-      return sock.sendMessage(from, {
-        text: `🤖 BOT jogou!\n\n${render(game.board)}`
-      })
-    }
-
-    game.turn = game.turn === 0 ? 1 : 0
+    game.turn = game.turn ? 0 : 1
     storage.setGameState(from, key, game)
 
+    if (game.vsBot && game.turn === 1) {
+      const move = botMove(game.board)
+      if (move) applySeq(game.board, move)
+
+      win = checkWin(game.board)
+      if (win) {
+        storage.deleteGameState(from, key)
+        return sock.sendMessage(from, {
+          text: `🏆 Vitória de ${win}\n\n${renderBoard(game.board)}`
+        })
+      }
+
+      game.turn = 0
+      storage.setGameState(from, key, game)
+
+      return sock.sendMessage(from, {
+        text: `🤖 Bot jogou\n\n🎯 Sua vez\n\n${renderBoard(game.board)}`
+      })
+    }
+
     return sock.sendMessage(from, {
-      text: render(game.board)
+      text: `${hud(game, sender)}\n\n${renderBoard(game.board)}`
     })
   }
 
-  if (game) {
-    return sock.sendMessage(from, { text: render(game.board) })
-  }
+  return false
 }
 
-module.exports = handleDamas
+module.exports = { handleDamasGame }
