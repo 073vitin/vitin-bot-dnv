@@ -2120,7 +2120,7 @@ async function handleLegacyGameCommands(ctx = {}) {
   )
   if (handledCoinRound) return true
 
-  const handledBlackjack = await measureStage("router.games.blackjack", async () =>
+  /*const handledBlackjack = await measureStage("router.games.blackjack", async () =>
     handleBlackjack({
       sock,
       from,
@@ -2134,7 +2134,7 @@ async function handleLegacyGameCommands(ctx = {}) {
     })
   )
   if (handledBlackjack) return true
-
+*/
   const handledStreakRanking = await measureStage("router.games.streakRanking", async () =>
     caraOuCoroa.sendStreakRanking({
       sock,
