@@ -4862,9 +4862,10 @@ setTimeout(() => {
         }
 
         const forcedMentioned = targetSource === "mention" ? (mentioned || []).slice(1) : (mentioned || [])
+        const forcedMentionTargets = normalizeMentionArray([target, ...forcedMentioned])
         const forcedContextInfo = {}
-        if (forcedMentioned.length > 0) {
-          forcedContextInfo.mentionedJid = normalizeMentionArray(forcedMentioned)
+        if (forcedMentionTargets.length > 0) {
+          forcedContextInfo.mentionedJid = forcedMentionTargets
         }
         if (contextInfo?.quotedMessage) {
           forcedContextInfo.quotedMessage = contextInfo.quotedMessage
@@ -4905,7 +4906,7 @@ setTimeout(() => {
         await processSingleUpsertMessage(syntheticMessage)
         await sock.sendMessage(from, {
           text: `⏩ Comando forçado encaminhado como ${formatMentionTag(String(target))}: ${forcedCommandText}`,
-          mentions: normalizeMentionArray([target]),
+          mentions: forcedMentionTargets,
         })
         return
       } catch (err) {
