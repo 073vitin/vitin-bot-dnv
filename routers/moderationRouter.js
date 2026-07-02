@@ -26,6 +26,7 @@ async function handleModerationCommands(ctx) {
     clearPunishment,
     clearPendingPunishment,
     getPunishmentMenuText,
+    getPunishmentSeverityEffect,
     getPunishmentChoiceFromText,
     applyPunishment,
     isOverrideSender,
@@ -140,6 +141,88 @@ async function handleModerationCommands(ctx) {
     if (!normalized) return ""
     const userPart = normalized.includes("@") ? getMentionHandleFromJid(normalized) : normalized
     return String(userPart || "").replace(/\D+/g, "")
+  }
+
+  const normalizeIdentityKey = (identity = "") => String(jidNormalizedUser(identity || "") || "").trim().toLowerCase().split(":")[0]
+
+  const buildIdentityLookup = (identities = []) => {
+    const lookup = new Set()
+    identities.forEach((identity) => {
+      expandKnownUserIdentities(identity).forEach((alias) => {
+        const normalized = normalizeIdentityKey(alias)
+        if (normalized) lookup.add(normalized)
+      })
+    })
+    return lookup
+  }
+
+  const identityMatchesAny = (candidate = "", identities = []) => {
+    const normalizedCandidate = normalizeIdentityKey(candidate)
+    if (!normalizedCandidate) return false
+    return buildIdentityLookup(identities).has(normalizedCandidate)
+  }
+
+  const clearAllPunishmentsForTarget = (groupId, target) => {
+    const result = { active: 0, muted: 0, pending: 0 }
+
+    const activePunishments = storage.getActivePunishments()
+    const groupPunishments = activePunishments[groupId] || {}
+    for (const key of Object.keys(groupPunishments)) {
+      if (!identityMatchesAny(key, [target])) continue
+      clearPunishment(groupId, key)
+      result.active += 1
+    }
+
+    const mutedUsers = storage.getMutedUsers()
+    const groupMutedUsers = mutedUsers[groupId]
+    if (groupMutedUsers) {
+      for (const key of Object.keys(groupMutedUsers)) {
+        if (!identityMatchesAny(key, [target])) continue
+        delete groupMutedUsers[key]
+        result.muted += 1
+      }
+      if (Object.keys(groupMutedUsers).length === 0) delete mutedUsers[groupId]
+      storage.setMutedUsers(mutedUsers)
+    }
+
+    const coinPunishmentPending = storage.getCoinPunishmentPending()
+    const groupPending = coinPunishmentPending[groupId]
+    if (groupPending) {
+      for (const key of Object.keys(groupPending)) {
+        const pending = groupPending[key]
+        if (!identityMatchesAny(key, [target]) && !identityMatchesAny(pending?.target, [target])) continue
+        clearPendingPunishment(groupId, key)
+        result.pending += 1
+      }
+    }
+
+    return result
+  }
+
+  const clearAllPunishmentsFromGroup = (groupId) => {
+    const result = { active: 0, muted: 0, pending: 0 }
+
+    const activeTargets = Object.keys(storage.getActivePunishments(groupId) || {})
+    for (const target of activeTargets) {
+      clearPunishment(groupId, target)
+      result.active += 1
+    }
+
+    const mutedUsers = storage.getMutedUsers()
+    if (mutedUsers[groupId]) {
+      result.muted = Object.keys(mutedUsers[groupId]).length
+      delete mutedUsers[groupId]
+      storage.setMutedUsers(mutedUsers)
+    }
+
+    const coinPunishmentPending = storage.getCoinPunishmentPending()
+    if (coinPunishmentPending[groupId]) {
+      result.pending = Object.keys(coinPunishmentPending[groupId]).length
+      delete coinPunishmentPending[groupId]
+      storage.setCoinPunishmentPending(coinPunishmentPending)
+    }
+
+    return result
   }
 
   // =========================
@@ -787,15 +870,15 @@ async function handleModerationCommands(ctx) {
     return true
   }
 
-  if (cmdName === prefix + "puniçõesclr" || cmdName === prefix + "punicoesclr") {
+  if (cmdName === prefix + "pclr") {
     if (!senderIsAdmin) {
-      trackModeration("punicoesclr", "rejected", { reason: "not-admin" })
+      trackModeration("pclr", "rejected", { reason: "not-admin" })
       await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
       return true
     }
     const targetResolution = resolveAdminTarget()
     if (await sendAdminTargetError(targetResolution, "Marque alguém para limpar as punições.")) {
-      trackModeration("punicoesclr", "rejected", { reason: "missing-target" })
+      trackModeration("pclr", "rejected", { reason: "missing-target" })
       return true
     }
     const alvo = targetResolution.target
@@ -823,13 +906,65 @@ async function handleModerationCommands(ctx) {
       text: `Todas as punições de ${formatMentionTag(alvo)} foram removidas.`,
       mentions: normalizeMentionArray([alvo]),
     })
-    trackModeration("punicoesclr", "success", { target: alvo })
+    trackModeration("pclr", "success", { target: alvo })
     return true
   }
 
-  if (cmdName === prefix + "puniçõesadd" || cmdName === prefix + "punicoesadd") {
+  if (cmdName === prefix + "pclrall" || cmdName === prefix + "pclrgrupo") {
     if (!senderIsAdmin) {
-      trackModeration("punicoesadd", "rejected", { reason: "not-admin" })
+      trackModeration("pclrall", "rejected", { reason: "not-admin" })
+      await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
+      return true
+    }
+
+    const uniqueTargets = [...new Set((mentioned || []).map((jid) => String(jid || "").trim()).filter(Boolean))]
+
+    if (uniqueTargets.length === 0) {
+      const cleared = clearAllPunishmentsFromGroup(from)
+      await sock.sendMessage(from, {
+        text:
+          `Todas as punições do grupo foram removidas.\n` +
+          `Ativas: *${cleared.active}* | Mutes: *${cleared.muted}* | Pendentes: *${cleared.pending}*`,
+      })
+      trackModeration("pclrall", "success", { scope: "group", ...cleared })
+      return true
+    }
+
+    const summaries = []
+    const mentionsToSend = []
+    let totalActive = 0
+    let totalMuted = 0
+    let totalPending = 0
+
+    for (const target of uniqueTargets) {
+      const cleared = clearAllPunishmentsForTarget(from, target)
+      totalActive += cleared.active
+      totalMuted += cleared.muted
+      totalPending += cleared.pending
+      summaries.push(`${formatMentionTag(target)}: ${cleared.active} ativas, ${cleared.muted} mutes, ${cleared.pending} pendentes`)
+      mentionsToSend.push(target)
+    }
+
+    await sock.sendMessage(from, {
+      text:
+        `Punições removidas dos usuários mencionados:\n` +
+        `${summaries.join("\n")}` +
+        `\nTotal removido: ${totalActive} ativas, ${totalMuted} mutes, ${totalPending} pendentes.`,
+      mentions: normalizeMentionArray(mentionsToSend),
+    })
+    trackModeration("pclrall", "success", {
+      scope: "mentioned",
+      targets: uniqueTargets.length,
+      totalActive,
+      totalMuted,
+      totalPending,
+    })
+    return true
+  }
+
+  if (cmdName === prefix + "padd") {
+    if (!senderIsAdmin) {
+      trackModeration("padd", "rejected", { reason: "not-admin" })
       await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
       return true
     }
@@ -837,12 +972,12 @@ async function handleModerationCommands(ctx) {
     if (await sendAdminTargetError(targetResolution, "Marque alguém para aplicar punição.", {
       botText: "🤖 O bot não pode receber punições administrativas.",
     })) {
-      trackModeration("punicoesadd", "rejected", { reason: "missing-target" })
+      trackModeration("padd", "rejected", { reason: "missing-target" })
       return true
     }
     const alvo = targetResolution.target
     if (typeof isKnownOverrideIdentity === "function" && isKnownOverrideIdentity(alvo, { includeDisabled: true })) {
-      trackModeration("punicoesadd", "rejected", { reason: "target-override" })
+      trackModeration("padd", "rejected", { reason: "target-override" })
       await sock.sendMessage(from, { text: "Este usuário não podem receber punições administrativas." })
       return true
     }
@@ -878,32 +1013,113 @@ async function handleModerationCommands(ctx) {
     }
 
     if (!punishmentChoice) {
-      console.log("[router:moderation] punicoesadd - no punishment choice extracted", { alvo, text })
-      trackModeration("punicoesadd", "rejected", { reason: "invalid-choice" })
+      console.log("[router:moderation] padd - no punishment choice extracted", { alvo, text })
+      trackModeration("padd", "rejected", { reason: "invalid-choice" })
       await sock.sendMessage(from, {
-        text: "Use: !puniçõesadd [@user] <1-13> [severidade]\nEx.: !punicoesadd @user 7 3 | !punicoesadd @user 7x3\n" + getPunishmentMenuText(),
+        text: "Use: !padd [@user] <1-13> [severidade]\nEx.: !padd @user 7 3 | !padd @user 7x3\n" + getPunishmentMenuText(),
         mentions: normalizeMentionArray([alvo]),
       })
       return true
     }
 
     if (hasExplicitSeverity && (!Number.isFinite(severityMultiplier) || severityMultiplier <= 0)) {
-      console.log("[router:moderation] punicoesadd - invalid severity", { alvo, severityMultiplier })
-      trackModeration("punicoesadd", "rejected", { reason: "invalid-severity" })
+      console.log("[router:moderation] padd - invalid severity", { alvo, severityMultiplier })
+      trackModeration("padd", "rejected", { reason: "invalid-severity" })
       await sock.sendMessage(from, {
-        text: "Severidade inválida. Use um número positivo.\nEx.: !puniçõesadd @user 7 3",
+        text: "Severidade inválida. Use um número positivo.\nEx.: !padd @user 7 3",
         mentions: normalizeMentionArray([alvo]),
       })
       return true
     }
 
-    console.log("[router:moderation] punicoesadd - applying punishment", { alvo, punishmentChoice, severityMultiplier, origin: "admin" })
+    console.log("[router:moderation] padd - applying punishment", { alvo, punishmentChoice, severityMultiplier, origin: "admin" })
     await applyPunishment(sock, from, alvo, punishmentChoice, {
       origin: "admin",
       severityMultiplier,
     })
-    console.log("[router:moderation] punicoesadd - punishment applied successfully", { alvo, punishmentChoice })
-    trackModeration("punicoesadd", "success", { target: alvo, punishmentChoice })
+    console.log("[router:moderation] padd - punishment applied successfully", { alvo, punishmentChoice })
+    trackModeration("padd", "success", { target: alvo, punishmentChoice })
+    return true
+  }
+
+  if (cmdName === prefix + "punirrng") {
+    if (!senderIsAdmin) {
+      trackModeration("punirrng", "rejected", { reason: "not-admin" })
+      await sock.sendMessage(from, { text: "Apenas admins podem usar esse comando." })
+      return true
+    }
+
+    const parts = text.trim().split(/\s+/)
+    const xCount = Number.parseInt(String(parts[1] || ""), 10)
+    const ySeverity = Number.parseInt(String(parts[2] || ""), 10)
+
+    if (!Number.isFinite(xCount) || xCount < 1 || xCount > 13) {
+      trackModeration("punirrng", "rejected", { reason: "invalid-x" })
+      await sock.sendMessage(from, {
+        text: "Use: !punirrng <x> <y>\n<x> = quantidade de punições (1-13)\n<y> = severidade (1+)\nEx.: !punirrng 3 2",
+      })
+      return true
+    }
+
+    if (!Number.isFinite(ySeverity) || ySeverity <= 0) {
+      trackModeration("punirrng", "rejected", { reason: "invalid-y" })
+      await sock.sendMessage(from, {
+        text: "Severidade inválida. Use um número positivo.\nEx.: !punirrng 3 2",
+      })
+      return true
+    }
+
+    // Pick x random punishments from 1-13
+    const allPunishments = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"]
+    const selectedPunishments = []
+    const shuffled = [...allPunishments].sort(() => Math.random() - 0.5)
+    for (let i = 0; i < xCount; i++) {
+      selectedPunishments.push(shuffled[i])
+    }
+
+    // Punishment descriptions for display
+    const punishmentDescriptions = {
+      "1": "Máx. 5 caracteres",
+      "2": "1 mensagem a cada 20s",
+      "3": "Bloqueio por letras",
+      "4": "Somente emojis/figurinhas",
+      "5": "Mute total",
+      "6": "Sem vogais",
+      "7": "Prefixo 🚨URGENTE:",
+      "8": "Palavras da lista",
+      "9": "Somente caixa alta",
+      "10": "Apagar e repostar",
+      "11": "Reação sugestiva",
+      "12": "Chance de apagar",
+      "13": "Máx. 3 palavras",
+    }
+
+    // Build display menu
+    const menuLines = ["🎰 *Punições sorteadas*:"]
+    selectedPunishments.forEach((punishId, index) => {
+      const desc = punishmentDescriptions[punishId] || "desconhecida"
+      const effect = getPunishmentSeverityEffect(punishId, ySeverity)
+      menuLines.push(`${index + 1}. [${punishId}] ${desc} → *${effect}*`)
+    })
+    menuLines.push("")
+    menuLines.push("Para aplicar, responda com o formato: *<índice> @user*")
+    menuLines.push(`Exemplo: ${selectedPunishments.length > 0 ? "1" : "0"} @user`)
+
+    // Store pending rng punishment
+    const coinPunishmentPending = storage.getCoinPunishmentPending()
+    if (!coinPunishmentPending[from]) coinPunishmentPending[from] = {}
+    
+    coinPunishmentPending[from][sender] = {
+      mode: "punirrng",
+      punishments: selectedPunishments,
+      severity: ySeverity,
+      createdAt: Date.now(),
+      origin: "admin",
+    }
+    storage.setCoinPunishmentPending(coinPunishmentPending)
+
+    await sock.sendMessage(from, { text: menuLines.join("\n") })
+    trackModeration("punirrng", "success", { xCount, ySeverity, selectedPunishments: selectedPunishments.join(",") })
     return true
   }
 
@@ -1047,9 +1263,11 @@ async function handleModerationCommands(ctx) {
   │ !unmute @user (ou responda)
   │ !ban @user (ou responda)
   │ !punições / !punicoes @user (ou responda)
-│ !punicoeslista
-  │ !puniçõesclr / !punicoesclr @user (ou responda)
-  │ !puniçõesadd / !punicoesadd [@user|resposta] <1-13> [severidade]
+│ !plista
+  │ !pclr @user (ou responda)
+  │ !pclrall [@user...] (sem menções: limpa o grupo todo)
+  │ !padd [@user|resposta] <1-13> [severidade]
+  │ !punirrng <x> <y> (sorteio: x punições aleatórias, severidade y)
 │ !filtros
 │ !filtroadd <texto com espaços>
 │ !filtroremove <índice>

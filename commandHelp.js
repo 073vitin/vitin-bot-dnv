@@ -599,27 +599,39 @@ blackjack: {
     details: "Admin only. Mostra todas as restrições aplicadas.",
   },
 
-  punicoesadd: {
+  padd: {
     name: "Aplicar Punição",
-    aliases: ["punicoesadd", "puniçõesadd"],
+    aliases: ["padd"],
     description: "[Admin] Aplica uma punição a um usuário",
-    usage: "!punicoesadd [@user] <1-13> [severidade]",
+    usage: "!padd [@user] <1-13> [severidade]",
     commonUsage: [
-      "!punicoesadd @usuario 1 - Aplicar punição tipo 1, severidade 1",
-      "!punicoesadd @usuario 5 3 - Punição tipo 5, severidade 3",
+      "!padd @usuario 1 - Aplicar punição tipo 1, severidade 1",
+      "!padd @usuario 5 3 - Punição tipo 5, severidade 3",
     ],
     details: "Admin only. Tipos 1-13 são diferentes restrições.",
   },
 
-  punicoesclr: {
+  pclr: {
     name: "Limpar Punições",
-    aliases: ["punicoesclr", "puniçõesclr"],
+    aliases: ["pclr", "pclr"],
     description: "[Admin] Remove todas as punições de um usuário",
-    usage: "!punicoesclr @user",
+    usage: "!pclr @user",
     commonUsage: [
-      "!punicoesclr @usuario - Remover todas as punições",
+      "!pclr @usuario - Remover todas as punições",
     ],
     details: "Admin only.",
+  },
+
+  pclrall: {
+    name: "Limpar Punições em Massa",
+    aliases: ["pclrall", "pclrgrupo"],
+    description: "[Admin] Remove todas as punições dos usuários mencionados ou de todo o grupo",
+    usage: "!pclrall [@user...]",
+    commonUsage: [
+      "!pclrall @usuario1 @usuario2 - Remover todas as punições desses usuários",
+      "!pclrall - Remover todas as punições do grupo",
+    ],
+    details: "Admin only. Sem menções, limpa o grupo inteiro.",
   },
 
   filtros: {
@@ -822,13 +834,13 @@ blackjack: {
     details: "Útil para admins verificarem dados técnicos. Apenas em DM.",
   },
 
-  punicoeslista: {
+  plista: {
     name: "Lista Completa de Punições",
-    aliases: ["punicoeslista", "puniçõeslista"],
+    aliases: ["plista"],
     description: "Mostra a lista detalhada de todos os tipos de punição (em DM)",
-    usage: "!punicoeslista",
+    usage: "!plista",
     commonUsage: [
-      "!punicoeslista - Receber lista completa",
+      "!plista - Receber lista completa",
     ],
     details: "Descrição de cada tipo de punição (1-13) e seus efeitos.",
   },

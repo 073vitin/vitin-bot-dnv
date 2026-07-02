@@ -4824,7 +4824,7 @@ test("utility router handles !perf command", async () => {
   assert.match(String(sent[0].payload?.text || ""), /PERFORMANCE/i)
 })
 
-test("utility router handles !punicoeslista command", async () => {
+test("utility router handles !plista command", async () => {
   const { sock, sent } = createSockCapture()
   const sender = "user@s.whatsapp.net"
 
@@ -4832,7 +4832,7 @@ test("utility router handles !punicoeslista command", async () => {
     sock,
     from: "group@g.us",
     sender,
-    cmd: "!punicoeslista",
+    cmd: "!plista",
     prefix: "!",
     isGroup: true,
     msg: { message: {} },
@@ -4855,7 +4855,7 @@ test("utility router handles !punicoeslista command", async () => {
   assert.match(sent[1].payload.text, /enviei a lista de punições no privado/i)
 })
 
-test("moderation router applies !punicoesadd severity right after punishment number", async () => {
+test("moderation router applies !padd severity right after punishment number", async () => {
   const { sock } = createSockCapture()
   const target = "alvo@s.whatsapp.net"
   const applied = []
@@ -4865,9 +4865,9 @@ test("moderation router applies !punicoesadd severity right after punishment num
     msg: { message: {} },
     from: "group@g.us",
     sender: "admin@s.whatsapp.net",
-    text: "!punicoesadd @alvo 7 3",
-    cmd: "!punicoesadd @alvo 7 3",
-    cmdName: "!punicoesadd",
+    text: "!padd @alvo 7 3",
+    cmd: "!padd @alvo 7 3",
+    cmdName: "!padd",
     prefix: "!",
     isGroup: true,
     senderIsAdmin: true,

@@ -611,7 +611,7 @@ async function handleUtilityCommands(ctx) {
         { cmd: `${prefix}register`, usage: `${prefix}register`, effect: "cadastra usuario", badges: ["GRUPO"] },
         { cmd: `${prefix}unregister`, usage: `${prefix}unregister`, effect: "remove cadastro", badges: ["GRUPO"] },
         { cmd: `${prefix}jid`, usage: `${prefix}jid`, effect: "mostra IDs do remetente", badges: ["DM", "OCULTO"] },
-        { cmd: `${prefix}punicoeslista`, aliases: [`${prefix}puniçõeslista`], usage: `${prefix}punicoeslista`, effect: "envia lista detalhada no privado", badges: ["GERAL"] },
+        { cmd: `${prefix}plista`, usage: `${prefix}plista`, effect: "envia lista detalhada no privado", badges: ["GERAL"] },
         { cmd: `${prefix}roleta`, usage: `${prefix}roleta`, effect: "sorteia participante", badges: ["GRUPO"] },
         { cmd: `${prefix}ship`, usage: `${prefix}ship @a @b`, effect: "compatibilidade aleatoria", badges: ["GRUPO"] },
       ],
@@ -2313,8 +2313,8 @@ ${feedbackText}`,
     return true
   }
 
-  if (cmd === prefix + "punicoeslista" || cmd === prefix + "puniçõeslista") {
-    trackUtility("punicoeslista", "success")
+  if (cmd === prefix + "plista") {
+    trackUtility("plista", "success")
     const detailsText = typeof getPunishmentDetailsText === "function"
       ? getPunishmentDetailsText()
       : "Lista de punições indisponível no momento."

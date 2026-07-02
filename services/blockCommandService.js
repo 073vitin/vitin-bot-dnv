@@ -71,8 +71,8 @@ const ALL_COMMANDS = new Set([
   "register",
   "unregister",
   "jid",
-  "punicoeslista",
-  "puniçõeslista",
+  "plista",
+
   "roleta",
   "ship",
   "mentions",

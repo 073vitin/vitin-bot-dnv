@@ -419,6 +419,33 @@ function getPunishmentNameById(punishmentId) {
   return "desconhecida"
 }
 
+function getPunishmentSeverityEffect(punishmentId, severity) {
+  const id = normalizePunishmentId(punishmentId)
+  const sev = Math.max(1, Number(severity) || 1)
+
+  if (id === "1") return `${5 * sev}min`
+  if (id === "2") return `${10 * sev}min`
+  if (id === "3") return `+${sev} letras bloqueadas (indefinido)`
+  if (id === "4") return `${5 * sev}min`
+  if (id === "5") return `${5 * sev}min`
+  if (id === "6") return `${5 * sev}min`
+  if (id === "7") return `${5 * sev}min`
+  if (id === "8") {
+    const timeMin = Math.round(5 * 1.5 * sev)
+    return `${timeMin}min, ${sev}+ palavras`
+  }
+  if (id === "9") return `${10 * sev}min`
+  if (id === "10") return `${5 * sev}min`
+  if (id === "11") return `${5 * sev}min`
+  if (id === "12") {
+    const chance = Math.min(100, 20 + (4 * sev))
+    return `${chance}% chance de apagar`
+  }
+  if (id === "13") return `${5 * sev}min`
+
+  return "desconhecida"
+}
+
 function getPunishmentMenuText() {
   return [
     "Escolha a punição digitando um número de *1* a *13*:",
@@ -1146,6 +1173,10 @@ async function applyPunishment(sock, groupId, userId, punishmentId, options = {}
     type: appliedState?.type,
     stackSize: appendResult.stackSize,
   })
+  if (appliedState?.type === "lettersBlock" && Array.isArray(appliedState?.letters)) {
+    const blockedLetters = appliedState.letters.slice().sort().join(", ").toUpperCase()
+    console.log("[punishment] Type 3 (lettersBlock) - Blocked Letters: " + blockedLetters)
+  }
 }
 
 async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGroup, skipForCommand = false, botIsAdmin = true) {
@@ -1324,6 +1355,10 @@ async function handlePunishmentEnforcement(sock, msg, from, sender, text, isGrou
         releaseMessages.push(`${formatMentionTag(senderId)}, você cumpriu a condição e foi liberado da punição das letras (${lettersLabel}).`)
       } else {
         entryShouldDelete = messageContainsBlockedLetters(text, letters)
+        if (entryShouldDelete) {
+          const blockedLetters = letters.slice().sort().join(", ").toUpperCase()
+          console.log("[punishment] Type 3 (lettersBlock) - Enforcing | Blocked Letters: " + blockedLetters)
+        }
       }
     }
 
@@ -1473,8 +1508,13 @@ async function handlePendingPunishmentChoice({
     return false
   }
 
-  if (!storage.isResenhaEnabled(from)) {
-    const coinPunishmentPending = storage.getCoinPunishmentPending()
+  const coinPunishmentPending = storage.getCoinPunishmentPending()
+  const pending = coinPunishmentPending[from]?.[sender]
+
+  // Punirrng (admin) mode doesn't require resenha to be enabled
+  const isPunirrngMode = pending?.mode === "punirrng"
+
+  if (!isPunirrngMode && !storage.isResenhaEnabled(from)) {
     if (coinPunishmentPending[from]?.[sender]) {
       clearPendingPunishment(from, sender)
       return false
@@ -1482,9 +1522,7 @@ async function handlePendingPunishmentChoice({
     return false
   }
 
-  const coinPunishmentPending = storage.getCoinPunishmentPending()
-  const pending = coinPunishmentPending[from]?.[sender]
-  if (!pending || (senderIsAdmin && isCommand)) {
+  if (!pending || (!isPunirrngMode && senderIsAdmin && isCommand)) {
     return false
   }
 
@@ -1509,6 +1547,77 @@ async function handlePendingPunishmentChoice({
 
   const punishmentChoice = getPunishmentChoiceFromText(text)
   let target = pending.target
+
+  // Handle !punirrng mode: expect format "index @mention"
+  if (pending.mode === "punirrng") {
+    const punishments = Array.isArray(pending.punishments) ? pending.punishments : []
+    const severity = Number(pending.severity) || 1
+
+    // Parse message for "index mention" format
+    const parts = text.trim().split(/\s+/)
+    const indexStr = String(parts[0] || "")
+    const indexNum = Number.parseInt(indexStr, 10)
+
+    // Validate index
+    if (!Number.isFinite(indexNum) || indexNum < 1 || indexNum > punishments.length) {
+      await sock.sendMessage(from, {
+        text: `Índice inválido. Use um número de 1 a ${punishments.length}.`,
+      })
+      return true
+    }
+
+    // Get punishment at index
+    const punishmentId = punishments[indexNum - 1]
+    if (!punishmentId) {
+      await sock.sendMessage(from, {
+        text: "Punição não encontrada no índice especificado.",
+      })
+      return true
+    }
+
+    // Get target from mentions
+    const targetResolution = resolveSingleTargetFromMentionOrReply({
+      mentioned,
+      contextInfo: contextInfo || {},
+      sender,
+      requireSingleMention: true,
+      allowSelf: true,
+      allowBot: true,
+    })
+
+    if (!targetResolution.ok) {
+      if (targetResolution.reason === "multiple-mentions") {
+        await sock.sendMessage(from, {
+          text: "Mencione apenas 1 usuário.",
+        })
+      } else if (targetResolution.reason === "quoted-target-missing") {
+        await sock.sendMessage(from, {
+          text: "Usuário não encontrado.",
+        })
+      } else {
+        await sock.sendMessage(from, {
+          text: "Use o formato: <índice> @user",
+        })
+      }
+      return true
+    }
+
+    target = targetResolution.target
+    if (!target) {
+      await sock.sendMessage(from, {
+        text: "Mencione o usuário que receberá a punição.",
+      })
+      return true
+    }
+
+    // Apply punishment
+    await applyPunishment(sock, from, target, punishmentId, {
+      severityMultiplier: severity,
+      origin: pending.origin || "admin",
+    })
+    clearPendingPunishment(from, sender)
+    return true
+  }
 
   if (pending.mode === "target") {
     const targetResolution = resolveSingleTargetFromMentionOrReply({
@@ -1653,6 +1762,7 @@ module.exports = {
   getPunishmentChoiceFromText,
   getRandomPunishmentChoice,
   getPunishmentNameById,
+  getPunishmentSeverityEffect,
   getPunishmentMenuText,
   getPunishmentDetailsText,
   clearPendingPunishment,

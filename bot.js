@@ -892,6 +892,7 @@ const {
   getPunishmentChoiceFromText,
   getRandomPunishmentChoice,
   getPunishmentNameById,
+  getPunishmentSeverityEffect,
   getPunishmentMenuText,
   getPunishmentDetailsText,
   clearPendingPunishment,
@@ -4262,8 +4263,7 @@ setTimeout(() => {
           prefix + "ajuda",
           prefix + "duvida",
           prefix + "menu",
-          prefix + "punicoeslista",
-          prefix + "puniçõeslista",
+          prefix + "plista",
           prefix + "perf",
           prefix + "feedback",
           prefix + "feedbackpriv",
@@ -4762,48 +4762,30 @@ setTimeout(() => {
         return
       }
 
-      const forceTargetResolution = resolveSingleTargetFromMentionOrReply({
-        mentioned,
-        contextInfo,
-        sender,
-        botJid: jidNormalizedUser(sock.user?.id || ""),
-        normalizeJid: jidNormalizedUser,
-        requireSingleMention: true,
-        allowSelf: true,
-        allowBot: true,
-      })
-      if (!forceTargetResolution.ok && forceTargetResolution.reason === "multiple-mentions") {
-        await sock.sendMessage(from, { text: "Mencione apenas 1 usuário ou responda a mensagem dele." })
-        return
-      }
-      if (!forceTargetResolution.ok && forceTargetResolution.reason === "quoted-target-missing") {
-        await sock.sendMessage(from, { text: "Usuário não encontrado." })
-        return
-      }
-
       const rawTokens = String(text || "").trim().split(/\s+/).filter(Boolean)
       const explicitTargetToken = rawTokens[1] || ""
       const explicitTarget = normalizeMentionArray([explicitTargetToken])[0] || jidNormalizedUser(explicitTargetToken || "")
 
       let target = ""
       let targetSource = "none"
-      if (forceTargetResolution.ok) {
-        target = forceTargetResolution.target
-        targetSource = forceTargetResolution.source
+      const firstMentionTarget = normalizeMentionArray(Array.isArray(mentioned) ? [mentioned[0]] : [])[0] || ""
+      if (String(firstMentionTarget || "").includes("@")) {
+        target = jidNormalizedUser(firstMentionTarget)
+        targetSource = "mention"
       } else if (String(explicitTarget || "").includes("@")) {
         target = explicitTarget
         targetSource = "token"
       }
 
       if (!target) {
-        await sock.sendMessage(from, { text: "Use: !force @user <comando|args> (ou responda a mensagem do usuário)." })
+        await sock.sendMessage(from, { text: "Use: !force @user <comando|args>." })
         return
       }
 
       const argOffset = (targetSource === "mention" || targetSource === "token") ? 2 : 1
       const forcedInputRaw = rawTokens.slice(argOffset).join(" ").trim()
       if (!forcedInputRaw) {
-        await sock.sendMessage(from, { text: "Use: !force @user <comando|args> (ou responda a mensagem do usuário)." })
+        await sock.sendMessage(from, { text: "Use: !force @user <comando|args>." })
         return
       }
 
@@ -4815,7 +4797,7 @@ setTimeout(() => {
       const verb = String(forcedCmdParts[0] || "").replace(/^!+/, "").toLowerCase()
 
       if (!verb) {
-        await sock.sendMessage(from, { text: "Use: !force @user <comando|args> (ou responda a mensagem do usuário)." })
+        await sock.sendMessage(from, { text: "Use: !force @user <comando|args>." })
         return
       }
 
@@ -5099,6 +5081,7 @@ setTimeout(() => {
         clearPunishment,
         clearPendingPunishment,
         getPunishmentMenuText,
+        getPunishmentSeverityEffect,
         getPunishmentChoiceFromText,
         applyPunishment,
         isOverrideSender,

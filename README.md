@@ -215,8 +215,9 @@ Pool semanal:
 - !unmute
 - !ban
 - !punições
-- !puniçõesclr
-- !puniçõesadd
+- !pclr
+- !pclrall [@user...] (sem menções limpa o grupo todo)
+- !padd
 - !filtros / !filtroadd / !filtroremove
 - !resenha
 - !adminadd @user
@@ -228,7 +229,7 @@ Pool semanal:
 
 ### Utilitários e diversão
 - !menu
-- !punicoeslista
+- !plista
 - !s / !fig / !sticker / !f
 - !roleta
 - !bombardeio @user
