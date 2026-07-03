@@ -4024,7 +4024,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       await sock.sendMessage(from, {
         text:
           "⏰ Você já resgatou seu daily hoje.\n" +
-          `Tempo restante para o reset global: *${formatDuration(remainingResetMs)}* (21h).`,
+          `Tempo restante para o reset global: *${formatDuration(remainingResetMs)}* (24h).`,
       })
       return true
     }

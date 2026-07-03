@@ -128,6 +128,58 @@ const logger = pino({ level: "silent" })
 
 const prefix = "!"
 
+function buildForcedSyntheticMessage({
+  from,
+  target,
+  sender,
+  forcedCommandText,
+  forcedMentionTargets = [],
+  contextInfo = {},
+  senderProfileName = "",
+  getKnownUserName,
+  getMentionHandleFromJid,
+}) {
+  const forcedContextInfo = {}
+  if (forcedMentionTargets.length > 0) {
+    forcedContextInfo.mentionedJid = forcedMentionTargets
+  }
+  if (contextInfo?.quotedMessage) {
+    forcedContextInfo.quotedMessage = contextInfo.quotedMessage
+  }
+  if (contextInfo?.stanzaId) {
+    forcedContextInfo.stanzaId = contextInfo.stanzaId
+  }
+  if (contextInfo?.remoteJid) {
+    forcedContextInfo.remoteJid = contextInfo.remoteJid
+  }
+  if (contextInfo?.participant) {
+    forcedContextInfo.participant = contextInfo.participant
+  }
+
+  return {
+    key: {
+      id: `force-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`,
+      remoteJid: from,
+      fromMe: false,
+      participant: target,
+    },
+    pushName: getKnownUserName(target) || senderProfileName || getMentionHandleFromJid(target),
+    messageTimestamp: Math.floor(Date.now() / 1000),
+    message: {
+      extendedTextMessage: {
+        text: forcedCommandText,
+        contextInfo: forcedContextInfo,
+      },
+    },
+    __forceMeta: {
+      active: true,
+      requestedBy: sender,
+      target,
+      requestedAt: Date.now(),
+    },
+  }
+}
+
 const BASE_GAME_REWARD = 25
 const GAME_BUY_INS = {
   adivinhacao: 50,
@@ -2001,7 +2053,9 @@ app.get("/health", (req, res) => {
   })
 })
 
-server = app.listen(PORT, ()=>console.log("Servidor rodando na porta " + PORT))
+if (require.main === module) {
+  server = app.listen(PORT, ()=>console.log("Servidor rodando na porta " + PORT))
+}
 
 // =========================
 // VIDEO1 PARA STICKER
@@ -4862,51 +4916,23 @@ setTimeout(() => {
         }
 
         const forcedMentioned = targetSource === "mention" ? (mentioned || []).slice(1) : (mentioned || [])
-        const forcedMentionTargets = normalizeMentionArray([target, ...forcedMentioned])
-        const forcedContextInfo = {}
-        if (forcedMentionTargets.length > 0) {
-          forcedContextInfo.mentionedJid = forcedMentionTargets
-        }
-        if (contextInfo?.quotedMessage) {
-          forcedContextInfo.quotedMessage = contextInfo.quotedMessage
-        }
-        if (contextInfo?.stanzaId) {
-          forcedContextInfo.stanzaId = contextInfo.stanzaId
-        }
-        if (contextInfo?.remoteJid) {
-          forcedContextInfo.remoteJid = contextInfo.remoteJid
-        }
-        if (contextInfo?.participant) {
-          forcedContextInfo.participant = contextInfo.participant
-        }
-
-        const syntheticMessage = {
-          key: {
-            id: `force-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`,
-            remoteJid: from,
-            fromMe: false,
-            participant: target,
-          },
-          pushName: getKnownUserName(target) || senderProfileName || getMentionHandleFromJid(target),
-          messageTimestamp: Math.floor(Date.now() / 1000),
-          message: {
-            extendedTextMessage: {
-              text: forcedCommandText,
-              contextInfo: forcedContextInfo,
-            },
-          },
-          __forceMeta: {
-            active: true,
-            requestedBy: sender,
-            target,
-            requestedAt: Date.now(),
-          },
-        }
+        const forcedMentionTargets = normalizeMentionArray(forcedMentioned)
+        const syntheticMessage = buildForcedSyntheticMessage({
+          from,
+          target,
+          sender,
+          forcedCommandText,
+          forcedMentionTargets,
+          contextInfo,
+          senderProfileName,
+          getKnownUserName,
+          getMentionHandleFromJid,
+        })
 
         await processSingleUpsertMessage(syntheticMessage)
         await sock.sendMessage(from, {
           text: `⏩ Comando forçado encaminhado como ${formatMentionTag(String(target))}: ${forcedCommandText}`,
-          mentions: forcedMentionTargets,
+          mentions: normalizeMentionArray([target, ...forcedMentioned]),
         })
         return
       } catch (err) {
@@ -5229,4 +5255,10 @@ setTimeout(() => {
     }, 5000)
   }
 }
-startBot()
+if (require.main === module) {
+  startBot()
+}
+
+module.exports = {
+  buildForcedSyntheticMessage,
+}

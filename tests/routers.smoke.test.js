@@ -8,6 +8,7 @@ const {
   handleUtilityCommands,
   __resetUtilityRouterStateForTests,
 } = require("../routers/utilityRouter")
+const { buildForcedSyntheticMessage } = require("../bot")
 
 function createSockCapture() {
   const sent = []
@@ -5449,6 +5450,24 @@ test("utility router handles public !cmdlist without hidden commands", async () 
   assert.ok(!/comandosfull/i.test(allText))
   assert.ok(!/overrideadd/i.test(allText))
   assert.ok(!/jidsgrupo/i.test(allText))
+})
+
+test("force preserves single mention target for mention-based commands", async () => {
+  const syntheticMessage = buildForcedSyntheticMessage({
+    from: "group@g.us",
+    target: "user@s.whatsapp.net",
+    sender: "override@s.whatsapp.net",
+    forcedCommandText: "!mute @alvo",
+    forcedMentionTargets: ["alvo@s.whatsapp.net"],
+    contextInfo: {},
+    senderProfileName: "Override",
+    getKnownUserName: () => "User",
+    getMentionHandleFromJid: (jid) => String(jid || "").split("@")[0],
+  })
+
+  assert.equal(syntheticMessage.key.participant, "user@s.whatsapp.net")
+  assert.deepEqual(syntheticMessage.message.extendedTextMessage.contextInfo.mentionedJid, ["alvo@s.whatsapp.net"])
+  assert.ok(!syntheticMessage.message.extendedTextMessage.contextInfo.mentionedJid.includes("user@s.whatsapp.net"))
 })
 
 test("games router resolves !passa target from replied message", async () => {
