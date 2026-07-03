@@ -525,54 +525,7 @@ const ITEM_DEFINITIONS = {
   },
 
   // ===== DISCOUNT COUPONS (buyable and earnable, not in shop) =====
-  coupon5pct: {
-    key: "coupon5pct",
-    id: "32",
-    aliases: ["cupom5"],
-    name: "Discount Coupon (5%)",
-    price: 0,
-    sellRate: 1.0,
-    stackable: true,
-    rarity: 1,
-    buyable: false,
-    description: "[MANUAL via !usarcupom] 5% de desconto em uma compra de itens.",
-  },
-  coupon10pct: {
-    key: "coupon10pct",
-    id: "33",
-    aliases: ["cupom10"],
-    name: "Discount Coupon (10%)",
-    price: 0,
-    sellRate: 1.0,
-    stackable: true,
-    rarity: 1,
-    buyable: false,
-    description: "[MANUAL via !usarcupom] 10% de desconto em uma compra de itens.",
-  },
-  coupon25pct: {
-    key: "coupon25pct",
-    id: "34",
-    aliases: ["cupom25"],
-    name: "Discount Coupon (25%)",
-    price: 0,
-    sellRate: 1.0,
-    stackable: true,
-    rarity: 2,
-    buyable: false,
-    description: "[MANUAL via !usarcupom] 25% de desconto em uma compra de itens.",
-  },
-  coupon40pct: {
-    key: "coupon40pct",
-    id: "35",
-    aliases: ["cupom40"],
-    name: "Discount Coupon (40%)",
-    price: 0,
-    sellRate: 1.0,
-    stackable: true,
-    rarity: 3,
-    buyable: false,
-    description: "[MANUAL via !usarcupom] 40% de desconto máximo em uma compra de itens.",
-  },
+
 
 }
 
@@ -993,21 +946,21 @@ function loadEconomy() {
 }
 
 function getDayKey(ts = Date.now()) {
-  const d = new Date(ts)
-  const yyyy = String(d.getFullYear())
-  const mm = String(d.getMonth() + 1).padStart(2, "0")
-  const dd = String(d.getDate()).padStart(2, "0")
+  const d = new Date(Number(ts) - 3 * 60 * 60 * 1000)
+  const yyyy = String(d.getUTCFullYear())
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0")
+  const dd = String(d.getUTCDate()).padStart(2, "0")
   return `${yyyy}-${mm}-${dd}`
 }
 
 function getWeekKey(ts = Date.now()) {
-  const d = new Date(ts)
-  const yyyy = String(d.getFullYear())
-  // ISO 8601 week definition: week starts on Monday, week 1 is the first week with 4+ days in Jan
-  const jan4 = new Date(d.getFullYear(), 0, 4)
-  const monday = new Date(jan4)
-  monday.setDate(jan4.getDate() - jan4.getDay() + (jan4.getDay() === 0 ? -6 : 1))
-  const diff = d - monday
+  const d = new Date(Number(ts) - 3 * 60 * 60 * 1000)
+  const yyyy = String(d.getUTCFullYear())
+  const jan4 = new Date(Date.UTC(d.getUTCFullYear(), 0, 4))
+  const monday = new Date(jan4.getTime())
+  const jan4Day = jan4.getUTCDay()
+  monday.setUTCDate(jan4.getUTCDate() - jan4Day + (jan4Day === 0 ? -6 : 1))
+  const diff = d.getTime() - monday.getTime()
   const weekNumber = Math.floor(diff / (7 * 24 * 60 * 60 * 1000)) + 1
   const ww = String(weekNumber).padStart(2, "0")
   return `${yyyy}-W${ww}`
@@ -1132,11 +1085,19 @@ function getLevelMilestoneReward(level = 1) {
 let saveTimeout = null
 function saveEconomy(immediate = false) {
   const doSave = () => {
+    const tempFile = ECONOMY_FILE + ".tmp"
     try {
-      fs.writeFileSync(ECONOMY_FILE, JSON.stringify(economyCache, null, 2), "utf8")
+      fs.writeFileSync(tempFile, JSON.stringify(economyCache, null, 2), "utf8")
+      const fd = fs.openSync(tempFile, "r+")
+      fs.fsyncSync(fd)
+      fs.closeSync(fd)
+      fs.renameSync(tempFile, ECONOMY_FILE)
       recordDailyEconomyHealthSnapshot("save")
     } catch (err) {
       console.error("Erro ao salvar economia:", err)
+      if (fs.existsSync(tempFile)) {
+        try { fs.unlinkSync(tempFile) } catch (_) {}
+      }
     }
   }
 
@@ -1463,7 +1424,6 @@ function wipeUserData(userId) {
     if (key === targetKey) continue
     targetUser = pickPreferredUserRecord(targetUser, economyCache.users[key])
     delete economyCache.users[key]
-  }
 
   if (!targetUser) {
     targetUser = economyCache.users[targetKey]
@@ -1471,13 +1431,12 @@ function wipeUserData(userId) {
   if (!targetUser || typeof targetUser !== "object") return false
 
   const preferences = {
-    mentionOptIn: Boolean(targetUser?.preferences?.mentionOptIn),
+    mentionOptIn: targetUser?.preferences?.mentionOptIn !== false,
     publicLabel: String(targetUser?.preferences?.publicLabel || "").trim().slice(0, 30),
   }
   const createdAt = Math.floor(Number(targetUser?.createdAt) || Date.now())
 
   economyCache.users[targetKey] = {
-    ...targetUser,
     coins: 0,
     items: {},
     buffs: {
@@ -1504,9 +1463,9 @@ function wipeUserData(userId) {
     stats: {
       ...DEFAULT_USER_STATS,
     },
+    preferences,
     progression: buildDefaultProgression(),
     transactions: [],
-    preferences,
     createdAt,
     updatedAt: Date.now(),
   }
@@ -1618,7 +1577,6 @@ function pushTransaction(userId, entry = {}) {
     user.transactions = user.transactions.slice(-100)
   }
   touchUser(user)
-  saveEconomy()
   return tx
 }
 
@@ -1653,7 +1611,8 @@ function creditCoins(userId, amount, transaction = null) {
   const parsedAmount = Math.floor(Number(amount) || 0)
   if (!user || parsedAmount <= 0) return 0
 
-  const current = getCoins(userId)
+  const current = Math.max(0, Math.floor(Number(user.coins) || 0))
+  if (current + parsedAmount > MAX_COINS_BALANCE) return 0
   const room = Math.max(0, MAX_COINS_BALANCE - current)
   const applied = Math.min(parsedAmount, room, MAX_COIN_OPERATION)
   if (applied <= 0) return 0
@@ -1830,26 +1789,17 @@ function runQuestResetAutogeneration(options = {}) {
   }
 }
 
-function getDailyQuestState(userId, dayKey = getDayKey()) {
-  return getDailyQuestStateEngine(buildProgressionDeps(), userId, dayKey)
-}
 
-function addXp(userId, amount = 0, meta = {}) {
-  return addXpEngine(buildProgressionDeps(), userId, amount, meta)
-}
-
-function getXpProfile(userId) {
-  return getXpProfileEngine(buildProgressionDeps(), userId)
-}
 
 function debitCoins(userId, amount, transaction = null) {
   const user = ensureUser(userId)
   const parsedAmount = Math.floor(Number(amount) || 0)
   if (!user || parsedAmount <= 0) return false
 
-  if (getCoins(userId) < parsedAmount) return false
+  const currentCoins = Math.max(0, Math.floor(Number(user.coins) || 0))
+  if (currentCoins < parsedAmount) return false
 
-  user.coins = getCoins(userId) - parsedAmount
+  user.coins = currentCoins - parsedAmount
   touchUser(user)
   saveEconomy()
   if (transaction) {
@@ -1960,6 +1910,9 @@ function setItemQuantity(userId, itemKey, quantity) {
   const next = Math.max(0, Math.floor(Number(quantity) || 0))
   if (next <= 0) {
     delete user.items[key]
+    if (key === "escudoReforcado") {
+      user.buffs.escudoReforcadoRemaining = 0
+    }
   } else {
     user.items[key] = next
   }
@@ -2112,10 +2065,8 @@ function removeItem(userId, itemKey, quantity = 1) {
   setItemQuantity(userId, key, next)
   if (key === KRONOS_QUEBRADA_ITEM_ID) {
     removeKronosDuration(userId, KRONOS_QUEBRADA_ITEM_ID, Math.min(current, qty))
-  } else if (key === KRONOS_VERDADEIRA_ITEM_ID) {
     syncKronosStateFromInventory(userId)
-  }
-  if (key === KRONOS_QUEBRADA_ITEM_ID) {
+  } else if (key === KRONOS_VERDADEIRA_ITEM_ID) {
     syncKronosStateFromInventory(userId)
   }
   return next
@@ -2143,6 +2094,8 @@ function consumeShield(userId) {
   const dayKey = getDayKey()
   if (getItemQuantity(userId, "coracaoOssificado") > 0 && user.buffs.coracaoOssificadoDayKey !== dayKey) {
     user.buffs.coracaoOssificadoDayKey = dayKey
+    touchUser(user)
+    saveEconomy()
     incrementStat(userId, "shieldsUsed", 1)
     return true
   }
@@ -2150,6 +2103,8 @@ function consumeShield(userId) {
   const weekKey = getWeekKey()
   if (getItemQuantity(userId, "espelhoDeLuz") > 0 && user.buffs.espelhoDeLuzWeekKey !== weekKey) {
     user.buffs.espelhoDeLuzWeekKey = weekKey
+    touchUser(user)
+    saveEconomy()
     incrementStat(userId, "shieldsUsed", 1)
     return true
   }
@@ -2232,7 +2187,6 @@ function applyCasinoInsurance(userId, lostAmount = 0, options = {}) {
     return { ok: false, activated: false, reason: "refund-zero", refunded: 0 }
   }
 
-  removeItem(userId, "casinoInsurance", 1)
   const credited = creditCoins(userId, refund, {
     type: "casino-insurance-refund",
     details: "Seguro de cassino ativado",
@@ -2242,6 +2196,9 @@ function applyCasinoInsurance(userId, lostAmount = 0, options = {}) {
       threshold,
     },
   })
+  if (credited > 0) {
+    removeItem(userId, "casinoInsurance", 1)
+  }
 
   return {
     ok: true,
@@ -2431,18 +2388,6 @@ function buyItem(buyerId, itemKey, quantity = 1, recipientId = buyerId) {
   let couponDiscount = 0
   let appliedCoupon = null
 
-  // Check for active coupon in buyer's progression
-  const normalizedBuyerId = normalizeUserId(buyerId)
-  const user = normalizedBuyerId ? economyCache.users?.[normalizedBuyerId] : null
-  if (user?.progression?.activeCoupon) {
-    const coupon = user.progression.activeCoupon
-    couponDiscount = Math.floor(totalCost * (coupon.percentage / 100))
-    totalCost = totalCost - couponDiscount
-    appliedCoupon = coupon.couponKey
-    // Clear the active coupon after use
-    delete user.progression.activeCoupon
-  }
-
   if (!debitCoins(buyerId, totalCost, {
     type: "buy",
     details: `Compra de ${qty}x ${item.key}${appliedCoupon ? ` (cupom: -${couponDiscount} moedas)` : ""}`,
@@ -2523,33 +2468,27 @@ function transferCoins(fromUserId, toUserId, amount) {
   }
 
   const receiverCoins = getCoins(toUserId)
-  const room = Math.max(0, MAX_COINS_BALANCE - receiverCoins)
-  if (room <= 0) {
+  if (receiverCoins + parsedAmount > MAX_COINS_BALANCE) {
     return { ok: false, reason: "receiver-max-balance", maxBalance: MAX_COINS_BALANCE }
   }
 
-  const effectiveAmount = Math.min(parsedAmount, room)
-  if (effectiveAmount <= 0) {
-    return { ok: false, reason: "receiver-max-balance", maxBalance: MAX_COINS_BALANCE }
-  }
-
-  if (!debitCoins(fromUserId, effectiveAmount, {
+  if (!debitCoins(fromUserId, parsedAmount, {
     type: "donate-out",
     details: `Doação para ${normalizeUserId(toUserId)}`,
     meta: { to: normalizeUserId(toUserId) },
   })) return { ok: false, reason: "insufficient-funds" }
-  creditCoins(toUserId, effectiveAmount, {
+  creditCoins(toUserId, parsedAmount, {
     type: "donate-in",
     details: `Recebido de ${normalizeUserId(fromUserId)}`,
     meta: { from: normalizeUserId(fromUserId) },
   })
-  telemetry.incrementCounter("economy.coins.transfer", effectiveAmount)
+  telemetry.incrementCounter("economy.coins.transfer", parsedAmount)
   telemetry.appendEvent("economy.coins.transfer", {
     fromUserId: normalizeUserId(fromUserId),
     toUserId: normalizeUserId(toUserId),
-    amount: effectiveAmount,
+    amount: parsedAmount,
   })
-  return { ok: true, amount: effectiveAmount }
+  return { ok: true, amount: parsedAmount }
 }
 
 function transferItem(fromUserId, toUserId, itemKey, quantity = 1) {
@@ -2615,15 +2554,35 @@ function claimDaily(userId, baseAmount = 100) {
   }
 
   const finalAmount = applyKronosGainMultiplier(userId, base, "daily")
+  const current = getCoins(userId)
+  const room = Math.max(0, MAX_COINS_BALANCE - current)
+  const applied = Math.min(finalAmount, room, MAX_COIN_OPERATION)
+
+  if (applied > 0) {
+    user.coins = current + applied
+    if (!Number.isFinite(user.stats.coinsLifetimeEarned)) user.stats.coinsLifetimeEarned = 0
+    user.stats.coinsLifetimeEarned = Math.max(0, Math.floor(Number(user.stats.coinsLifetimeEarned) || 0) + applied)
+    
+    pushTransaction(userId, {
+      type: "daily",
+      details: "Resgate diário",
+      meta: { dayKey },
+      deltaCoins: applied,
+    })
+    
+    telemetry.incrementCounter("economy.minted", applied, { source: "daily" })
+    telemetry.appendEvent("economy.credit", {
+      userId: normalizeUserId(userId),
+      amount: applied,
+      source: "daily",
+    })
+  }
+
   user.cooldowns.dailyClaimKey = dayKey
+  if (!Number.isFinite(user.stats.dailyClaimCount)) user.stats.dailyClaimCount = 0
+  user.stats.dailyClaimCount = Math.max(0, Math.floor(Number(user.stats.dailyClaimCount) || 0) + 1)
   touchUser(user)
-  saveEconomy()
-  creditCoins(userId, finalAmount, {
-    type: "daily",
-    details: "Resgate diário",
-    meta: { dayKey },
-  })
-  incrementStat(userId, "dailyClaimCount", 1)
+  saveEconomy(true)
 
   return {
     ok: true,
@@ -3153,7 +3112,8 @@ function findUsersByPublicLabel(label = "") {
 
 function incrementStat(userId, key, amount = 1) {
   const user = ensureUser(userId)
-  const safeAmount = Math.max(1, Math.floor(Number(amount) || 1))
+  const parsed = Number(amount)
+  const safeAmount = Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 1
   if (!user) return 0
   if (!Number.isFinite(user.stats[key])) user.stats[key] = 0
   user.stats[key] = Math.max(0, Math.floor(Number(user.stats[key]) || 0) + safeAmount)
@@ -3273,17 +3233,18 @@ function resetUserTradeCooldowns(userId, brackets = null) {
 }
 
 function getMsUntilNextLocalMidnight(nowMs = Date.now()) {
-  const now = new Date(Number(nowMs) || Date.now())
-  const next = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate() + 1,
+  const nowGmt3 = new Date(Number(nowMs) - 3 * 60 * 60 * 1000)
+  const nextGmt3 = new Date(Date.UTC(
+    nowGmt3.getUTCFullYear(),
+    nowGmt3.getUTCMonth(),
+    nowGmt3.getUTCDate() + 1,
     0,
     0,
     0,
     0
-  )
-  return Math.max(0, next.getTime() - now.getTime())
+  ))
+  const nextMidnightMs = nextGmt3.getTime() + 3 * 60 * 60 * 1000
+  return Math.max(0, nextMidnightMs - nowMs)
 }
 
 function getCooldowns(userId) {

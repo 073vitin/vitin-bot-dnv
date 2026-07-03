@@ -1729,6 +1729,11 @@ async function rehydrateActivePunishments(sock) {
         if (endsAt) {
           const remainingMs = endsAt - now
           if (remainingMs <= 0) {
+            const typeName = getPunishmentNameById(entry.punishmentType) || `Tipo ${entry.punishmentType}`
+            sock.sendMessage(groupId, {
+              text: `📢 A punição de *${typeName}* para ${formatMentionTag(userId)} expirou (durante o boot do bot)!`,
+              mentions: normalizeMentionArray([userId]),
+            }).catch(err => console.error("Error sending expired punishment announcement:", err))
             changed = true
             continue
           }

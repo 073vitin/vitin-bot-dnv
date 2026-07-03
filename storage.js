@@ -77,6 +77,7 @@ function loadState() {
 let saveTimeout = null
 function saveState(immediate = false) {
   const doSave = () => {
+    const tempFile = STORAGE_FILE + ".tmp"
     try {
       const serializedState = JSON.parse(
         JSON.stringify(stateCache, (key, value) => {
@@ -84,9 +85,16 @@ function saveState(immediate = false) {
           return value
         })
       )
-      fs.writeFileSync(STORAGE_FILE, JSON.stringify(serializedState, null, 2), "utf8")
+      fs.writeFileSync(tempFile, JSON.stringify(serializedState, null, 2), "utf8")
+      const fd = fs.openSync(tempFile, "r+")
+      fs.fsyncSync(fd)
+      fs.closeSync(fd)
+      fs.renameSync(tempFile, STORAGE_FILE)
     } catch (err) {
       console.error("Erro ao salvar estado:", err)
+      if (fs.existsSync(tempFile)) {
+        try { fs.unlinkSync(tempFile) } catch (_) {}
+      }
     }
   }
 
@@ -580,6 +588,9 @@ const storage = {
   clearGameState: (groupId, gameType) => {
     if (stateCache.gameStates[groupId]) {
       delete stateCache.gameStates[groupId][gameType]
+      if (Object.keys(stateCache.gameStates[groupId]).length === 0) {
+        delete stateCache.gameStates[groupId]
+      }
       saveState()
     }
   },

@@ -144,9 +144,9 @@ async function exitDobroGame(ctx) {
   })
   if (typeof incrementUserStat === "function") {
     incrementUserStat(sender, "moneyGameWon", reward)
+    incrementUserStat(sender, "gameDobroWin", 1)
+    incrementUserStat(sender, "gameDobroStreak", state.streak)
   }
-  incrementUserStat(sender, "gameDobroWin", 1)
-  incrementUserStat(sender, "gameDobroStreak", state.streak)
   storage.clearGameState(from, stateKey)
 
   // Dobro ou Nada exits at 0, 1, or 2 wins count as "safe" plays
@@ -188,8 +188,9 @@ function extendTimedPunishment(groupId, userId, durationMultiplier = 2) {
   for (const punishment of stack) {
     if (!punishment?.endsAt) continue
 
-    const remainingMs = Math.max(0, punishment.endsAt - now)
-    const extendedMs = Math.max(1, Math.floor(remainingMs * durationMultiplier))
+    const appliedAt = Number(punishment.appliedAt) || (punishment.endsAt - 5 * 60 * 1000)
+    const baseDurationMs = Math.max(0, punishment.endsAt - appliedAt)
+    const extendedMs = Math.max(1, Math.floor(baseDurationMs * durationMultiplier))
     if (!punishment.stackId) {
       punishment.stackId = typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
@@ -220,6 +221,9 @@ function extendTimedPunishment(groupId, userId, durationMultiplier = 2) {
 
       storage.setActivePunishments(latestPunishments)
     }, extendedMs)
+    if (punishment.timerId && typeof punishment.timerId.unref === "function") {
+      punishment.timerId.unref()
+    }
     changed = true
   }
 
@@ -286,8 +290,7 @@ async function handleCoinGuess({
   if (Object.keys(coinGames[from]).length === 0) delete coinGames[from]
   storage.setCoinGames(coinGames)
 
-  const isOverride = Boolean(isOverrideSender)
-  const resolvedResult = isOverride ? guess : game.resultado
+  const resolvedResult = game.resultado
   const acertou = (guess === resolvedResult)
   const wagerMultiplier = Math.max(1, Math.floor(Number(game?.betMultiplier) || 1))
 
@@ -500,14 +503,29 @@ async function startCoinRound({ sock, from, sender, cmd, prefix, isGroup }) {
       `Punições só disparam a partir de *4x* em modo resenha.`
   })
 
-  setTimeout(() => {
+  const coinTimeoutTimer = setTimeout(() => {
     const coinGamesTimeout = storage.getCoinGames()
     if (coinGamesTimeout[from]?.[sender]) {
       delete coinGamesTimeout[from][sender]
       if (Object.keys(coinGamesTimeout[from]).length === 0) delete coinGamesTimeout[from]
       storage.setCoinGames(coinGamesTimeout)
+      
+      // Refund user
+      economyService.creditCoins(sender, buyInAmount, {
+        type: "coin_toss_timeout",
+        group: from,
+        refundAmount: buyInAmount,
+      })
+
+      sock.sendMessage(from, {
+        text: `⏳ A sua rodada de Cara ou Coroa expirou por inatividade. O valor de *${buyInAmount}* Epsteincoins foi reembolsado.`,
+        mentions: normalizeMentionArray([sender]),
+      }).catch(err => console.error("Error sending timeout message:", err))
     }
   }, 30_000)
+  if (coinTimeoutTimer && typeof coinTimeoutTimer.unref === "function") {
+    coinTimeoutTimer.unref()
+  }
 
   return true
 }
@@ -529,10 +547,8 @@ async function handleDobroGuess(ctx) {
   const guess = parseCoinGuess(text)
 
   if (state && state.status === "waiting_for_guess" && guess) {
-    const isOverride = Boolean(isOverrideSender)
-
     const coin = Math.random() < 0.5 ? "cara" : "coroa"
-    const resolvedResult = isOverride ? guess : coin
+    const resolvedResult = coin
     const win = guess === resolvedResult
 
     if (win) {
@@ -553,7 +569,9 @@ async function handleDobroGuess(ctx) {
       })
     } else {
       const buyInAmount = Math.max(1, Math.floor(Number(state.buyInAmount) || DOBRO_BUY_IN))
-      incrementUserStat(sender, "gameDobroLoss", 1)
+      if (typeof incrementUserStat === "function") {
+        incrementUserStat(sender, "gameDobroLoss", 1)
+      }
       storage.clearGameState(from, stateKey)
       await sock.sendMessage(from, {
         text:

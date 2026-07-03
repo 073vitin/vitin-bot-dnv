@@ -45,11 +45,15 @@ module.exports = {
     state.shotsFired++
     state.playerShots[currentPlayer] = (state.playerShots[currentPlayer] || 0) + 1
     const currentPlayerShotCount = state.playerShots[currentPlayer]
-    const isHit = state.cylinders === ((state.shotsFired - 1) % 6)
+    
+    // O 6º tiro é sempre acerto garantido.
+    const isGuaranteed = state.shotsFired >= 6
+    const isHit = isGuaranteed || state.cylinders === ((state.shotsFired - 1) % 6)
     const surpassedBet = currentPlayerShotCount > (state.betValue || 0)
 
-    // Em jogo solo, ao ultrapassar a aposta a vitória é garantida mesmo se houver acerto.
-    if (state.players.length === 1 && surpassedBet) {
+    // Em jogo solo, ao ultrapassar a aposta a vitória é garantida.
+    // O 6º tiro (acerto garantido/morte) anula o auto-win do solo.
+    if (state.players.length === 1 && surpassedBet && !isGuaranteed) {
       return {
         hit: isHit,
         autoWin: true,
@@ -65,7 +69,7 @@ module.exports = {
         return {
           hit: true,
           allWin: true,
-          guaranteed: state.shotsFired >= 6,
+          guaranteed: isGuaranteed,
           winners: [...state.players],
           currentPlayerShotCount,
           surpassedBet,
@@ -75,30 +79,7 @@ module.exports = {
       state.loser = currentPlayer
       return {
         hit: true,
-        guaranteed: state.shotsFired >= 6,
-        loser: state.loser,
-        currentPlayerShotCount,
-        surpassedBet,
-      }
-    }
-
-    // Verifica se é acerto garantido (6º tiro)
-    if (state.shotsFired >= 6) {
-      if (state.players.length > 1 && surpassedBet) {
-        return {
-          hit: true,
-          allWin: true,
-          guaranteed: true,
-          winners: [...state.players],
-          currentPlayerShotCount,
-          surpassedBet,
-        }
-      }
-
-      state.loser = currentPlayer
-      return {
-        hit: true,
-        guaranteed: true,
+        guaranteed: isGuaranteed,
         loser: state.loser,
         currentPlayerShotCount,
         surpassedBet,

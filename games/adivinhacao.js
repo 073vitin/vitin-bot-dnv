@@ -89,7 +89,11 @@ module.exports = {
 		})
 		Object.values(guessBuckets).forEach((bucket) => {
 			if (bucket.length > 1) {
-				bucket.forEach((pid) => setPunishment(pid, 2))
+				bucket.forEach((pid) => {
+					if (!closestPlayers.includes(pid)) {
+						setPunishment(pid, 2)
+					}
+				})
 			}
 		})
 

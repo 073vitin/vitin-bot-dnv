@@ -79,30 +79,31 @@ ffmpeg.setFfmpegPath(ffmpegPath)
 const storage = require("./storage")
 const punishmentService = require("./services/punishmentService")
 const caraOuCoroa = require("./games/caraOuCoroa")
-const { handleBlackjack } = require("./games/blackjack")
-const AM = require("./AM")
+// const { handleBlackjack } = require("./games/blackjack")
+// const AM = require("./AM")
 const gameManager = require("./gameManager")
 const adivinhacao = require("./games/adivinhacao")
 const batataquente = require("./games/batataquente")
 const dueloDados = require("./games/dueloDados")
 const roletaRussa = require("./games/roletaRussa")
-function loadOptionalDamasHandler() {
-  try {
-    const damasModule = require("./games/damas")
-    if (typeof damasModule === "function") return damasModule
-    if (typeof damasModule?.handleDamas === "function") return damasModule.handleDamas
-    console.warn("[damas] games/damas loaded but no callable export was found.")
-    return null
-  } catch (err) {
-    if (err?.code === "MODULE_NOT_FOUND") {
-      console.warn("[damas] games/damas not found; !damas command is temporarily unavailable.")
-      return null
-    }
-    console.error("[damas] Failed to load games/damas:", err)
-    return null
-  }
-}
-const handleDamas = loadOptionalDamasHandler()
+// function loadOptionalDamasHandler() {
+//   try {
+//     const damasModule = require("./games/damas")
+//     if (typeof damasModule === "function") return damasModule
+//     if (typeof damasModule?.handleDamas === "function") return damasModule.handleDamas
+//     console.warn("[damas] games/damas loaded but no callable export was found.")
+//     return null
+//   } catch (err) {
+//     if (err?.code === "MODULE_NOT_FOUND") {
+//       console.warn("[damas] games/damas not found; !damas command is temporarily unavailable.")
+//       return null
+//     }
+//     console.error("[damas] Failed to load games/damas:", err)
+//     return null
+//   }
+// }
+// const handleDamas = loadOptionalDamasHandler()
+const handleDamas = null
 const economyService = require("./services/economyService")
 const registrationService = require("./services/registrationService")
 const {
@@ -120,7 +121,7 @@ const { handleUtilityCommands } = require("./routers/utilityRouter")
 const { handleModerationCommands } = require("./routers/moderationRouter")
 const { handleEconomyCommands, cleanupUserLinkedState, parseTradeOffer, getTradeBracketForOffer } = require("./routers/economyRouter")
 const { registerDashboardRoutes } = require("./routers/dashboardRouter")
-const { handleWeaponsCommand } = require("./routers/weaponsRouter")
+// const { handleWeaponsCommand } = require("./routers/weaponsRouter")
 const { isCommandBlocked, normalizeCommand } = require("./services/blockCommandService")
 
 const app = express()
@@ -1497,9 +1498,9 @@ function isEconomyCommandName(cmdName = "", cmd = "") {
     prefix + "roubar",
     prefix + "daily",
     prefix + "cassino",
-    prefix + "blackjack",
-    prefix + "bj",
-    prefix + "21",
+    // prefix + "blackjack",
+    // prefix + "bj",
+    // prefix + "21",
     prefix + "lootbox",
     prefix + "falsificar",
     prefix + "trabalho",
@@ -1629,7 +1630,7 @@ const dddMap = {
   // Sudeste
   "11": "Sudeste","12": "Sudeste","13": "Sudeste","14": "Sudeste","15": "Sudeste",
   "16": "Sudeste","17": "Sudeste","18": "Sudeste","19": "Sudeste",
-  "21": "Sudeste","22": "Sudeste","24": "Sudeste",
+  "21": "Sudeste","22": "Sudeste","24": "Sudeste","27": "Sudeste","28": "Sudeste",
   "31": "Sudeste","32": "Sudeste","33": "Sudeste","34": "Sudeste","35": "Sudeste","37": "Sudeste","38": "Sudeste",
 
   // Sul
@@ -1638,13 +1639,13 @@ const dddMap = {
   "51": "Sul","53": "Sul","54": "Sul","55": "Sul",
 
   // Nordeste
-  "71": "Nordeste","73": "Nordeste","74": "Nordeste","75": "Nordeste","79": "Nordeste",
+  "71": "Nordeste","73": "Nordeste","74": "Nordeste","75": "Nordeste","77": "Nordeste","79": "Nordeste",
   "81": "Nordeste","82": "Nordeste","83": "Nordeste","84": "Nordeste","85": "Nordeste",
   "86": "Nordeste","87": "Nordeste","88": "Nordeste","89": "Nordeste",
 
   // Norte
   "91": "Norte","92": "Norte","93": "Norte","94": "Norte","95": "Norte","96": "Norte",
-  "97": "Norte","98": "Norte","99": "Norte",
+  "97": "Norte","98": "Norte","99": "Norte","68": "Norte","69": "Norte",
 
   // Centro-Oeste
   "61": "Centro-Oeste","62": "Centro-Oeste","64": "Centro-Oeste","63": "Centro-Oeste",
@@ -2061,8 +2062,9 @@ if (require.main === module) {
 // VIDEO1 PARA STICKER
 // =========================
 async function videoToSticker(buffer){
-  const input = "./input.mp4"
-  const outputWebp = "./output.webp"
+  const uniqueId = crypto.randomBytes(8).toString("hex")
+  const input = `./input_${uniqueId}.mp4`
+  const outputWebp = `./output_${uniqueId}.webp`
 
   try {
     fs.writeFileSync(input, buffer)
@@ -2167,49 +2169,49 @@ async function handleLegacyGameCommands(ctx = {}) {
     jidNormalizedUser,
   } = ctx
 
-  const handledDamasCommand = await measureStage("router.games.damas", async () =>
-    handleDamasCommand({
-      sock,
-      msg,
-      from,
-      sender,
-      text,
-      cmd,
-      prefix,
-      damasHandler: handleDamas,
-    })
-  )
-  if (handledDamasCommand) return true
+  // const handledDamasCommand = await measureStage("router.games.damas", async () =>
+  //   handleDamasCommand({
+  //     sock,
+  //     msg,
+  //     from,
+  //     sender,
+  //     text,
+  //     cmd,
+  //     prefix,
+  //     damasHandler: handleDamas,
+  //   })
+  // )
+  // if (handledDamasCommand) return true
 
-  const handledWeaponsCommand = await measureStage("router.weapons", async () =>
-    handleWeaponsCommand({
-      sock,
-      from,
-      sender,
-      text,
-      isGroup,
-      senderName: senderProfileName,
-      isOverrideSender,
-      prefix,
-      storage,
-    })
-  )
-  if (handledWeaponsCommand) return true
+  // const handledWeaponsCommand = await measureStage("router.weapons", async () =>
+  //   handleWeaponsCommand({
+  //     sock,
+  //     from,
+  //     sender,
+  //     text,
+  //     isGroup,
+  //     senderName: senderProfileName,
+  //     isOverrideSender,
+  //     prefix,
+  //     storage,
+  //   })
+  // )
+  // if (handledWeaponsCommand) return true
 
-  const handledAM = await measureStage("router.am", async () =>
-    AM.handleAM({
-      sock,
-      from,
-      sender,
-      text,
-      prefix,
-      cmd,
-      cmdName,
-      isGroup,
-      isOverride: isOverrideSender,
-    })
-  )
-  if (handledAM) return true
+  // const handledAM = await measureStage("router.am", async () =>
+  //   AM.handleAM({
+  //     sock,
+  //     from,
+  //     sender,
+  //     text,
+  //     prefix,
+  //     cmd,
+  //     cmdName,
+  //     isGroup,
+  //     isOverride: isOverrideSender,
+  //   })
+  // )
+  // if (handledAM) return true
 
   const handledCoinRound = await measureStage("router.games.coinRound", async () =>
     caraOuCoroa.startCoinRound({

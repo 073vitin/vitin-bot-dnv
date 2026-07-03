@@ -605,7 +605,9 @@ async function handleGameCommands(ctx) {
         return true
       }
 
+      const sessionId = "sess_" + Date.now() + "_" + Math.floor(Math.random() * 1000000)
       const state = batataquente.start(from, session.players)
+      state.sessionId = sessionId
       state.buyInPool = buyInResult.pool || 0
       state.buyInAmount = buyInAmount
       state.buyInByPlayer = buyInResult.buyInByPlayer || {}
@@ -623,23 +625,26 @@ async function handleGameCommands(ctx) {
         mentions: session.players,
       })
 
-      const countdownSeconds = [15, 10, 5, 4, 3, 2, 1]
+      const countdownSeconds = [10, 5]
       for (const secs of countdownSeconds) {
         const delayMs = Math.max(0, state.durationMs - secs * 1000)
-        setTimeout(async () => {
+        const timer = setTimeout(async () => {
           const currentState = storage.getGameState(from, stateKey)
-          if (!currentState) return
+          if (!currentState || currentState.sessionId !== sessionId) return
           const holder = currentState.currentHolder
           await sock.sendMessage(from, {
             text: `⏱️ *${secs}s* restantes no lobby *${lobbyId}*\nBatata com ${formatMentionTag(holder)}`,
             mentions: normalizeMentionArray([holder]),
           })
         }, delayMs)
+        if (timer && typeof timer.unref === "function") {
+          timer.unref()
+        }
       }
 
-      setTimeout(async () => {
+      const finalTimer = setTimeout(async () => {
         const finalState = storage.getGameState(from, stateKey)
-        if (finalState) {
+        if (finalState && finalState.sessionId === sessionId) {
           const loser = batataquente.getLoser(finalState)
           const resenhaOn = isResenhaModeEnabled()
           await sock.sendMessage(from, {
@@ -672,6 +677,9 @@ async function handleGameCommands(ctx) {
           storage.clearGameState(from, stateKey)
         }
       }, 15000)
+      if (finalTimer && typeof finalTimer.unref === "function") {
+        finalTimer.unref()
+      }
 
       return true
     }

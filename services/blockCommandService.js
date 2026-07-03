@@ -1,105 +1,17 @@
 // Block Command Service
 // Gerencia bloqueio de comandos por grupo
 
-// Lista de todos os comandos conhecidos (para validação)
-const ALL_COMMANDS = new Set([
-  "economia",
-  "xp",
-  "missao",
-  "missoes",
-  "perfil",
-  "extrato",
-  "coinsranking",
-  "xpranking",
-  "loja",
-  "guia",
-  "comprar",
-  "comprarpara",
-  "vender",
-  "doarcoins",
-  "doaritem",
-  "roubar",
-  "daily",
-  "cassino",
-  "blackjack",
-  "bj",
-  "21",
-  "lootbox",
-  "falsificar",
-  "trabalho",
-  "cupom",
-  "loteria",
-  "usaritem",
-  "usarpasse",
-  "setcoins",
-  "addcoins",
-  "removecoins",
-  "additem",
-  "removeitem",
-  "trade",
-  "time",
-  "deletarconta",
-  "deleteconta",
-  "moeda",
-  "aposta",
-  "comecar",
-  "começar",
-  "start",
-  "entrar",
-  "join",
-  "resposta",
-  "passa",
-  "rolar",
-  "atirar",
-  "jogos",
-  "brincadeiras",
-  "lobbies",
-  "streak",
-  "streakranking",
-  "ajuda",
-  "duvida",
-  "pergunta",
-  "feedback",
-  "feedbackpriv",
-  "bugbounty",
-  "menu",
-  "perf",
-  "s",
-  "fig",
-  "sticker",
-  "f",
-  "register",
-  "unregister",
-  "jid",
-  "plista",
+const { COMMAND_HELP } = require("../commandHelp")
 
-  "roleta",
-  "ship",
-  "mentions",
-  "mention",
-  "apelido",
-  "comando", // alias para economia/economia
-  "care", // carepackage
-  "carepackage",
-  "cestabasica",
-  "cestabásica",
-  "missaosemanal",
-  "missoesemanais",
-  "mute",
-  "unmute",
-  "ban",
-  "adminadd",
-  "adminrm",
-  "filtros",
-  "filtroadd",
-  "filtroremove",
-  "adm",
-  "admeconomia",
-  "listaitens",
-  "timeranking",
-  "mudarapelido",
-  "cooldowns",
-])
+const ALL_COMMANDS = new Set()
+for (const [cmdKey, cmdInfo] of Object.entries(COMMAND_HELP || {})) {
+  ALL_COMMANDS.add(cmdKey.toLowerCase())
+  if (Array.isArray(cmdInfo?.aliases)) {
+    for (const alias of cmdInfo.aliases) {
+      ALL_COMMANDS.add(String(alias || "").toLowerCase())
+    }
+  }
+}
 
 /**
  * Normaliza um comando (remove prefixo se presente)
