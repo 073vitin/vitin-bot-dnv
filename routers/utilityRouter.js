@@ -588,7 +588,7 @@ async function handleUtilityCommands(ctx) {
     allowBot: options.allowBot !== undefined ? options.allowBot : true,
   })
 
-  const buildCommandManualPages = ({ section = "todos", detailed = false } = {}) => {
+  const buildCommandManualPages = ({ section = "todos", detailed = false, publicOnly = false } = {}) => {
     const SECTION_LABELS = {
       menu: "Menu e Utilitarios",
       jogos: "Jogos e Lobbies",
@@ -598,9 +598,17 @@ async function handleUtilityCommands(ctx) {
       ocultos: "Ocultos e Restritos",
     }
 
+    const hiddenBadges = new Set(["OCULTO", "HARDCODED", "DESATIVADO", "OVERRIDE", "ADMIN"])
+    const shouldIncludeEntry = (entry) => {
+      if (!entry) return false
+      if (!publicOnly) return true
+      return !(entry.badges || []).some((badge) => hiddenBadges.has(String(badge || "").toUpperCase()))
+    }
+
     const sections = {
       menu: [
         { cmd: `${prefix}ajuda`, aliases: [`${prefix}duvida`], usage: `${prefix}ajuda <comando>`, effect: "explica como usar um comando", badges: ["GERAL"] },
+        { cmd: `${prefix}cmdlist`, usage: `${prefix}cmdlist [secao|todos] [detalhes]`, effect: "lista publica de comandos por secao", badges: ["GERAL"] },
         { cmd: `${prefix}pergunta`, usage: `${prefix}pergunta`, effect: "captura a proxima mensagem como pergunta privada com protocolo", badges: ["DM"] },
         { cmd: `${prefix}feedback`, usage: `${prefix}feedback`, effect: "links para feedback e report de bugs", badges: ["GERAL"] },
         { cmd: `${prefix}feedbackpriv`, usage: `${prefix}feedbackpriv`, effect: "captura a proxima mensagem e envia feedback no privado para override", badges: ["GERAL"] },
@@ -718,10 +726,11 @@ async function handleUtilityCommands(ctx) {
     }
 
     const allSectionKeys = ["menu", "jogos", "partidas", "economia", "avancado", "ocultos"]
+    const sectionKeys = publicOnly ? ["menu", "jogos", "partidas", "economia", "avancado"] : allSectionKeys
     const normalizedSection = String(section || "todos").trim().toLowerCase()
     const requestedKeys = normalizedSection === "todos"
-      ? allSectionKeys
-      : allSectionKeys.includes(normalizedSection)
+      ? sectionKeys
+      : sectionKeys.includes(normalizedSection)
         ? [normalizedSection]
         : []
 
@@ -747,11 +756,13 @@ async function handleUtilityCommands(ctx) {
       "Legenda de acesso:",
       "[GERAL] [GRUPO] [DM] [ADMIN] [OVERRIDE] [HARDCODED] [OCULTO] [DESATIVADO]",
       "",
-      `Sintaxe: ${prefix}comandosfull [secao|todos] [detalhes]`,
+      `Sintaxe: ${prefix}${publicOnly ? "cmdlist" : "comandosfull"} [secao|todos] [detalhes]`,
       "Secoes disponiveis:",
-      ...allSectionKeys.map((key) => `- ${key}: ${SECTION_LABELS[key]}`),
+      ...sectionKeys.map((key) => `- ${key}: ${SECTION_LABELS[key]}`),
       "",
-      `Exemplos: ${prefix}comandosfull economia | ${prefix}comandosfull ocultos detalhes`,
+      publicOnly
+        ? `Exemplos: ${prefix}cmdlist economia | ${prefix}cmdlist todos detalhes`
+        : `Exemplos: ${prefix}comandosfull economia | ${prefix}comandosfull ocultos detalhes`,
     ].join("\n")
 
     if (requestedKeys.length === 0) {
@@ -764,7 +775,12 @@ async function handleUtilityCommands(ctx) {
     const pages = [indexPage]
     for (const key of requestedKeys) {
       const header = `=== ${SECTION_LABELS[key]} (${key}) ===`
-      const body = (sections[key] || []).map(renderEntry).join("\n\n")
+      const entries = (sections[key] || []).filter(shouldIncludeEntry)
+      const body = entries.length > 0
+        ? entries.map(renderEntry).join("\n\n")
+        : publicOnly
+          ? "Nenhum comando público nesta seção."
+          : "Nenhum comando disponível nesta seção."
       pages.push(`${header}\n\n${body}`)
     }
     return pages
@@ -1331,9 +1347,10 @@ Uso override:
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 ❓ AJUDA 〕━━━╮
+│ ${prefix}cmdlist - envia uma lista COMPLETA dos comandos do bot
 │ ${prefix}guia - te envia um simples guia da economia
 │ ${prefix}ajuda <comando> - explica comando
-│ ${prefix}pergunta - enviar pergunta aos desenvolvedores.
+│ ${prefix}pergunta - enviar pergunta aos desenvolvedores
 ╰━━━━━━━━━━━━━━━━━━━━╯
 
 ╭━━━〔 🛠️ FEEDBACK 〕━━━╮
@@ -2093,6 +2110,29 @@ ${feedbackText}`,
     for (const page of pages) {
       await sock.sendMessage(from, { text: page })
     }
+    return true
+  }
+
+  if (cmd.startsWith(prefix + "cmdlist")) {
+    const cmdTokens = cmd.split(/\s+/).filter(Boolean)
+    let section = "todos"
+    let detailed = false
+
+    for (let i = 1; i < cmdTokens.length; i++) {
+      const token = String(cmdTokens[i] || "").trim().toLowerCase()
+      if (!token) continue
+      if (token === "detalhes" || token === "detalhe") {
+        detailed = true
+        continue
+      }
+      section = token
+    }
+
+    const pages = buildCommandManualPages({ section, detailed, publicOnly: true })
+    for (const page of pages) {
+      await sock.sendMessage(from, { text: page })
+    }
+    trackUtility("cmdlist", "success", { section, detailed, pages: pages.length })
     return true
   }
 

@@ -130,13 +130,14 @@ Observações de lobby:
 - !loteria <ID> sortear (override only)
 - !trabalho
 - !usarpasse @user <tipo> <severidade>
-- !team create <nome>
-- !team invite <@user>
-- !team accept <teamID>
-- !team members
-- !team stats
-- !team leave
-- !team list
+- !time criar <nome>
+- !time convidar @user
+- !time aceitar <timeID>
+- !time membros
+- !time info
+- !time estatisticas
+- !time sair
+- !time listar
 - !deletarconta / !deleteconta
 
 Observações de economia:
@@ -154,14 +155,15 @@ Observações de economia:
 - !guia envia no privado um guia em 3 seções: rotina de renda, social/itens e dicas com tutorial de progressão.
 - A cada 5 níveis, o jogador recebe recompensas automáticas de progressão (moedas e, em marcos maiores, itens).
 - Times permitem organizar e compartilhar um pool de moedas e itens.
-- !team create cria um novo time (max 1 por usuário).
-- !team invite convida um jogador para o time (requer estar em um time).
-- !team accept aceita um convite pendente de entrada.
-- !team members lista integrantes e seus níveis.
-- !team stats mostra estatísticas do time (membros, moedas, itens do pool).
-- !team leave sai do time (se vazio, o time é deletado).
-- !team list mostra times disponíveis para entrar.
-- !team join está temporariamente desativado para evitar entrada sem convite.
+- !time criar cria um novo time (max 1 por usuário).
+- !time convidar convida um jogador para o time (requer estar em um time).
+- !time aceitar aceita um convite pendente de entrada.
+- !time membros lista integrantes e seus níveis.
+- !time info mostra estatísticas e estado do time.
+- !time estatisticas mostra estatísticas do time (membros, moedas, itens do pool).
+- !time sair sai do time (se vazio, o time é deletado).
+- !time listar mostra times disponíveis para entrar.
+- !time join está temporariamente desativado para evitar entrada sem convite.
 - !usarcupom e !criarcupom estão temporariamente desativados para manutenção.
 
 ### Missões (pool completo)
@@ -229,6 +231,7 @@ Pool semanal:
 
 ### Utilitários e diversão
 - !menu
+- !cmdlist
 - !plista
 - !s / !fig / !sticker / !f
 - !roleta

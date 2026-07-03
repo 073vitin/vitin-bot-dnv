@@ -295,8 +295,13 @@ const COMMAND_HELP = {
       "!trade @user 0 escudo:2 - Oferecer 2 escudos",
       "!trade review <id> - Ver detalhes antes de aceitar",
       "!trade accept <id> - Aceitar um trade",
+      "!trade respond <id> <coins> [item:quantidade...] - Contraoferta",
+      "!trade counter <id> <coins> [item:quantidade...] - Reagir a uma oferta",
+      "!trade reject <id> - Recusar um trade",
+      "!trade list - Listar trades ativos",
+      "!trade info <id> - Ver detalhes de um trade",
     ],
-    details: "Sistema seguro de trocas com review e timeout. Há taxa de fee por bracket de valor.",
+    details: "Sistema seguro de trocas com review, contraoferta, listagem e timeout. Há taxa de fee por bracket de valor.",
   },
 
   time: {
@@ -306,12 +311,16 @@ const COMMAND_HELP = {
     usage: "!time <ação> [args]",
     commonUsage: [
       "!time criar nome - Criar um time",
+      "!time convidar @usuario - Convidar alguém para o time",
       "!time aceitar <id> - Entrar em um time",
       "!time info - Ver info do seu time",
       "!time membros - Listar membros",
+      "!time estatisticas - Ver estatísticas do time",
+      "!time sair - Sair do time",
+      "!time listar - Listar times disponíveis",
       "!time depositarcoins 50 - Adicionar coins ao pool",
     ],
-    details: "Times organizam colaboração econômica e gerenciamento de pool de recursos.",
+    details: "Times organizam colaboração econômica, convites, estatísticas e gerenciamento de pool de recursos.",
   },
 
   mentions: {
@@ -398,6 +407,8 @@ const COMMAND_HELP = {
       "!linkdm - (no grupo) gerar código de vinculação",
       "!linkdm ABC123 - (no privado) confirmar a vinculação",
       "!linkdm cancelar - cancelar sessão pendente",
+      "!linkjid - Alias de !linkdm",
+      "!vincularjid - Alias de !linkdm",
     ],
     details:
       "Fluxo em 2 passos: rode no grupo, depois confirme no privado com o código gerado. " +
@@ -478,10 +489,12 @@ const COMMAND_HELP = {
     name: "Cara ou Coroa",
     aliases: ["moeda"],
     description: "Jogo Cara ou Coroa com apostas e modo Dobro ou Nada",
-    usage: "!moeda [2-10] | !moeda dobro | !moeda continua | !moeda sair",
+    usage: "!moeda [2-10] | !moeda dobro | !moeda dobroounada | !moeda dobrounada | !moeda continua | !moeda sair",
     commonUsage: [
       "!moeda 2 - Jogar com buy-in fixo de 50",
       "!moeda dobro - Iniciar Dobro ou Nada (modo contínuo)",
+      "!moeda dobroounada - Alias de !moeda dobro",
+      "!moeda dobrounada - Alias de !moeda dobro",
       "!moeda continua - Continuar Dobro ou Nada",
       "!moeda sair - Coletar ganhos do Dobro ou Nada",
     ],
@@ -725,6 +738,20 @@ blackjack: {
       "!comandosfull ocultos detalhes - Ver comandos ocultos com notas",
     ],
     details: "Gera um manual completo com seções. Normalmente usado por overrides/admins; resposta em DM.",
+    hidden: true,
+  },
+
+  cmdlist: {
+    name: "Lista Pública de Comandos",
+    aliases: ["cmdlist"],
+    description: "Mostra a lista pública de comandos por seção, filtrando comandos secretos e restritos",
+    usage: "!cmdlist [secao|todos] [detalhes]",
+    commonUsage: [
+      "!cmdlist - Ver a lista pública de comandos",
+      "!cmdlist economia - Ver só a seção de economia",
+      "!cmdlist todos detalhes - Ver a lista pública com notas",
+    ],
+    details: "Versão pública do manual completo. Não mostra comandos ocultos, hardcoded ou específicos de override/admin.",
   },
 
   perf: {
@@ -832,6 +859,7 @@ blackjack: {
       "!jid - Ver seu identificador único",
     ],
     details: "Útil para admins verificarem dados técnicos. Apenas em DM.",
+    hidden: true,
   },
 
   plista: {
@@ -1372,6 +1400,57 @@ blackjack: {
   },
 
   resenha: {
+    hidden: true,
+  },
+
+  blockcmd: {
+    name: "Bloquear Comando",
+    aliases: ["blockcmd"],
+    description: "[Admin] Bloqueia ou desbloqueia comandos específicos no grupo",
+    usage: "!blockcmd <cmd1> [cmd2] [cmd3] ...",
+    commonUsage: [
+      "!blockcmd perfil - Alternar bloqueio de um comando",
+      "!blockcmd perfil xp economia - Alternar vários comandos",
+    ],
+    details: "Somente em grupo e apenas para admins. Mantém o controle de comandos bloqueados por grupo.",
+    hidden: true,
+  },
+
+  listblockcmd: {
+    name: "Listar Comandos Bloqueados",
+    aliases: ["listblockcmd"],
+    description: "[Admin] Mostra os comandos bloqueados neste grupo",
+    usage: "!listblockcmd",
+    commonUsage: [
+      "!listblockcmd - Ver lista de bloqueios do grupo",
+    ],
+    details: "Somente em grupo e apenas para admins. Complementa o comando de bloqueio.",
+    hidden: true,
+  },
+
+  transmutar: {
+    name: "Transmutar Mídia",
+    aliases: ["transmutar"],
+    description: "Converte mídia respondida, figurinha ou view once em outro formato",
+    usage: "!transmutar (respondendo a mídia)",
+    commonUsage: [
+      "Responda uma figurinha com !transmutar",
+      "Responda uma foto view once com !transmutar",
+    ],
+    details: "Tenta extrair mídia da mensagem respondida e converter para imagem ou vídeo quando possível.",
+    hidden: true,
+  },
+
+  damas: {
+    name: "Damas",
+    aliases: ["damas"],
+    description: "Inicia o jogo de damas quando o módulo estiver disponível",
+    usage: "!damas",
+    commonUsage: [
+      "!damas - Abrir o jogo de damas",
+    ],
+    details: "Comando experimental/legado. Se o handler não estiver disponível neste deploy, o bot avisa a indisponibilidade.",
+    hidden: true,
     name: "Resenha",
     aliases: ["resenha"],
     description: "[Admin/Override] Alterna modo de punição por grupo",
@@ -1453,7 +1532,11 @@ function formatHelpText(cmdInfo) {
 function getPublicCommandNames() {
   return Object.keys(COMMAND_HELP).filter((cmd) => {
     const info = COMMAND_HELP[cmd];
-    return !cmd.startsWith("_"); // Hide commands starting with _
+    if (!info) return false
+    if (info.hidden) return false
+    if (cmd.startsWith("_")) return false
+    const description = String(info.description || "")
+    return !/^\[(?:admin|override|hardcoded override|admin\/override|override\/admin|oculto|desativado)\]/i.test(description)
   });
 }
 

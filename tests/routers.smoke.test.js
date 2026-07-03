@@ -5417,6 +5417,38 @@ test("utility router ignores !comandosfull for non-override sender", async () =>
   assert.equal(sent.length, 0)
 })
 
+test("utility router handles public !cmdlist without hidden commands", async () => {
+  const { sock, sent } = createSockCapture()
+
+  const handled = await handleUtilityCommands({
+    sock,
+    from: "group@g.us",
+    sender: "user@s.whatsapp.net",
+    cmd: "!cmdlist economia detalhes",
+    prefix: "!",
+    isGroup: true,
+    isOverrideSender: false,
+    msg: { message: {} },
+    quoted: null,
+    mentioned: [],
+    sharp: () => ({}),
+    downloadMediaMessage: async () => null,
+    logger: {},
+    videoToSticker: async () => null,
+    dddMap: {},
+    jidNormalizedUser: (id) => id,
+  })
+
+  assert.equal(handled, true)
+  assert.ok(sent.length >= 2)
+  const allText = sent.map((entry) => String(entry.payload?.text || "")).join("\n")
+  assert.match(allText, /cmdlist/i)
+  assert.match(allText, /Economia Base/i)
+  assert.ok(!/comandosfull/i.test(allText))
+  assert.ok(!/overrideadd/i.test(allText))
+  assert.ok(!/jidsgrupo/i.test(allText))
+})
+
 test("games router resolves !passa target from replied message", async () => {
   const { sock, sent } = createSockCapture()
   const sender = "jogador@s.whatsapp.net"
