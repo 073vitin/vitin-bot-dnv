@@ -2130,7 +2130,7 @@ ${feedbackText}`,
 
     const pages = buildCommandManualPages({ section, detailed, publicOnly: true })
     for (const page of pages) {
-      await sock.sendMessage(from, { text: page })
+      await sock.sendMessage(sender, { text: page })
     }
     trackUtility("cmdlist", "success", { section, detailed, pages: pages.length })
     return true

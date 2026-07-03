@@ -5419,11 +5419,12 @@ test("utility router ignores !comandosfull for non-override sender", async () =>
 
 test("utility router handles public !cmdlist without hidden commands", async () => {
   const { sock, sent } = createSockCapture()
+  const sender = "user@s.whatsapp.net"
 
   const handled = await handleUtilityCommands({
     sock,
     from: "group@g.us",
-    sender: "user@s.whatsapp.net",
+    sender,
     cmd: "!cmdlist economia detalhes",
     prefix: "!",
     isGroup: true,
@@ -5441,6 +5442,7 @@ test("utility router handles public !cmdlist without hidden commands", async () 
 
   assert.equal(handled, true)
   assert.ok(sent.length >= 2)
+  assert.ok(sent.every((entry) => entry.to === sender))
   const allText = sent.map((entry) => String(entry.payload?.text || "")).join("\n")
   assert.match(allText, /cmdlist/i)
   assert.match(allText, /Economia Base/i)
