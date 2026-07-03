@@ -17,7 +17,7 @@ module.exports = {
       players,
       currentHolder: initialHolder,
       startedAt: Date.now(),
-      durationMs: 15000,
+      durationMs: 40000,
       passes: [],
     }
     return state

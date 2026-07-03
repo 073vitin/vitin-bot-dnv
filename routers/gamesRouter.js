@@ -625,7 +625,7 @@ async function handleGameCommands(ctx) {
         mentions: session.players,
       })
 
-      const countdownSeconds = [10, 5]
+      const countdownSeconds = [30, 20, 10, 5]
       for (const secs of countdownSeconds) {
         const delayMs = Math.max(0, state.durationMs - secs * 1000)
         const timer = setTimeout(async () => {
@@ -676,7 +676,7 @@ async function handleGameCommands(ctx) {
           })
           storage.clearGameState(from, stateKey)
         }
-      }, 15000)
+      }, 40000)
       if (finalTimer && typeof finalTimer.unref === "function") {
         finalTimer.unref()
       }

@@ -4309,7 +4309,7 @@ setTimeout(() => {
     // =========================
     // VERIFICAÇÃO DE ADMIN ONLY MODE
     // =========================
-    if (isCommand && isGroup && isCommand) {
+    if (isCommand && isGroup) {
       const adminOnlyMap = storage.getAdminOnly()
       const isAdminOnlyEnabled = adminOnlyMap[from] || false
       

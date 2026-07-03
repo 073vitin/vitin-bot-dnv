@@ -4,19 +4,7 @@ const path = require("path")
 const { execFile } = require("child_process")
 const { renderSimpleDashboardPage, renderFullDashboardPage } = require("../services/dashboardPageService")
 
-function execFileAsync(file, args = [], options = {}) {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, options, (error, stdout, stderr) => {
-      if (error) {
-        error.stdout = stdout
-        error.stderr = stderr
-        reject(error)
-        return
-      }
-      resolve({ stdout, stderr })
-    })
-  })
-}
+
 
 function shouldServeSimpleDashboard(req, env = process.env) {
   const paramSimple = String(req.query?.simple || "").trim().toLowerCase()
@@ -70,34 +58,7 @@ function registerDashboardRoutes(app, options = {}) {
     res.json(getDashboardDebugPayload())
   })
 
-  app.get("/download-data", async (req, res) => {
-    const dataDir = path.join(baseDir, ".data")
-    if (!fs.existsSync(dataDir)) {
-      res.status(404).json({ ok: false, error: "data-folder-not-found" })
-      return
-    }
 
-    const tmpZip = path.join(baseDir, `vitin-bot-data-${Date.now()}.zip`)
-    try {
-      if (process.platform === "win32") {
-        await execFileAsync("powershell.exe", [
-          "-NoProfile",
-          "-Command",
-          `Compress-Archive -Path \"${path.join(dataDir, "*")}\" -DestinationPath \"${tmpZip}\" -Force`,
-        ])
-      } else {
-        await execFileAsync("tar", ["-czf", tmpZip, "-C", baseDir, ".data"])
-      }
-
-      res.download(tmpZip, "vitin-bot-data.zip", () => {
-        fs.unlink(tmpZip, () => {})
-      })
-    } catch (err) {
-      fs.unlink(tmpZip, () => {})
-      console.error("Erro ao gerar export da pasta .data", err)
-      res.status(500).json({ ok: false, error: "export-failed" })
-    }
-  })
 
   app.get("/", (req, res) => {
     const { isSimple } = shouldServeSimpleDashboard(req)

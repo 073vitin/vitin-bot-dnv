@@ -403,17 +403,18 @@ function formatQuestProgressLine(quest = {}) {
 }
 
 function getMsUntilNextLocalMidnight(nowMs = Date.now()) {
-  const now = new Date(Number(nowMs) || Date.now())
-  const next = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate() + 1,
+  const nowGmt3 = new Date(Number(nowMs) - 3 * 60 * 60 * 1000)
+  const nextGmt3 = new Date(Date.UTC(
+    nowGmt3.getUTCFullYear(),
+    nowGmt3.getUTCMonth(),
+    nowGmt3.getUTCDate() + 1,
     0,
     0,
     0,
     0
-  )
-  return Math.max(0, next.getTime() - now.getTime())
+  ))
+  const nextMidnightMs = nextGmt3.getTime() + 3 * 60 * 60 * 1000
+  return Math.max(0, nextMidnightMs - nowMs)
 }
 
 function grantCommandXp(economyService, userId, xpAmount, source, meta = {}) {
@@ -2408,7 +2409,6 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
 `╭━━━〔 🎁 SUBMENU: EXTRAS/ESPECIAIS 〕━━━╮
 │ Comandos especiais, eventos e utilidades avançadas:
 │ ${prefix}cupom resgatar <codigo>
-│ ${prefix}usarcupom <codigo>
 │ ${prefix}cupom criar <codigo> <moedas> <dias> (override)
 │ ${prefix}falsificar <tipo 1-13> *<severidade> *<quantidade> *<S|N>
 │ ${prefix}falsificar tipo <1-13>
@@ -3393,14 +3393,14 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     let ranking = []
     if (rankingScope === "local") {
       if (typeof economyService.getGroupRanking === "function") {
-        ranking = economyService.getGroupRanking(members, 10)
+        ranking = economyService.getGroupRanking(members, 1000)
       } else if (typeof economyService.getGlobalRanking === "function") {
-        ranking = economyService.getGlobalRanking(10)
+        ranking = economyService.getGlobalRanking(1000)
       }
     } else if (typeof economyService.getGlobalRanking === "function") {
-      ranking = economyService.getGlobalRanking(10)
+      ranking = economyService.getGlobalRanking(1000)
     } else if (isGroup && typeof economyService.getGroupRanking === "function") {
-      ranking = economyService.getGroupRanking(members, 10)
+      ranking = economyService.getGroupRanking(members, 1000)
     }
     const visibleRanking = ranking
       .map((entry) => ({
@@ -3411,6 +3411,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         }),
       }))
       .filter((entry) => entry.rankingIdentity.visible)
+      .slice(0, 10)
     if (visibleRanking.length === 0) {
       await sock.sendMessage(from, {
         text: rankingScope === "local"
@@ -3486,14 +3487,14 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     let ranking = []
     if (rankingScope === "local") {
       if (typeof economyService.getGroupXpRanking === "function") {
-        ranking = economyService.getGroupXpRanking(members, 10)
+        ranking = economyService.getGroupXpRanking(members, 1000)
       } else if (typeof economyService.getGlobalXpRanking === "function") {
-        ranking = economyService.getGlobalXpRanking(10)
+        ranking = economyService.getGlobalXpRanking(1000)
       }
     } else if (typeof economyService.getGlobalXpRanking === "function") {
-      ranking = economyService.getGlobalXpRanking(10)
+      ranking = economyService.getGlobalXpRanking(1000)
     } else if (isGroup && typeof economyService.getGroupXpRanking === "function") {
-      ranking = economyService.getGroupXpRanking(members, 10)
+      ranking = economyService.getGroupXpRanking(members, 1000)
     }
     const visibleRanking = ranking
       .map((entry) => ({
@@ -3504,6 +3505,7 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
         }),
       }))
       .filter((entry) => entry.rankingIdentity.visible)
+      .slice(0, 10)
     if (visibleRanking.length === 0) {
       await sock.sendMessage(from, {
         text: rankingScope === "local"
@@ -3572,94 +3574,6 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
     return true
   }
 
-  // !criarcupom @user percentage (override-only)
-  if (cmdName === prefix + "criarcupom" && isOverrideSender) {
-    const targetResolution = resolveSingleCommandTarget({
-      allowSelf: false,
-      allowBot: false,
-    })
-    if (await sendTargetResolutionError(
-      targetResolution,
-      `Use: ${prefix}criarcupom @user <1-100> (ou responda a mensagem do usuário)`,
-      {
-        selfText: "Você não pode criar cupom para você mesmo.",
-      }
-    )) {
-      return true
-    }
-
-    const target = targetResolution.target
-    const percentageIndex = targetResolution.source === "mention" ? 2 : 1
-    const percentage = parsePositiveInt(cmdParts[percentageIndex], 0)
-    if (!percentage || percentage <= 0 || percentage > 100) {
-      await sock.sendMessage(from, {
-        text: `Use: ${prefix}criarcupom @user <1-100>`,
-      })
-      return true
-    }
-
-    const couponKey = percentage <= 5 ? "coupon5pct"
-      : percentage <= 10 ? "coupon10pct"
-      : percentage <= 25 ? "coupon25pct"
-      : "coupon40pct"
-
-    const after = economyService.addItem(target, couponKey, 1)
-    if (after <= 0) {
-      await sock.sendMessage(from, { text: "Falha ao criar cupom para o usuário alvo." })
-      return true
-    }
-    await sock.sendMessage(from, {
-      text: `✅ Cupom de ${percentage}% criado para ${formatMentionTag(target)}.`,
-      mentions: normalizeMentionArray([target]),
-    })
-    return true
-  }
-
-  // !usarcupom percentage (player command before !comprar)
-  if (cmdName === prefix + "usarcupom") {
-    const percentage = parsePositiveInt(cmdArg1, 0)
-    if (!percentage || percentage <= 0 || percentage > 100) {
-      await sock.sendMessage(from, {
-        text: `Use: ${prefix}usarcupom <1-100>`,
-      })
-      return true
-    }
-
-    const couponKey = percentage <= 5 ? "coupon5pct"
-      : percentage <= 10 ? "coupon10pct"
-      : percentage <= 25 ? "coupon25pct"
-      : "coupon40pct"
-    const hasItem = economyService.getItemQuantity(sender, couponKey)
-    if (hasItem <= 0) {
-      await sock.sendMessage(from, { text: `Você não possui cupom de ${percentage}%.` })
-      return true
-    }
-
-    const profile = economyService.getProfile(sender)
-    if (!profile) {
-      await sock.sendMessage(from, { text: "Perfil não disponível para ativar cupom." })
-      return true
-    }
-
-    if (!profile.progression) {
-      profile.progression = {}
-    }
-    profile.progression.activeCoupon = {
-      couponKey,
-      percentage,
-      createdAt: Date.now(),
-    }
-    economyService.removeItem(sender, couponKey, 1)
-    if (typeof economyService.saveEconomy === "function") {
-      economyService.saveEconomy()
-    }
-
-    await sock.sendMessage(from, {
-      text: `💳 Cupom de ${percentage}% ativado para a próxima compra.`,
-    })
-    return true
-  }
-
   if (cmdName === prefix + "comprar") {
     const itemInput = cmdArg1
     const quantity = parseQuantity(cmdArg2, 1)
@@ -3686,15 +3600,11 @@ Use ${prefix}${cmdName} aceitar @usuário ${requestedTeamId} (owner/tenente) par
       return true
     }
 
-    const profile = economyService.getProfile(sender)
-    const discountText = bought.couponDiscount
-      ? `\n💳 *Cupom aplicado:* -${bought.couponDiscount} moedas`
-      : ""
     await sock.sendMessage(from, {
       text:
         `Compra concluída: *${bought.quantity}x ${formatItemWithId(economyService, bought.itemKey)}*\n` +
-        `Custo: *${bought.totalCost}* ${CURRENCY_LABEL}${discountText}\n` +
-        `Saldo atual: *${profile.coins}*`,
+        `Custo: *${bought.totalCost}* ${CURRENCY_LABEL}\n` +
+        `Saldo atual: *${economyService.getCoins(sender)}*`,
     })
     return true
   }
