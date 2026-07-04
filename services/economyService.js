@@ -1424,6 +1424,7 @@ function wipeUserData(userId) {
     if (key === targetKey) continue
     targetUser = pickPreferredUserRecord(targetUser, economyCache.users[key])
     delete economyCache.users[key]
+  }
 
   if (!targetUser) {
     targetUser = economyCache.users[targetKey]

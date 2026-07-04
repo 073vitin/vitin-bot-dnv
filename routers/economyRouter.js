@@ -765,7 +765,6 @@ async function handleEconomyCommands(ctx) {
     const isRegistered = typeof registrationService?.isRegistered === "function"
       ? registrationService.isRegistered(userId)
       : true
-    if (!isRegistered) return { visible: false, label: "", mentionId: null }
 
     const mentionOptIn = typeof economyService.isMentionOptIn === "function"
       ? economyService.isMentionOptIn(userId)

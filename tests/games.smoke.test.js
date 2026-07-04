@@ -789,70 +789,77 @@ test("dobro ou nada charges buy-in 50 and doubles payout by streak", async () =>
   economyService.creditCoins(sender, 1000, { type: "test-credit" })
   const beforeCoins = Number(economyService.getProfile(sender)?.coins || 0)
 
-  const started = await caraOuCoroa.startDobroGame({
-    sock,
-    from: groupId,
-    sender,
-    storage,
-    economyService,
-    incrementUserStat: () => {},
-  })
-  assert.equal(started, true)
+  const originalRandom = Math.random
+  Math.random = () => 0 // Force "cara" (win)
 
-  const afterBuyInCoins = Number(economyService.getProfile(sender)?.coins || 0)
-  assert.equal(afterBuyInCoins, beforeCoins - 50)
+  try {
+    const started = await caraOuCoroa.startDobroGame({
+      sock,
+      from: groupId,
+      sender,
+      storage,
+      economyService,
+      incrementUserStat: () => {},
+    })
+    assert.equal(started, true)
 
-  const firstWin = await caraOuCoroa.handleDobroGuess({
-    sock,
-    from: groupId,
-    sender,
-    text: "cara",
-    storage,
-    economyService,
-    incrementUserStat: () => {},
-    isOverrideSender: true,
-  })
-  assert.equal(firstWin, true)
-  const afterFirstWinState = caraOuCoroa.getDobroState(groupId, sender)
-  assert.equal(afterFirstWinState?.streak, 1)
-  assert.equal(afterFirstWinState?.status, "waiting_for_choice")
+    const afterBuyInCoins = Number(economyService.getProfile(sender)?.coins || 0)
+    assert.equal(afterBuyInCoins, beforeCoins - 50)
 
-  const continued = await caraOuCoroa.continueDobroGame({
-    sock,
-    from: groupId,
-    sender,
-    storage,
-  })
-  assert.equal(continued, true)
+    const firstWin = await caraOuCoroa.handleDobroGuess({
+      sock,
+      from: groupId,
+      sender,
+      text: "cara",
+      storage,
+      economyService,
+      incrementUserStat: () => {},
+      isOverrideSender: true,
+    })
+    assert.equal(firstWin, true)
+    const afterFirstWinState = caraOuCoroa.getDobroState(groupId, sender)
+    assert.equal(afterFirstWinState?.streak, 1)
+    assert.equal(afterFirstWinState?.status, "waiting_for_choice")
 
-  const secondWin = await caraOuCoroa.handleDobroGuess({
-    sock,
-    from: groupId,
-    sender,
-    text: "cara",
-    storage,
-    economyService,
-    incrementUserStat: () => {},
-    isOverrideSender: true,
-  })
-  assert.equal(secondWin, true)
-  const afterSecondWinState = caraOuCoroa.getDobroState(groupId, sender)
-  assert.equal(afterSecondWinState?.streak, 2)
-  assert.equal(afterSecondWinState?.status, "waiting_for_choice")
+    const continued = await caraOuCoroa.continueDobroGame({
+      sock,
+      from: groupId,
+      sender,
+      storage,
+    })
+    assert.equal(continued, true)
 
-  const exited = await caraOuCoroa.exitDobroGame({
-    sock,
-    from: groupId,
-    sender,
-    storage,
-    economyService,
-    incrementUserStat: () => {},
-  })
-  assert.equal(exited, true)
+    const secondWin = await caraOuCoroa.handleDobroGuess({
+      sock,
+      from: groupId,
+      sender,
+      text: "cara",
+      storage,
+      economyService,
+      incrementUserStat: () => {},
+      isOverrideSender: true,
+    })
+    assert.equal(secondWin, true)
+    const afterSecondWinState = caraOuCoroa.getDobroState(groupId, sender)
+    assert.equal(afterSecondWinState?.streak, 2)
+    assert.equal(afterSecondWinState?.status, "waiting_for_choice")
 
-  const finalCoins = Number(economyService.getProfile(sender)?.coins || 0)
-  assert.equal(finalCoins, beforeCoins + 50)
-  assert.equal(caraOuCoroa.getDobroState(groupId, sender), null)
+    const exited = await caraOuCoroa.exitDobroGame({
+      sock,
+      from: groupId,
+      sender,
+      storage,
+      economyService,
+      incrementUserStat: () => {},
+    })
+    assert.equal(exited, true)
+
+    const finalCoins = Number(economyService.getProfile(sender)?.coins || 0)
+    assert.equal(finalCoins, beforeCoins + 50)
+    assert.equal(caraOuCoroa.getDobroState(groupId, sender), null)
+  } finally {
+    Math.random = originalRandom
+  }
 })
 
 test("dobro ou nada accepts formatted guess text", async () => {
@@ -873,28 +880,36 @@ test("dobro ou nada accepts formatted guess text", async () => {
   })
   assert.equal(started, true)
 
-  const handledGuess = await caraOuCoroa.handleDobroGuess({
-    sock,
-    from: groupId,
-    sender,
-    text: "*!CÁRA?!*",
-    storage,
-    economyService,
-    incrementUserStat: () => {},
-    isOverrideSender: true,
-  })
+  const originalRandom = Math.random
+  Math.random = () => 0 // Force "cara" (win)
 
-  assert.equal(handledGuess, true)
-  const state = caraOuCoroa.getDobroState(groupId, sender)
-  assert.equal(state?.streak, 1)
-  assert.equal(state?.status, "waiting_for_choice")
+  try {
+    const handledGuess = await caraOuCoroa.handleDobroGuess({
+      sock,
+      from: groupId,
+      sender,
+      text: "*!CÁRA?!*",
+      storage,
+      economyService,
+      incrementUserStat: () => {},
+      isOverrideSender: true,
+    })
+
+    assert.equal(handledGuess, true)
+    const state = caraOuCoroa.getDobroState(groupId, sender)
+    assert.equal(state?.streak, 1)
+    assert.equal(state?.status, "waiting_for_choice")
+  } finally {
+    Math.random = originalRandom
+  }
 })
 
-test("override coin guess uses player guess as resolved result", async () => {
+test("override coin guess does not use player guess as resolved result", async () => {
   const groupId = `__override_guess_${Date.now()}@g.us`
   const sender = "override@s.whatsapp.net"
   const { sock, sent } = createSockCapture()
   let rewardCalls = 0
+  let lossCalls = 0
 
   setCoinRound(groupId, sender, "coroa")
 
@@ -913,12 +928,14 @@ test("override coin guess uses player guess as resolved result", async () => {
     rewardWinner: async () => {
       rewardCalls += 1
     },
-    chargeLoser: async () => {},
+    chargeLoser: async () => {
+      lossCalls += 1
+    },
   })
 
   assert.equal(handled, true)
-  assert.equal(rewardCalls, 1)
-  assert.ok(sent.some((m) => String(m.payload?.text || "").includes("A moeda caiu em *cara*")))
+  assert.equal(rewardCalls, 0)
+  assert.equal(lossCalls, 1)
 })
 
 test("disabled override uses actual toss result", async () => {
